@@ -1592,7 +1592,7 @@ export function SimulatorView({
       {/* Компактная нижняя строка метаданных: габариты, версия правил, обязательная атрибуция ODbL */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#7c909d] px-1">
         <div className="flex flex-wrap items-center gap-2">
-          <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Аккерман 40°</Chip>
+          <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Аккерман {CAR.maxInnerDeg}°</Chip>
           <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
             Правила: {ruleSet.version} ({ruleSet.status === "instructor_signed" ? "подписано" : "демо"})
           </Chip>
