@@ -24,7 +24,7 @@ export const CAR = {
   height: 1.447,
   wheelRadius: 0.315,
   wheelWidth: 0.215,
-  maxInnerDeg: 35,
+  maxInnerDeg: 40,
   maxSteer: Math.atan(1 / (1 / Math.tan((35 * Math.PI) / 180) + 1.57 / (2 * 2.65))), // ~0.5256 рад (30.11°)
   rollRes: 0.34,
   brakeDecel: 6.2,
