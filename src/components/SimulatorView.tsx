@@ -242,7 +242,10 @@ export function SimulatorView({
     setLayout((prev) => ({ ...prev, [id]: next }));
   }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
+  const notifyRef = useRef(onNotify);
+  useEffect(() => {
+    notifyRef.current = onNotify;
+  }, [onNotify]);
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
   const worldRef = useRef<WorldData>(world);
@@ -416,7 +419,11 @@ export function SimulatorView({
 
       // Опрос адаптера USB-руля / педалей / геймпада → общий контракт InputState
       const gp = gamepadPollerRef.current.poll(gamepadCfgRef.current);
-      if (gp.gearCommand) inp.gear = gp.gearCommand;
+      if (gp.gearCommand) {
+  const err = checkGearChange(inp, stateRef.current.v, gp.gearCommand);
+  if (err) notifyRef.current(err);
+  else inp.gear = gp.gearCommand;
+}
       if (gp.toggleHandbrake) inp.handbrake = !inp.handbrake;
       if (gp.toggleBelt) inp.belt = !inp.belt;
       if (gp.toggleLights) inp.lights = !inp.lights;
