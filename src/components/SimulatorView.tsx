@@ -16,6 +16,7 @@ import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring
 import { AttemptRecorder, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
+import { checkGearChange } from "../sim/controls";
 import type {
   CalibrationConfig,
   CameraMode,
