@@ -12,7 +12,7 @@ import type {
 // Параметры автомобиля игрока Kia Ceed JD (DEV_PROMPTS, п. 2.1):
 // база L = 2.65 м, свес передний 0.88 м, задний 0.78 м (общая длина 4.31 м),
 // ширина 1.80 м, высота 1.447 м, колея T = 1.57 м.
-// Внутреннее колесо до 35°, центральный угол maxSteer ≈ 30.11°, внешнее ≈ 26.2°.
+// Внутреннее колесо до 40°, центральный угол maxSteer ≈ 30.11°, внешнее ≈ 26.2°.
 export const CAR = {
   model: "Kia Ceed JD (кат. B)",
   wheelbase: 2.65,
@@ -25,7 +25,7 @@ export const CAR = {
   wheelRadius: 0.315,
   wheelWidth: 0.215,
   maxInnerDeg: 40,
-  maxSteer: Math.atan(1 / (1 / Math.tan((35 * Math.PI) / 180) + 1.57 / (2 * 2.65))), // ~0.5256 рад (30.11°)
+  maxSteer: Math.atan(1 / (1 / Math.tan((40 * Math.PI) / 180) + 1.57 / (2 * 2.65))), // ~0.60128 рад (34.45°)
   rollRes: 0.34,
   brakeDecel: 6.2,
   handbrakeDecel: 8.5,
