@@ -307,21 +307,18 @@ export function SimulatorView({
 
   /** Выбор режима АКПП с блокировками: P — только на остановке, выход из P — после запуска ДВС. */
   const setGear = useCallback(
-    (gear: Gear) => {
-      const inp = inputRef.current;
-      if (gear === "P" && Math.abs(stateRef.current.v) > 0.35) {
-        onNotify("Парковку P можно включить только после полной остановки (тормоз S)");
-        return;
-      }
-      if (inp.gear === "P" && gear !== "P" && !inp.engineOn) {
-        onNotify("Сначала запустите двигатель (I), затем выберите R или D");
-        return;
-      }
-      inp.gear = gear;
-      setHud((current) => ({ ...current, state: { ...current.state, gear } }));
-    },
-    [onNotify]
-  );
+  (gear: Gear) => {
+    const inp = inputRef.current;
+    const err = checkGearChange(inp, stateRef.current.v, gear);
+    if (err) {
+      onNotify(err);
+      return;
+    }
+    inp.gear = gear;
+    setHud((current) => ({ ...current, state: { ...current.state, gear } }));
+  },
+  [onNotify]
+);
 
   /** Запуск ДВС разрешён только в P или N; заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
