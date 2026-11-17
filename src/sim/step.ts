@@ -354,7 +354,7 @@ export function stepSimulation(
     if (!s.hasMoved) {
       s.hasMoved = true;
       const isRoute = world.scenarioId === "city_osm" || world.checkpoints.length > 0;
-      if (isRoute && s.signal !== "left" && !s.movedWithoutSignalFlagged) {
+      if (isRoute && s.signal !== "left" && s.signal !== "right" && !s.movedWithoutSignalFlagged) {
         s.movedWithoutSignalFlagged = true;
         emit("no_turn_signal", "Начало движения на маршруте без включения левого указателя поворота (Q)");
       }
