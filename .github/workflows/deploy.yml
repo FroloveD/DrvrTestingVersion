@@ -1,13 +1,12 @@
-name: Deploy to GitHub Pages
+name: Deploy GemCommits to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches:
+      - GemCommits
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 jobs:
   build-and-deploy:
@@ -26,8 +25,10 @@ jobs:
         run: npm run build
       - name: Verify core tests, architecture boundaries, docs & offline bundle
         run: node scripts/run-tests.mjs --check-dist
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+
+      - name: Deploy GemCommits to /preview
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: dist
-      - uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          destination_dir: preview
