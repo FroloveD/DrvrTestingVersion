@@ -1,3 +1,10 @@
+/**
+ * @module scenarios/custom
+ * @layer pure-core
+ * @role Схема, валидация, автодостройка припаркованных авто и сборка мира для конструктора «Свой сценарий».
+ * @invariants #7 (чистое ядро), #15 (мир своего сценария сохраняется в попытке как снимок `customWorld`).
+ * @tests T16
+ */
 import { isCarInsideBay, SpatialGrid } from "../sim/spatialGrid";
 import type {
   ObstacleBox,

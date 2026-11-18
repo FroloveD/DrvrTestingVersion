@@ -1,3 +1,10 @@
+/**
+ * @module analytics/calibration
+ * @layer pure-core
+ * @role Сверка вердиктов симулятора с независимыми оценками инструкторов и доверительный интервал Уилсона (95 %).
+ * @invariants #7 (чистое ядро), #16 (цель ≥ 90 % совпадений на ≥ 20 оценках перед подписью `instructor_signed`).
+ * @tests T19
+ */
 import { evaluateAttempt, type RuleSet } from "../scoring/rules";
 import { normalizeName, type AttemptMeta } from "../sim/journal";
 import { studentOf } from "./summary";

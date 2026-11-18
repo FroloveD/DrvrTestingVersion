@@ -1,3 +1,10 @@
+/**
+ * @module maps/osmLoader
+ * @layer pure-core
+ * @role Офлайн-парсер выгрузок Overpass OSM JSON и GeoJSON в локальную метрическую сцену (`+Z` север, `−X` восток).
+ * @invariants #7 (чистое ядро), #8 (офлайн — никаких сетевых запросов к Overpass), #9 (атрибуция ODbL 1.0).
+ * @tests T11, T12, T21
+ */
 import { buildRouteFromRoads } from "./route";
 import type {
   CrosswalkDef,

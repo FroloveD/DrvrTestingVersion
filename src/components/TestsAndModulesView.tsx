@@ -1,6 +1,13 @@
+/**
+ * @module components/TestsAndModulesView
+ * @layer ui
+ * @role Вкладка «Тесты и Модули»: запуск автотестов ядра в браузере, карта модулей, выгрузка `HANDOFF.md` и шаблоны CI/Tauri.
+ * @tests Смоук A, N (`tests/browser-smoke.mjs`)
+ */
 import { useEffect, useState } from "react";
 import { runAllSelfTests, type TestCaseResult } from "../sim/selfTest";
-import { Chip, CopyButton, Icon } from "./Icons";
+import { HANDOFF_FILE, HANDOFF_MARKDOWN, HANDOFF_PROMPT } from "../handoff";
+import { Chip, CopyButton, downloadText, Icon } from "./Icons";
 
 const MODULE_MAP = [
   {
@@ -26,6 +33,18 @@ const MODULE_MAP = [
     role: "Чистый шаг stepSimulation(1/60)",
     replaces: "update(dt) с побочными эффектами DOM",
     guarantees: "Детерминизм 30 vs 144 FPS, холодный старт P и парковочная блокировка, S не реверсирует в D, запуск в Node",
+  },
+  {
+    path: "src/sim/controls.ts",
+    role: "Блокировки АКПП и стартера ДВС",
+    replaces: "Проверки передач внутри React-обработчиков",
+    guarantees: "checkGearChange (P только на остановке, выход из P при ДВС) и checkEngineToggle (старт в P/N)",
+  },
+  {
+    path: "src/maps/route.ts",
+    role: "Маршрут по реальной улице OSM",
+    replaces: "Свободный проезд без контрольных точек",
+    guarantees: "Постановка у правого борта, автогенерация КТ по геометрии дороги, текущая улица в HUD",
   },
   {
     path: "src/scoring/rules.ts",
@@ -65,9 +84,9 @@ const MODULE_MAP = [
   },
   {
     path: "src/analytics/summary.ts",
-    role: "Статистика учеников и CSV",
+    role: "Статистика учеников, CSV и Markdown",
     replaces: "Только мгновенный балл без истории",
-    guarantees: "Доля сдавших, топ нарушений, успеваемость по ученикам, CSV для Excel",
+    guarantees: "Доля сдавших, топ нарушений, успеваемость по ученикам, CSV для Excel и сводный отчёт .md",
   },
   {
     path: "src/strategy/plan.ts",
@@ -114,7 +133,15 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Core unit & determinism tests
-        run: npx tsx scripts/run-tests.ts
+        run: |
+          ./node_modules/.bin/esbuild src/sim/selfTest.ts --bundle --platform=node \
+            --format=esm --outfile=/tmp/st.mjs --log-level=error
+          node --input-type=module -e "const {runAllSelfTests}=await import('/tmp/st.mjs');\
+            const r=runAllSelfTests();if(r.some(t=>!t.passed)){console.log(r.filter(t=>!t.passed));process.exit(1)}"
+      - name: Core boundaries (no three / window / document)
+        run: |
+          ! grep -rlE "from ['\\"]three|window\\.|document\\." \
+            src/sim src/scoring src/maps src/scenarios src/analytics src/storage src/strategy
       - name: Production offline bundle
         run: npm run build
       - name: Fail if runtime CDN URLs leak into dist
@@ -134,10 +161,10 @@ jobs:
 
 ## Неизменяемые инварианты (проверяются src/sim/selfTest.ts)
 1. Координаты: +Z вперёд, +X лево (руль и водитель слева), −X право, +h поворот влево.
-2. Поворотники: Q — левый (+X), E — правый (−X). ЛКМ — руль (вправо => swDeg убывает), ПКМ — камера.
-3. АКПП: тормоз S гасит |v| до 0 и никогда не даёт отрицательную скорость в D.
+2. Поворотники: Q — левый (+X), E — правый (−X), Z — аварийка (не заменяет Q/E на старте маршрута). ЛКМ — руль (вправо => swDeg убывает), ПКМ — камера.
+3. АКПП (src/sim/controls.ts): тормоз S гасит |v| до 0 и никогда не даёт реверс в D; P — только на остановке, выход из P при ДВС.
 4. Холодный старт: ДВС заглушен, КПП в P (Parking), ручник затянут. Запуск ДВС — только из P/N.
-5. Чистое ядро: в src/sim/* и src/scoring/* запрещены импорты three, window и document.
+5. Чистое ядро: в src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy запрещены three, window и document.
 6. Офлайн: никаких внешних CDN и runtime-вызовов публичного Overpass API.
 7. Атрибуция карт: «© OpenStreetMap contributors» (ODbL 1.0) видна на экране.
 8. Проверку на школьном ПК не добавляем: только автотесты и offline/perf-smoke в CI.
@@ -145,13 +172,23 @@ jobs:
 10. Запись ввода: рекордер хранит ровно то, что получило ядро; квантование — только до шага симуляции.
 11. USB-устройства выключены по умолчанию; раскладку рулей не угадывать — только калибровка по шагам.
 12. Журнал: IndexedDB через src/storage/journalStore.ts; ошибки хранилища показывать пользователю.
+13. Выворот колёс настраивается 33–42° (базовый 35°); при 35° формула совпадает побитно со старыми
+    записями. Действовавший угол хранится в каждом RLE-блоке ввода — реплей применяет его.
+14. Зеркала: заднее 320×96 (10:3), боковые 320×160 (2:1), независимые переключатели и render targets.
+15. HUD перемещается за grip или долгим нажатием 420 мс; педали — только за grip, удержание кнопки
+    нажимает педаль. Позиции живут в cdt.layout.v1.
+16. finished — упражнение выполнено, closed — запись закрыта; после closed ввод не пишется.
 
 ## Защищённые зоны
 - src/scoring/rules.ts и размеры боксов: не выдавать за «официальный норматив ГИБДД»;
   статус остаётся "unvalidated" до подписи инструктора.
 
 ## Обязательная проверка перед ответом
-npx tsc --noEmit && npx tsx scripts/run-tests.ts && npm run build`,
+1. npx tsc --noEmit
+2. Автотесты ядра: esbuild src/sim/selfTest.ts --bundle --platform=node --format=esm, затем прогон
+   runAllSelfTests() в node (полная команда — в HANDOFF.md, раздел 2).
+3. npm run build и node scripts/run-tests.mjs --check-dist (чистота ядра, тесты, синхронность HANDOFF/docs, офлайн dist/index.html).
+4. Обновить WORKLOG.md; при правках HUD, зеркал, педалей, журнала или реплея — node tests/browser-smoke.mjs.`,
   },
   {
     id: "notice",
@@ -190,6 +227,10 @@ export function TestsAndModulesView({ onNotify }: { onNotify: (msg: string) => v
   const [results, setResults] = useState<TestCaseResult[]>([]);
   const [lastRunAt, setLastRunAt] = useState<string>("");
   const [artId, setArtId] = useState("ci");
+  // Заголовки разделов берём из самого документа — список не может с ним разойтись
+  const handoffSections = HANDOFF_MARKDOWN.split("\n")
+    .filter((line) => line.startsWith("## "))
+    .map((line) => line.slice(3).replace(/^\d+\.\s*/, ""));
 
   const execute = () => {
     const res = runAllSelfTests();
@@ -302,6 +343,59 @@ export function TestsAndModulesView({ onNotify }: { onNotify: (msg: string) => v
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Передача контекста в следующую сессию */}
+      <div className="panel p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+          <div className="max-w-[70ch]">
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <div className="text-xs font-extrabold">Передача контекста в следующий чат</div>
+              <Chip tone="mint">{handoffSections.length} разделов</Chip>
+              <Chip tone="neutral">{(HANDOFF_MARKDOWN.length / 1024).toFixed(1)} КБ</Chip>
+            </div>
+            <p className="text-[11px] text-[#9bafbc] leading-relaxed">
+              Один документ вместо пересказа истории: карта модулей, инварианты, точные команды гейта,
+              ключи хранилища, открытые задачи и то, что осталось непроверенным. <span className="mono text-[#c9d7de]">HANDOFF.md</span> в
+              корне генерируется из <span className="mono text-[#c9d7de]">src/handoff.ts</span> — правь модуль, а не оба файла.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <CopyButton text={HANDOFF_PROMPT} label="Короткий промпт" onDone={onNotify} />
+            <CopyButton text={HANDOFF_MARKDOWN} label="Весь документ" onDone={onNotify} />
+            <button type="button" className="btn btn-primary btn-mini"
+              onClick={() => downloadText("HANDOFF.md", HANDOFF_FILE, onNotify)}>
+              <Icon name="download" size={13} /> HANDOFF.md
+            </button>
+          </div>
+        </div>
+
+        <div className="grid lg:grid-cols-[1.05fr_.95fr] gap-4 items-start">
+          <div className="panel-soft p-3.5">
+            <div className="mono text-[10px] text-[#6e8492] mb-2">СОСТАВ ДОКУМЕНТА</div>
+            <ol className="space-y-1.5">
+              {handoffSections.map((title, index) => (
+                <li key={title} className="flex items-baseline gap-2 text-[11.5px] text-[#c9d7de]">
+                  <span className="mono text-[10px] text-[#f5b942] shrink-0">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span>{title}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+          <div className="panel-soft p-3.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="mono text-[10px] text-[#6e8492]">КОРОТКИЙ ПРОМПТ</span>
+              <span className="mono text-[10px] text-[#52d6bd]">{HANDOFF_PROMPT.split("\n").length} строк</span>
+            </div>
+            <pre className="mono text-[10.5px] leading-[1.7] text-[#b9c9d3] max-h-[210px] overflow-auto scroll-thin whitespace-pre-wrap">{HANDOFF_PROMPT}</pre>
+            <p className="text-[10.5px] text-[#8fa2ae] leading-relaxed mt-2.5 pt-2.5 border-t hairline">
+              Вставь этот блок первым сообщением и допиши задачу. Модель прочитает HANDOFF.md сама —
+              пересказывать историю чата не нужно.
+            </p>
+          </div>
         </div>
       </div>
 

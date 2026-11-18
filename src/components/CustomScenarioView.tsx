@@ -1,3 +1,15 @@
+/**
+ * @module components/CustomScenarioView
+ * @layer ui
+ * @role Конструктор «Свой сценарий»: редактирование боксов, препятствий и КТ, валидация, 2D-схема и JSON-обмен.
+ * @invariants #1 (координаты на 2D-схеме), #15 (сохранение снимка мира в попытке).
+ * @tests T16 (`src/sim/selfTest.ts`), смоук A (`tests/browser-smoke.mjs`)
+ *
+ * Оглавление секций (`grep -n "SEC:custom-"`):
+ * - `[SEC:custom-fields]`  — числовые и текстовые поля редактора (`NumField`, `TextField`).
+ * - `[SEC:custom-forms]`   — формы параметров площадки, боксов, препятствий и контрольных точек.
+ * - `[SEC:custom-preview]` — интерактивная 2D-схема сценария и диагностика ошибок геометрии.
+ */
 import { useMemo, useRef } from "react";
 import { buildParallelScenario, buildPerpendicularScenario } from "../scenarios/catalog";
 import {
@@ -28,6 +40,7 @@ type Props = {
 const radToDeg = (rad: number) => Math.round(((rad * 180) / Math.PI) * 10) / 10;
 const degToRad = (deg: number) => (deg * Math.PI) / 180;
 
+// === [SEC:custom-fields] Вспомогательные поля ввода редактора ===
 function NumField({
   label,
   value,
@@ -238,7 +251,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
       )}
 
       <div className="grid lg:grid-cols-[1fr_380px] gap-4 items-start">
-        {/* Левая колонка: формы */}
+        {/* [SEC:custom-forms] Левая колонка: формы боксов, препятствий и точек маршрута */}
         <div className="space-y-4 min-w-0">
           <div className="panel p-5">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -682,7 +695,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           </div>
         </div>
 
-        {/* Правая колонка: 2D-схема */}
+        {/* [SEC:custom-preview] Правая колонка: 2D-схема площадки и проверка коллизий */}
         <div className="panel p-4 lg:sticky lg:top-[72px]">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-extrabold">Схема (клик — переместить старт)</div>

@@ -50,6 +50,11 @@ async function until(fn, timeout = 20000, step = 250) {
 }
 const tab = (page, name) => page.getByRole("button", { name: new RegExp(name) }).first().click();
 const low = async (page) => (await page.evaluate(() => document.body.innerText)).toLowerCase();
+const panelArtifacts = (page) => page.evaluate(() => {
+  const pre = [...document.querySelectorAll("pre")].map((el) => el.innerText).join("\n");
+  return pre;
+});
+
 const readIdb = (page) => page.evaluate(() => new Promise((resolve, reject) => {
   const req = indexedDB.open("cdt-journal");
   req.onerror = () => reject(new Error("open failed"));
@@ -740,6 +745,44 @@ try {
   await ctx.close();
 } catch (e) {
   check("M сценарий выполнен без исключений",false,String(e.message).slice(-460));
+}
+
+// ───────── N. Передача контекста: документ в UI не расходится с HANDOFF.md ─────────
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  const root = fs.readFileSync("HANDOFF.md", "utf8");
+  await tab(page, "Тесты и Модули");
+  await sleep(800);
+  await page.getByText("Передача контекста в следующий чат", { exact: true }).waitFor();
+  const panel = page.locator("div.panel", { hasText: "Передача контекста в следующий чат" }).first();
+  const uiSections = await panel.locator("ol li span:last-child").allInnerTexts();
+  const fileSections = root.split("\n").filter((l) => l.startsWith("## ")).map((l) => l.slice(3).replace(/^\d+\.\s*/, ""));
+  check("N1 состав документа в интерфейсе совпадает с HANDOFF.md",
+    uiSections.length === fileSections.length && uiSections.every((t, i) => t === fileSections[i]),
+    `${uiSections.length} разделов в UI против ${fileSections.length} в файле`);
+  const [dl] = await Promise.all([
+    page.waitForEvent("download"),
+    panel.getByRole("button", { name: "HANDOFF.md", exact: true }).click(),
+  ]);
+  check("N2 выгруженный HANDOFF.md совпадает с файлом в репозитории", fs.readFileSync(await dl.path(), "utf8") === root);
+  const prompt = await panel.locator("pre").innerText();
+  check("N3 короткий промпт содержит реальные команды гейта",
+    prompt.includes("npx tsc --noEmit") && prompt.includes("npm run build") && prompt.includes("selfTest.ts"));
+  await page.getByRole("button", { name: ".github/workflows/ci.yml", exact: true }).click();
+  const ci = await panelArtifacts(page);
+  await page.getByRole("button", { name: /AGENTS.md/, exact: false }).first().click();
+  const agents = await panelArtifacts(page);
+  check("N4 в CI и AGENTS указаны существующие команды проверки",
+    ci.includes("esbuild src/sim/selfTest.ts") && agents.includes("runAllSelfTests")
+      && !ci.includes("npx tsx") && !agents.includes("npx tsx"));
+  const allText = await page.evaluate(() => document.body.innerText);
+  check("N5 инструкции не ссылаются на отсутствующие tsx и scripts/run-tests.ts",
+    !allText.includes("npx tsx scripts/run-tests.ts"));
+  check("N6 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+  await ctx.close();
+} catch (e) {
+  check("N сценарий выполнен без исключений", false, String(e.message).slice(-460));
 }
 
 await browser.close();

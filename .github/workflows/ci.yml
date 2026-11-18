@@ -1,0 +1,60 @@
+name: CityDrivingTraining CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Core, Types, Docs & Offline Bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Production single-file bundle
+        run: npm run build
+      - name: Core tests, architecture boundaries, docs & offline bundle gate
+        run: node scripts/run-tests.mjs --check-dist
+
+  browser-smoke:
+    name: Browser Smoke A–N (Playwright Chromium)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright and headless Chromium (without modifying lockfile)
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Build single-file bundle
+        run: npm run build
+      - name: Run Playwright browser smoke (HTTP + file://)
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory dist >/tmp/cdt-http.log 2>&1 &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+          sleep 1
+          node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html "file://$PWD/dist/index.html" /tmp/cdt-shots
+      - name: Upload smoke screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-screenshots
+          path: /tmp/cdt-shots

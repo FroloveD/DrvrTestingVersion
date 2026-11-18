@@ -1,3 +1,9 @@
+/**
+ * @module components/Icons
+ * @layer ui
+ * @role Встроенные векторные иконки (без CDN), бейджи `Chip`, копирование в буфер и выгрузка файлов `downloadText`/`downloadJson`.
+ * @invariants #8 (офлайн — ноль внешних иконочных шрифтов и запросов).
+ */
 import type { ReactNode } from "react";
 
 const ICONS: Record<string, string> = {
@@ -112,6 +118,25 @@ export function CopyButton({
       <Icon name="copy" size={13} /> {label}
     </button>
   );
+}
+
+/** Выгрузка произвольного текста (Markdown, CSV, конфиг) — без обёртки в JSON. */
+export function downloadText(
+  filename: string,
+  text: string,
+  onDone?: (msg: string) => void,
+  mime = "text/markdown;charset=utf-8"
+): void {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  onDone?.(`Файл ${filename} сохранён`);
 }
 
 export function downloadJson(filename: string, data: unknown, onDone?: (msg: string) => void): void {

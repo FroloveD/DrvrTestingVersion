@@ -1,3 +1,22 @@
+/**
+ * @module components/SimulatorView
+ * @layer ui
+ * @role Главный экран 3D-тренажёра: цикл 1/60 с, опрос ввода, запись заезда, зеркала и перемещаемые панели HUD.
+ * @invariants #2–#6, #9–#15 (холодный старт, АКПП, квантование до шага, мышь, зеркала, HUD, раздельные педали, closed).
+ * @tests Смоук A, E, F, G, H, J, K, L, M (`tests/browser-smoke.mjs`)
+ *
+ * Оглавление секций (быстрый поиск по `grep -n "SEC:sim-"`):
+ * - `[SEC:sim-storage]`  — чтение/запись `cdt.controls.v1` и 2D-fallback при недоступности WebGL.
+ * - `[SEC:sim-state]`    — состояние, рефы мира/физики/рекордера, раскладка `cdt.layout.v1`, профиль геймпада.
+ * - `[SEC:sim-actions]`  — `setTurnSignal`, `setGear`, `toggleEngine`, `resetAttempt` и сброс при смене мира.
+ * - `[SEC:sim-loop]`     — инициализация `SceneController`, `requestAnimationFrame`, аккумулятор `FIXED_DT = 1/60`, автосохранение.
+ * - `[SEC:sim-keyboard]` — глобальные горячие клавиши и защита от залипания при `blur`.
+ * - `[SEC:sim-pointer]`  — мышь на холсте, экранный SVG-руль, мультитач-безопасные педали, загрузка файла OSM.
+ * - `[SEC:sim-toolbar]`  — верхняя панель выбора сценария, импорта OSM и кнопки «Завершить → Разбор».
+ * - `[SEC:sim-mirrors]`  — зеркала (`320×96` заднее, `320×160` боковые; остаются видимыми по `H`) и экранный руль.
+ * - `[SEC:sim-hud]`      — штрафы, знаки/светофор/FPS, строка экзаменатора, настройки управления, справка, камера.
+ * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
@@ -7,6 +26,7 @@ import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
+import { checkEngineToggle, checkGearChange } from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
@@ -51,6 +71,7 @@ type Props = {
   onNotify: (msg: string) => void;
 };
 
+// === [SEC:sim-storage] Настройки клавиатурного руля и 2D-fallback без WebGL ===
 const CONTROLS_KEY = "cdt.controls.v1";
 const DEFAULT_STEER_KEY_RATE = 340;
 /** Старт и сброс попытки всегда «холодные»: ДВС заглушен, КПП P. */
@@ -145,6 +166,7 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
   ctx.restore();
 }
 
+// === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
   scenarioId,
@@ -334,22 +356,20 @@ export function SimulatorView({
     latestViolation: null,
   }));
 
+  // === [SEC:sim-actions] Команды поворотников, АКПП, стартера и сброса попытки ===
   const setTurnSignal = useCallback((signal: InputState["signal"]) => {
     inputRef.current.signal = signal;
     // Reflect a signal button/key press immediately instead of waiting for the next HUD tick.
     setHud((current) => ({ ...current, state: { ...current.state, signal } }));
   }, []);
 
-  /** Выбор режима АКПП с блокировками: P — только на остановке, выход из P — после запуска ДВС. */
+  /** Выбор режима АКПП с блокировками (src/sim/controls.ts): P — только на остановке, выход из P — при запущенном ДВС. */
   const setGear = useCallback(
     (gear: Gear) => {
       const inp = inputRef.current;
-      if (gear === "P" && Math.abs(stateRef.current.v) > 0.35) {
-        onNotify("Парковку P можно включить только после полной остановки (тормоз S)");
-        return;
-      }
-      if (inp.gear === "P" && gear !== "P" && !inp.engineOn) {
-        onNotify("Сначала запустите двигатель (I), затем выберите R или D");
+      const err = checkGearChange(inp, stateRef.current.v, gear);
+      if (err) {
+        onNotify(err);
         return;
       }
       inp.gear = gear;
@@ -358,11 +378,12 @@ export function SimulatorView({
     [onNotify]
   );
 
-  /** Запуск ДВС разрешён только в P или N; заглушить можно в любом режиме. */
+  /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
     const inp = inputRef.current;
-    if (!inp.engineOn && inp.gear !== "P" && inp.gear !== "N") {
-      onNotify("Запуск двигателя возможен только в P (Parking) или N");
+    const err = checkEngineToggle(inp);
+    if (err) {
+      onNotify(err);
       return;
     }
     inp.engineOn = !inp.engineOn;
@@ -411,7 +432,7 @@ export function SimulatorView({
     resetAttempt(world, COLD_START);
   }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign]);
 
-  // Инициализация Three.js и главного цикла с фиксированным шагом 1/60 с
+  // === [SEC:sim-loop] Three.js, главный цикл с фиксированным шагом 1/60 с и запись заезда ===
   useEffect(() => {
     const canvas = canvasRef.current;
     const box = containerRef.current;
@@ -643,7 +664,7 @@ export function SimulatorView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Обработчики клавиатуры (все клавиши по DEV_PROMPTS + защита от залипания при blur)
+  // === [SEC:sim-keyboard] Горячие клавиши и защита от залипания при потере фокуса ===
   useEffect(() => {
     const isEditable = (t: EventTarget | null) => {
       if (!(t instanceof HTMLElement)) return false;
@@ -758,7 +779,8 @@ export function SimulatorView({
     };
   }, [resetAttempt, releasePedals, setTurnSignal, setGear, toggleEngine, onNotify]);
 
-  // Управление мышью на 3D-холсте (инварианты №4, №5, №6: ЛКМ — руль, ПКМ — камера, колесо — зум)
+  // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
+  // Инвариант #12: ЛКМ — руль (вправо уменьшает swDeg), ПКМ — орбита, колесо — зум.
   const pointerDragRef = useRef<{ id: number; btn: number; lastX: number; lastY: number } | null>(null);
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -947,7 +969,7 @@ export function SimulatorView({
 
   return (
     <div className="space-y-3">
-      {/* Верхняя панель выбора сценария, импорта OSM и завершения попытки */}
+      {/* [SEC:sim-toolbar] Верхняя панель выбора сценария, импорта OSM и завершения попытки */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="segmented flex-wrap">
           {([
@@ -1052,8 +1074,7 @@ export function SimulatorView({
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
 
-        {/* Плавающие окна: перетаскивание за заголовок, размер — за правый нижний угол.
-            В режиме H (скрытый HUD) зеркала остаются на экране намеренно. */}
+        {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
         {!webglFallback && showRearMirror && (
           <FloatingPanel
             id="mirrorRear"
@@ -1160,7 +1181,7 @@ export function SimulatorView({
           </FloatingPanel>
         )}
 
-        {/* Левый верхний блок: штрафные баллы (перенос — долгим нажатием или grip ⠿) */}
+        {/* [SEC:sim-hud] Штрафы, знаки/светофор/FPS, статус экзаменатора, настройки, справка и камера */}
         {!uiHidden && (
           <FloatingPanel
             id="scorePanel"
@@ -1497,7 +1518,7 @@ export function SimulatorView({
           </FloatingPanel>
         )}
 
-        {/* Панель приборов: переносится долгим нажатием или grip ⠿ */}
+        {/* [SEC:sim-cluster] Приборная панель, селектор АКПП, кнопки I/РН/B/L и раздельные педали */}
         {!uiHidden && (
           <FloatingPanel
             id="cluster"

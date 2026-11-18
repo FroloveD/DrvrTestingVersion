@@ -1,3 +1,18 @@
+/**
+ * @module render/sceneController
+ * @layer three-render
+ * @role Изолированный 3D-рендер Three.js: процедурные текстуры и Kia Ceed JD, мир, 3 зеркала и освобождение GPU.
+ * @invariants #1 (координаты), #2 (поворотники от `simTime`), #8 (three из npm, без CDN), #13 (зеркала 320×96 и 320×160).
+ * @tests Смоук A, K, M (`tests/browser-smoke.mjs`)
+ *
+ * Оглавление секций (быстрый поиск по `grep -n "SEC:render-"`):
+ * - `[SEC:render-textures]` — процедурные Canvas-текстуры (небо, асфальт, тень, фасады, знак «У», знак 3.24, номера боксов).
+ * - `[SEC:render-car]`      — `createWheelMesh` и `buildProceduralCar` (кузов, полый салон, оптика, слой зеркал).
+ * - `[SEC:render-init]`     — класс `SceneController`, свет, render targets зеркал, орбита и пресеты качества.
+ * - `[SEC:render-world]`    — `loadWorld`, `addObstacleMesh`, `addTrafficSignal` (дороги, боксы, здания, светофоры, переходы).
+ * - `[SEC:render-frame]`    — `render`, `renderInto`, `updateCamera` (поза, колёса Аккермана, троттлинг зеркал `TD-06`, камеры).
+ * - `[SEC:render-dispose]`  — `getPerfMetrics`, `disposeGroup`, `dispose` (корректная очистка геометрий/материалов/текстур).
+ */
 import * as THREE from "three";
 import type {
   CameraMode,
@@ -76,6 +91,7 @@ export type PerfMetrics = {
   totalBuildings: number;
 };
 
+// === [SEC:render-textures] Процедурные Canvas-текстуры (офлайн, без внешних ассетов) ===
 function makeSkyTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 4;
@@ -217,6 +233,7 @@ function makeBayNumberTexture(num: number, occupied: boolean): THREE.CanvasTextu
   return tex;
 }
 
+// === [SEC:render-car] Колёса и процедурная 3D-модель автомобиля Kia Ceed JD / автопарка ===
 function createWheelMesh(radius: number, width: number): THREE.Group {
   const g = new THREE.Group();
   const tireGeo = new THREE.CylinderGeometry(radius, radius, width, 18);
@@ -528,6 +545,7 @@ function buildProceduralCar(
   };
 }
 
+// === [SEC:render-init] Контроллер 3D-сцены, зеркальные буферы, орбита и пресеты качества ===
 export class SceneController {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
@@ -712,6 +730,7 @@ export class SceneController {
     this.sun.shadow.map = null;
   }
 
+  // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
     this.disposeGroup(this.worldGroup);
@@ -1081,6 +1100,7 @@ export class SceneController {
     this.signalVisuals.push({ def: sig, redMat, yellowMat, greenMat });
   }
 
+  // === [SEC:render-frame] Отрисовка кадра, зеркал (320×96 и 320×160 с троттлингом TD-06) и камер ===
   /** Отрисовывает кадр и (опционально) зеркала заднего/бокового вида. */
   render(
     state: SimState,
@@ -1354,6 +1374,7 @@ export class SceneController {
     this.camera.lookAt(this.camLookTarget);
   }
 
+  // === [SEC:render-dispose] Метрики FPS и освобождение GPU-ресурсов ===
   getPerfMetrics(): PerfMetrics {
     if (this.frameTimes.length === 0) {
       return {

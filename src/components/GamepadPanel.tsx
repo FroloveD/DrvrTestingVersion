@@ -1,3 +1,10 @@
+/**
+ * @module components/GamepadPanel
+ * @layer ui
+ * @role Панель подключения и 5-шаговой калибровки USB-руля, педалей и стандартного геймпада.
+ * @invariants Устройство выключено по умолчанию; привязка к `deviceId`; настройка мёртвых зон.
+ * @tests T17, смоук E (`tests/browser-smoke.mjs`)
+ */
 import { useEffect, useRef, useState } from "react";
 import { readBrowserGamepad } from "../input/browserGamepads";
 import {

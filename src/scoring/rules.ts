@@ -1,3 +1,10 @@
+/**
+ * @module scoring/rules
+ * @layer pure-core
+ * @role Правила оценки как версионируемые данные (`RuleSet`), чистый расчёт вердикта и предварительная калибровка боксов.
+ * @invariants #7 (чистое ядро), #16 (статус `unvalidated` до подписи инструктора; НЕ выдавать за официальный экзамен ГИБДД).
+ * @tests T08, T09, T14
+ */
 import { WHEEL_LOCK } from "../sim/vehicle";
 import type { CalibrationConfig, SimEvent, SimEventCode } from "../sim/types";
 

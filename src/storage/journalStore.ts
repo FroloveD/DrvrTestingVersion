@@ -1,3 +1,10 @@
+/**
+ * @module storage/journalStore
+ * @layer pure-core
+ * @role Хранилище журнала попыток в IndexedDB (`cdt-journal`: `meta` + `payload`), миграция `localStorage` и fallback в память.
+ * @invariants #7 (без обращений к DOM и Three.js), #8 (локальное хранение), #15 (одна попытка — одна запись).
+ * @tests Смоук B, D, H (`tests/browser-smoke.mjs`); чистая логика — T19
+ */
 import { byNewest, joinAttempt, splitAttempt, type AttemptMeta, type AttemptPayload } from "../sim/journal";
 import type { RecordedAttempt } from "../sim/recorder";
 

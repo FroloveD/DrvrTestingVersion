@@ -1,3 +1,10 @@
+/**
+ * @module App
+ * @layer ui
+ * @role Корневая оболочка вкладок, загрузка/сохранение настроек, связь с IndexedDB-журналом и сквозной подвал ODbL/дисклеймера.
+ * @invariants #9 (атрибуция ODbL и дисклеймер на каждой вкладке), #15 (тренажёр остаётся смонтированным при смене вкладки), #16 (`unvalidated`).
+ * @tests Смоук A–N (`tests/browser-smoke.mjs`)
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnalyticsView } from "./components/AnalyticsView";
 import { AuditView } from "./components/AuditView";
@@ -37,7 +44,7 @@ import {
   type JournalBackend,
 } from "./storage/journalStore";
 
-type TabId = "sim" | "custom" | "debrief" | "analytics" | "strategy" | "instructor" | "tests" | "audit";
+type TabId = "sim" | "custom" | "debrief" | "analytics" | "instructor" | "tests" | "audit";
 
 const RULES_STORAGE = "cdt.ruleset.v1";
 const CAL_STORAGE = "cdt.calibration.v1";
@@ -500,7 +507,7 @@ export default function App() {
             <StrategyView onNotify={notify} />
             <div className="pt-2 border-t hairline">
               <div className="mono text-[10px] text-[#7c909d] pt-6 pb-2">
-                ТЕХНИЧЕСКИЙ АУДИТ: РАСХОЖДЕНИЯ, ПРИОРИТЕТЫ, РИСКИ И ИСТОЧНИКИ
+                ИСТОРИЧЕСКИЙ АУДИТ ПРОТОТИПА v8 (АРХИВ ДО v0.2): РАСХОЖДЕНИЯ, ПРИОРИТЕТЫ, РИСКИ И ИСТОЧНИКИ
               </div>
               <AuditView onNotify={notify} onOpenSim={() => setTab("sim")} />
             </div>

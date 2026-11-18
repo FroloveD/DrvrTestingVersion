@@ -1,3 +1,9 @@
+/**
+ * @module input/browserGamepads
+ * @layer input-browser
+ * @role Тонкая обёртка над `navigator.getGamepads()` и хранением профиля `cdt.gamepad.profile.v2` в `localStorage`.
+ * @tests Смоук E (`tests/browser-smoke.mjs`)
+ */
 import { createDefaultProfile, sanitizeProfile, type GamepadProfile, type GamepadSnapshot } from "./gamepad";
 
 const PROFILE_KEY = "cdt.gamepad.profile.v2";

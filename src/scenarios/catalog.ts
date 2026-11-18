@@ -1,3 +1,10 @@
+/**
+ * @module scenarios/catalog
+ * @layer pure-core
+ * @role Встроенные учебные сценарии (`bay_90`, `parallel_v2`, `city_osm`) и диспетчер сборки мира `buildScenarioWorld`.
+ * @invariants #7 (чистое ядро), #8–#9 (офлайн-пакет OSM + атрибуция ODbL), #10 (`ScenarioGeometry` не сбрасывает заезд при смене выворота).
+ * @tests T05, T06, T16, T25
+ */
 import type { NormalizedOsmPack } from "../maps/osmLoader";
 import type {
   CalibrationConfig,

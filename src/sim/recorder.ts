@@ -1,3 +1,10 @@
+/**
+ * @module sim/recorder
+ * @layer pure-core
+ * @role Квантование ввода, RLE-запись потока управления (с `maxInnerWheelDeg`), снапшот попытки и побитный реплей.
+ * @invariants #6 (шаг 1/60 с), #7 (чистое ядро), #10–#11 (выворот в каждом RLE-блоке), #15 (флаги `finished` и `closed`).
+ * @tests T10, T19, T22, T24
+ */
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, stepSimulation } from "./step";

@@ -1,4 +1,11 @@
+/**
+ * @module sim/selfTestExtra
+ * @layer pure-core
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown-отчёт (T26).
+ * @invariants #7 (чистое ядро без DOM и Three.js).
+ */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
+import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
   advanceCalibration,
   createAxisArming,
@@ -11,6 +18,7 @@ import {
 } from "../input/gamepad";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
+import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
@@ -339,6 +347,98 @@ export const extraCases: SelfTestCase[] = [
       const fixed = replayInputStream([{ count: 240, input: inp, maxInnerWheelDeg: 33 }], world, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
       assert(Math.abs(fixed.finalState.h - state.h) > 0.01, "Настройка должна менять движение, а не только визуальные колёса");
       return "240 тиков: 33° → 42° → 37,5° · 3 блока RLE · поза совпала точно";
+    },
+  },
+  {
+    id: "T25",
+    suite: "controls",
+    name: "Блокировки АКПП/стартера и старт на маршруте: аварийка не заменяет поворотник",
+    fn: () => {
+      // 1. Блокировки селектора АКПП и запуска двигателя (src/sim/controls.ts)
+      assert(checkGearChange({ gear: "D", engineOn: true }, 1.2, "P") !== null, "P на ходу должен блокироваться");
+      assert(checkGearChange({ gear: "R", engineOn: true }, -(PARK_LOCK_MAX_SPEED_MS + 0.05), "P") !== null, "P при откате назад должен блокироваться");
+      assert(checkGearChange({ gear: "D", engineOn: true }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
+      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true }, 0, "D") === null, "Выход из P с запущенным ДВС разрешён");
+      assert(checkEngineToggle({ gear: "D", engineOn: false }) !== null, "Запуск ДВС в D запрещён");
+      assert(checkEngineToggle({ gear: "R", engineOn: false }) !== null, "Запуск ДВС в R запрещён");
+      assert(checkEngineToggle({ gear: "P", engineOn: false }) === null && checkEngineToggle({ gear: "N", engineOn: false }) === null, "Запуск ДВС в P и N разрешён");
+      assert(checkEngineToggle({ gear: "D", engineOn: true }) === null, "Заглушить ДВС можно в любом режиме");
+
+      // 2. Детектор начала движения на маршруте: null и hazard дают no_turn_signal, left и right — нет
+      const routeWorld = {
+        ...buildScenarioWorld("city_osm", DEFAULT_CALIBRATION),
+        obstacles: [],
+        signals: [],
+        crosswalks: [],
+      };
+      const grid = new SpatialGrid([], 10);
+      const startWithSignal = (signal: "left" | "right" | "hazard" | null): SimEvent[] => {
+        let s = createInitialState(routeWorld, true);
+        const events: SimEvent[] = [];
+        const inp = { ...createReadyInput("D"), throttle: 0.7, signal };
+        for (let t = 0; t < 60; t++) {
+          const out = stepSimulation(s, inp, routeWorld, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+          s = out.state;
+          events.push(...out.newEvents);
+        }
+        assert(s.hasMoved, "Машина должна набрать > 1,2 км/ч за 1 с");
+        return events.filter((e) => e.code === "no_turn_signal");
+      };
+
+      const noSig = startWithSignal(null);
+      const hazSig = startWithSignal("hazard");
+      const leftSig = startWithSignal("left");
+      const rightSig = startWithSignal("right");
+      assert(noSig.length === 1, `Без поворотника ожидалась 1 ошибка no_turn_signal, получено ${noSig.length}`);
+      assert(hazSig.length === 1 && hazSig[0].detail.includes("аварийной"), "Аварийка (Z) на старте должна фиксироваться как no_turn_signal");
+      assert(leftSig.length === 0 && rightSig.length === 0, "Левый (Q) и правый (E) поворотники разрешают начало движения");
+
+      return "АКПП: P на ходу и выход из P без ДВС заблокированы · стартер только P/N · старт: hazard → ошибка, Q/E → OK";
+    },
+  },
+  {
+    id: "T26",
+    suite: "analytics",
+    name: "Сводный Markdown-отчёт: KPI, сверка с ДИ Уилсона, ученики, нарушения и дисклеймер",
+    fn: () => {
+      const { attempt } = recordSampleAttempt();
+      const { meta } = splitAttempt(attempt);
+      const a1 = upsertReview(
+        { ...meta, id: "md-1", student: "Петров П.|гр.1" },
+        { instructor: "Иванов И.", verdict: "СДАЛ", reviewedAt: "2026-11-18T10:00:00.000Z" }
+      );
+      const a2 = upsertReview(
+        { ...meta, id: "md-2", student: "Сидорова А." },
+        {
+          instructor: "Иванов И.",
+          verdict: "НЕ СДАЛ",
+          comment: "Поздно пристегнулся",
+          reviewedAt: "2026-11-18T11:00:00.000Z",
+        }
+      );
+      const summary = summarizeAttempts([a1, a2], DEFAULT_RULESET);
+      const agreement = summarizeAgreement([a1, a2], DEFAULT_RULESET);
+      const md = analyticsToMarkdown(summary, agreement, DEFAULT_RULESET, "2026-11-18");
+
+      assert(md.includes("# CityDrivingTraining — сводный учебный отчёт (2026-11-18)"), "Нет заголовка с датой");
+      assert(md.includes("unvalidated"), "Должен быть явно указан статус unvalidated");
+      assert(md.includes("1 из 2 оценок (50%") && md.includes("ДИ Уилсона"), "Нет блока сверки и ДИ Уилсона");
+      assert(md.includes("симулятор мягче") && md.includes("Поздно пристегнулся"), "Нет строки расхождения с комментарием");
+      assert(md.includes("Петров П.\\|гр.1") && md.includes("Сидорова А."), "Нет таблицы учеников или не экранирован символ |");
+      assert(md.includes("belt_unfastened") && md.includes("Приоритет для разбора"), "Нет блока нарушений и рекомендаций");
+      assert(md.includes("Не является официальным экзаменом ГИБДД"), "Потерян обязательный дисклеймер");
+
+      const signedMd = analyticsToMarkdown(
+        summary,
+        agreement,
+        { ...DEFAULT_RULESET, status: "instructor_signed", instructorSignOff: "Иванов И.И., 2026-11-18" },
+        "2026-11-18"
+      );
+      assert(signedMd.includes("instructor_signed") && signedMd.includes("Иванов И.И."), "Не отражена подпись инструктора");
+
+      return `Markdown ${md.length} симв. · 5 разделов · ДИ Уилсона · экранирование таблиц · дисклеймер на месте`;
     },
   },
 ];

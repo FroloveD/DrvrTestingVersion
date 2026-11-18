@@ -1,0 +1,101 @@
+# Журнал работы по ветке и технический долг
+
+Актуальная сводка по рабочей ветке: статус работы, точка остановки, следующие шаги и реестр техдолга.
+- Обзор проекта: [`README.md`](./README.md) · Правила для агентов: [`AGENTS.md`](./AGENTS.md) · Передача контекста: [`HANDOFF.md`](./HANDOFF.md)
+- Архитектура: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) · Решения: [`docs/ADR.md`](./docs/ADR.md) · Аудит веток: [`docs/BRANCH_AUDIT.md`](./docs/BRANCH_AUDIT.md) · Калибровка: [`docs/CALIBRATION_GUIDE.md`](./docs/CALIBRATION_GUIDE.md)
+
+---
+
+## 1. Статус ветки
+
+| Поле | Значение |
+|---|---|
+| Ветка | `Arena_v1` (влито из `arena/1f511675-drvrtestingversion` через PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1)) |
+| Базовая ветка / коммит | `Arena_v1` (`b272bfa7aa7a2b4b4c46ddb4b5885abbb595b6f8`) |
+| Состояние | **PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) ВЛИТ В `Arena_v1`** — все инженерные и документационные задачи плана выполнены |
+| Обновлено | `2026-11-18` (UTC) |
+| Последний гейт | `tsc --noEmit` — OK · `selfTest` — `26/26` · чистое ядро (7 папок, 19 файлов) — OK · 40/40 `@module` + доки/пути/якоря — OK · `dist/index.html` (офлайн) — OK · CI `#44277185736` (`verify` + Playwright `A–N`) — OK |
+
+---
+
+## 2. На чём остановились
+
+**Текущая точка:** все пункты инженерного плана закрыты:
+- ветка объединяет `Arena_v1` (`v0.3`), модуль и UI `HANDOFF` из `Arena_v2`, чистые блокировки АКПП/стартера (`src/sim/controls.ts`), фикс аварийки на старте (`src/sim/step.ts`), русский справочник `vehicle.ts` и сводный Markdown-отчёт (`analyticsToMarkdown` в `src/analytics/summary.ts` + кнопка «Отчёт .md» в `AnalyticsView.tsx`, тест `T26`);
+- 100 % файлов `src/**/*.{ts,tsx}` имеют паспорта `@module` (контролируется автоматически в `scripts/run-tests.mjs`), а крупные файлы — оглавления и якоря `[SEC:...]`;
+- в GitHub Actions (`.github/workflows/ci.yml`) на каждый push и PR автоматически прогоняются и 4-контурный гейт ядра/доков/офлайна, и полный браузерный смоук Playwright `A–N` (по `http://` и `file://`);
+- Pull Request [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) прошёл оба job CI (`verify` и Playwright `A–N` по `http://` и `file://` — прогоны `#44277185736`, `#44278996212`, `#44279004416`) и влит в `Arena_v1`.
+
+### История шагов в этой ветке
+
+- **2026-11-18 (`a49946f`) — Markdown-отчёт (`T26`), 100 % `@module`, Playwright-смоук `A–N` в CI и открытие PR #1 в `Arena_v1`**
+  - В `src/analytics/summary.ts` добавлена чистая функция `analyticsToMarkdown()` (KPI, сверка с ДИ Уилсона, таблица расхождений, ученики, упражнения, нарушения, фокус отработки, статус правил и дисклеймер), подключена кнопкой «Отчёт .md» в `AnalyticsView.tsx`, покрыта автотестом `T26` (`26/26`).
+  - Завершены паспорта `@module` во всех оставшихся файлах `src/` (100 % покрытие) и добавлена их обязательная проверка в `scripts/run-tests.mjs`.
+  - В `.github/workflows/ci.yml` добавлен job `browser-smoke` (Playwright + headless Chromium, сценарии `A–N` по `http://` и `file://` с сохранением скриншотов при падении).
+  - В `docs/BRANCH_AUDIT.md` добавлена безопасная 4-шаговая шпаргалка с архивными тегами для финального обновления `main` и удаления дубля `Arena_v2`; открыт PR в `Arena_v1`.
+- **2026-11-18 (`d9da304`) — Пакет документации, 4-ступенчатый автогейт и CI (`TD-02`, `TD-05`, `TD-14` закрыты)**
+  - Созданы `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/ADR.md` (`ADR-001`–`ADR-012`), `docs/CALIBRATION_GUIDE.md`; обновлены `scripts/run-tests.mjs`, `ci.yml`, `deploy.yml`.
+- **2026-11-18 (`437b7ab`) — Самодокументируемый код (`TD-15`, `TD-16` закрыты)**
+  - Паспорта `@module` в ядре/вводе, справочник `src/sim/vehicle.ts`, архивная пометка `src/data.ts`, оглавления и якоря `[SEC:...]` в 4 крупных файлах.
+- **2026-11-18 (`d944b25`) — Консолидация `Arena_v2` и фиксов `main` (`TD-01`, `TD-03`, `TD-04`, `TD-12`, `TD-13` закрыты)**
+  - Перенесены `src/handoff.ts`, `scripts/write-handoff.mjs`, UI-панель `HANDOFF` и смоук `N`; добавлен `src/sim/controls.ts` и фикс аварийки на старте (`T25`).
+- **2026-11-18 (`6a2935e`) — Полный аудит веток (`docs/BRANCH_AUDIT.md`, `TD-12`–`TD-17`)**
+- **2026-11-18 (`ad1f8a0`) — Инициализация ветки, `HANDOFF.md` и `WORKLOG.md` (`TD-01`–`TD-11`)**
+
+---
+
+## 3. Что делать дальше
+
+### Шаг 1. Завершить наведение порядка в ветках (`TD-17`)
+- [x] Открыть PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) и дождаться зелёного CI + браузерного смоука `A–N`.
+- [x] Влить PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) в `Arena_v1`.
+- [ ] Сохранить архивные теги `archive/main-v0.2` и `archive/Arena_v2-2026-11-18`, обновить `main` из `Arena_v1` (починит GitHub Pages) и удалить дубль `Arena_v2` — точные команды в [`docs/BRANCH_AUDIT.md`](./docs/BRANCH_AUDIT.md) (§5, п. 4).
+
+### Шаг 2. Продуктовые задачи по приоритету (`HANDOFF.md` §7)
+1. **Слепая калибровка оценки (`TD-07`):** провести 10–20 реальных заездов и получить оценки 2–3 инструкторов по [`docs/CALIBRATION_GUIDE.md`](./docs/CALIBRATION_GUIDE.md), выгрузить `cdt-report-*.md` и `cdt.golden.v1`, подписать правила (`instructor_signed`) и утвердить размеры боксов.
+2. **Лицензия (`TD-08`):** выбрать лицензию исходного кода и добавить файл `LICENSE` в корень (могу подготовить текст и правку `NOTICE`/`PrivacyLegalView`, как только назовёте выбранный вариант: MIT / Apache-2.0 / проприетарная и т. д.).
+3. **Оборудование и Windows (`TD-09`, `TD-10`):** проверить физический USB-руль/педали и собрать Windows-оболочку Tauri (могу подготовить каркас `src-tauri/` и GitHub Actions workflow для автосборки `.exe`/`.msi` на `windows-latest`), провести пилот в 1–2 автошколах.
+4. **Развитие контента после калибровки (`TD-11`):** офлайн-пакет реального городского квартала OSM, новые упражнения (разворот в ограниченном пространстве, эстакада, змейка) и детерминированный трафик от `model time` с учётом светофоров (`ADR-009`).
+
+---
+
+## 4. Реестр технического долга
+
+Статусы: `open` — открыт · `in_progress` — в работе · `accepted` — осознанный компромисс · `blocked` — ждёт внешних данных/оборудования · `done` — закрыт.
+
+### A. Активные, принятые и заблокированные пункты
+
+| ID | Статус | Область | Описание долга | Критерий закрытия |
+|---|---|---|---|---|
+| `TD-17` | `in_progress` | Ветки Git (`main`, `Arena_v2`) | PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) влит в `Arena_v1` после зелёного CI + смоука `A–N`; осталось проставить архивные теги, обновить `main` из `Arena_v1` и удалить дубль `Arena_v2`. | `main` обновлена и зелёная в GitHub Pages, `Arena_v2` сохранена тегом и удалена (`docs/BRANCH_AUDIT.md` §5). |
+| `TD-06` | `accepted` | `src/render/sceneController.ts` (`[SEC:render-frame]`) | Зеркала рендерятся с троттлингом (заднее — каждый 2-й кадр, боковые — каждый 3-й) ради FPS на слабом GPU (`ADR-011`). | Не менять без жалоб с пилота; при необходимости вынести частоту в настройку. |
+| `TD-07` | `blocked` | `src/scoring/rules.ts` | Правила оценки (`ru-demo-0.2.0`) и размеры боксов имеют статус `unvalidated` — не выдаются за экзамен ГИБДД (`ADR-003`). | ≥ 90 % согласия на ≥ 20 оценках по `docs/CALIBRATION_GUIDE.md`, подпись `instructor_signed`. |
+| `TD-08` | `blocked` | Корень репо (`LICENSE`), `PrivacyLegalView.tsx` | Есть `NOTICE` и ODbL 1.0, но не выбран и не добавлен файл `LICENSE`. | Решение владельца проекта и добавление `LICENSE`. |
+| `TD-09` | `blocked` | `src/input/gamepad.ts`, `browserGamepads.ts` | Адаптер USB-руля и педалей проверен на синтетическом Gamepad API (`T17`, смоук `E`); физический руль не подключался (`ADR-008`). | Проверка на реальном руле/педалях в автошколе, запись результатов в доки. |
+| `TD-10` | `blocked` | Вкладка «Тесты и Модули» (Tauri) | Конфиг Tauri для Windows существует как заготовка; сборка `.exe`/`.msi` не выполнялась. | Собрать и проверить офлайн-оболочку и хранилище на Windows (возможна автосборка на `windows-latest` в GitHub Actions). |
+| `TD-11` | `open` | `src/scenarios/catalog.ts`, `src/sim/step.ts` | Встроенный городской пакет — учебная схема квартала, трафик статичный (`ADR-009`, прототип в `origin/main:src/sim/traffic.ts`). | После закрытия `TD-07`: пакет реального квартала и детерминированный трафик с учётом светофоров. |
+
+### B. Закрытые пункты (10 из 17 закрыты)
+
+| ID | Статус | Дата | Что исправлено |
+|---|---|---|---|
+| `TD-01` | `done` | 2026-11-18 | Перенесены `src/handoff.ts`, `scripts/write-handoff.mjs`, `downloadText`, панель `HANDOFF` в `TestsAndModulesView.tsx` и смоук `N` из `Arena_v2`; убраны ссылки на `npx tsx`. |
+| `TD-02` | `done` | 2026-11-18 | `scripts/run-tests.mjs` проверяет все 7 каталогов ядра, 26 тестов, 100 % паспортов `@module`, синхронность `HANDOFF.md`, пути в доках, якоря `[SEC:...]` и автономность `dist/index.html`. |
+| `TD-03` | `done` | 2026-11-18 | Удалено мёртвое значение `"strategy"` из `TabId` в `src/App.tsx`. |
+| `TD-04` | `done` | 2026-11-18 | `src/strategy/plan.ts` и `StrategyView.tsx` актуализированы; в `AnalyticsView` добавлен экспорт сводного отчёта `.md` (`analyticsToMarkdown`, `T26`). |
+| `TD-05` | `done` | 2026-11-18 | Добавлен `.github/workflows/ci.yml` (гейт ядра/доков + Playwright-смоук `A–N`); в `deploy.yml` убран BOM и встроен полный гейт. |
+| `TD-12` | `done` | 2026-11-18 | Перенесён фикс из `main` в `src/sim/step.ts`: аварийка `Z` при начале движения на маршруте фиксирует `no_turn_signal`; покрыто `T25`. |
+| `TD-13` | `done` | 2026-11-18 | Блокировки АКПП (`checkGearChange`) и стартера (`checkEngineToggle`) вынесены в `src/sim/controls.ts`, подключены в `SimulatorView.tsx`, покрыты `T25`. |
+| `TD-14` | `done` | 2026-11-18 | Актуализирован `src/handoff.ts`/`HANDOFF.md` (`cdt.gamepad.mapping.v1`, `cdt-checklist-v1`, все модули); созданы `README.md`, `AGENTS.md`, `docs/*`. |
+| `TD-15` | `done` | 2026-11-18 | В `src/data.ts`, `AuditView.tsx` и `src/App.tsx` проставлена явная архивная пометка для аудита монолита v8. |
+| `TD-16` | `done` | 2026-11-18 | 100 % файлов `src/**/*.{ts,tsx}` снабжены паспортами `@module` (с автопроверкой), перенесён справочник `vehicle.ts`, добавлены якоря `[SEC:...]` в крупные файлы. |
+
+---
+
+## 5. Правило обновления
+
+После каждой задачи в этой ветке:
+1. Обновить разделы **1** (состояние и дата), **2** (на чём остановились + запись в историю), **3** (что дальше) и **4** (новые/закрытые `TD-*`).
+2. При изменении модулей, инвариантов, числа тестов или ключей хранилища обновить `src/handoff.ts` и выполнить `node scripts/write-handoff.mjs`.
+3. Пройти обязательный гейт (`npx tsc --noEmit && npm run build && node scripts/run-tests.mjs --check-dist`).
+4. Закоммитить и запушить изменения в `origin/arena/1f511675-drvrtestingversion`, чтобы состояние ветки сразу читалось на GitHub.
