@@ -1,3 +1,10 @@
+/**
+ * @module sim/journal
+ * @layer pure-core
+ * @role Разделение попытки на лёгкую (`AttemptMeta`) и тяжёлую (`AttemptPayload`) части, лимит 300 записей и ревью инструкторов.
+ * @invariants #7 (чистое ядро), #15 (одна попытка — один `id`; вытеснение сначала записей без оценки инструктора).
+ * @tests T19
+ */
 import type { InstructorReview, RecordedAttempt } from "./recorder";
 
 /**

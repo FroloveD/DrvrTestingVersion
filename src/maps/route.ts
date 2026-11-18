@@ -1,3 +1,10 @@
+/**
+ * @module maps/route
+ * @layer pure-core
+ * @role Построение учебного маршрута и контрольных точек по реальной геометрии дорог OSM, правый борт старта и улица в HUD.
+ * @invariants #1 (координаты: правая полоса = смещение вдоль `(-cos h, sin h)`), #7 (чистое ядро), #8 (офлайн).
+ * @tests T21
+ */
 import type { RoadSegment, RouteCheckpoint } from "../sim/types";
 
 function roadLength(road: RoadSegment): number {

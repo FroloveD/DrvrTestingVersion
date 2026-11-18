@@ -1,3 +1,10 @@
+/**
+ * @module sim/spatialGrid
+ * @layer pure-core
+ * @role Равномерная пространственная сетка (10 м), точные OBB-коллизии по теореме разделяющих осей (SAT) и геометрия боксов.
+ * @invariants #1 (координаты +Z вперёд, +X лево), #7 (без three/window/document).
+ * @tests T05, T06, T07, T08, T16
+ */
 import type { ObstacleBox, ParkingBay, Vec2 } from "./types";
 import { CAR, getCarCorners } from "./vehicle";
 

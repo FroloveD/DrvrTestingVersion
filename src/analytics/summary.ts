@@ -1,3 +1,10 @@
+/**
+ * @module analytics/summary
+ * @layer pure-core
+ * @role Агрегация статистики по ученикам, упражнениям и нарушениям, а также выгрузка CSV (UTF-8 BOM, `;`) для Excel.
+ * @invariants #7 (чистое ядро), #8 (локальная обработка без сервера).
+ * @tests T18
+ */
 import { evaluateAttempt, type RuleSet } from "../scoring/rules";
 import type { AttemptMeta } from "../sim/journal";
 import type { ScenarioId, SimEventCode } from "../sim/types";

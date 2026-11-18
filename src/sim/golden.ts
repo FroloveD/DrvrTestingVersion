@@ -1,3 +1,10 @@
+/**
+ * @module sim/golden
+ * @layer pure-core
+ * @role Детерминированная контрольная сумма FNV-1a и сборка эталонного набора `cdt.golden.v1` для сверки с инструктором.
+ * @invariants #6 (детерминизм), #7 (чистое ядро), #11 (учёт `maxInnerWheelDeg` в checksum).
+ * @tests T14
+ */
 import type { RuleSet } from "../scoring/rules";
 import type { InstructorReview, RecordedAttempt } from "./recorder";
 import type { CalibrationConfig, ScenarioId, WorldData } from "./types";

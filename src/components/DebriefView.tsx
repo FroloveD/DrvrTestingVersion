@@ -1,3 +1,16 @@
+/**
+ * @module components/DebriefView
+ * @layer ui
+ * @role Разбор заезда, покадровый 2D-реплей с проверкой детерминизма, слепая сверка инструктора и журнал попыток.
+ * @invariants #6, #11, #15, #16 (побитный реплей с `maxInnerWheelDeg` и `rulesAtRide`, слепой режим, `unvalidated`).
+ * @tests Смоук C, D, H (`tests/browser-smoke.mjs`); ядро — T10, T14, T19, T22, T24
+ *
+ * Оглавление секций (`grep -n "SEC:debrief-"`):
+ * - `[SEC:debrief-review]`  — `ReviewPanel`: независимая оценка инструктора и слепой режим.
+ * - `[SEC:debrief-state]`   — `DebriefView`: выбор попытки, проверка реплея и выгрузка `cdt.golden.v1`.
+ * - `[SEC:debrief-map]`     — 2D-карта реплея, траектория, таймлайн и карточки нарушений.
+ * - `[SEC:debrief-journal]` — таблица журнала попыток со статусами `finished` / `closed` / черновик.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import type { CustomScenarioDef } from "../scenarios/custom";
@@ -65,6 +78,7 @@ function runSamplePhysicsAttempt(cal: CalibrationConfig, rules: RuleSet): Record
 }
 
 /** Вердикт инструктора по заезду и его сравнение с вердиктом симулятора. */
+// === [SEC:debrief-review] Панель независимой оценки инструктора ===
 function ReviewPanel({
   attempt,
   simVerdict,
@@ -216,6 +230,7 @@ function ReviewPanel({
   );
 }
 
+// === [SEC:debrief-state] Экран разбора, реплея, проверки детерминизма и golden-набора ===
 export function DebriefView({
   currentAttempt,
   journal,
@@ -566,7 +581,7 @@ export function DebriefView({
         </div>
       )}
 
-      {/* 2D-карта реплея + список нарушений */}
+      {/* [SEC:debrief-map] 2D-карта реплея + список нарушений */}
       <div className="grid lg:grid-cols-[1.15fr_.85fr] gap-4">
         <div className="panel p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -794,7 +809,7 @@ export function DebriefView({
         onRemove={(instructor) => onRemoveReview(attempt.id, instructor)}
       />
 
-      {/* Журнал попыток */}
+      {/* [SEC:debrief-journal] Журнал попыток */}
       <div className="panel p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div>
