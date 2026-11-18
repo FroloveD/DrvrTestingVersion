@@ -10,9 +10,9 @@
 
 | Поле | Значение |
 |---|---|
-| Ветка | `arena/1f511675-drvrtestingversion` |
+| Ветка | `Arena_v1` (влито из `arena/1f511675-drvrtestingversion` через PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1)) |
 | Базовая ветка / коммит | `Arena_v1` (`b272bfa7aa7a2b4b4c46ddb4b5885abbb595b6f8`) |
-| Состояние | **PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) В `Arena_v1` ОТКРЫТ** — все инженерные и документационные задачи плана выполнены |
+| Состояние | **PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) ВЛИТ В `Arena_v1`** — все инженерные и документационные задачи плана выполнены |
 | Обновлено | `2026-11-18` (UTC) |
 | Последний гейт | `tsc --noEmit` — OK · `selfTest` — `26/26` · чистое ядро (7 папок, 19 файлов) — OK · 40/40 `@module` + доки/пути/якоря — OK · `dist/index.html` (офлайн) — OK · CI `#44277185736` (`verify` + Playwright `A–N`) — OK |
 
@@ -24,7 +24,7 @@
 - ветка объединяет `Arena_v1` (`v0.3`), модуль и UI `HANDOFF` из `Arena_v2`, чистые блокировки АКПП/стартера (`src/sim/controls.ts`), фикс аварийки на старте (`src/sim/step.ts`), русский справочник `vehicle.ts` и сводный Markdown-отчёт (`analyticsToMarkdown` в `src/analytics/summary.ts` + кнопка «Отчёт .md» в `AnalyticsView.tsx`, тест `T26`);
 - 100 % файлов `src/**/*.{ts,tsx}` имеют паспорта `@module` (контролируется автоматически в `scripts/run-tests.mjs`), а крупные файлы — оглавления и якоря `[SEC:...]`;
 - в GitHub Actions (`.github/workflows/ci.yml`) на каждый push и PR автоматически прогоняются и 4-контурный гейт ядра/доков/офлайна, и полный браузерный смоук Playwright `A–N` (по `http://` и `file://`);
-- открыт Pull Request [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) для закрытия `TD-17` (оба job CI — `verify` и Playwright `A–N` по `http://` и `file://` — прошли с первого раза в прогоне `#44277185736`).
+- Pull Request [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) прошёл оба job CI (`verify` и Playwright `A–N` по `http://` и `file://` — прогоны `#44277185736`, `#44278996212`, `#44279004416`) и влит в `Arena_v1`.
 
 ### История шагов в этой ветке
 
@@ -47,8 +47,8 @@
 ## 3. Что делать дальше
 
 ### Шаг 1. Завершить наведение порядка в ветках (`TD-17`)
-- [x] Открыть PR `arena/1f511675-drvrtestingversion → Arena_v1` и дождаться зелёного CI + браузерного смоука `A–N`.
-- [ ] Влить PR в `Arena_v1` (по команде владельца — можно выполнить прямо отсюда).
+- [x] Открыть PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) и дождаться зелёного CI + браузерного смоука `A–N`.
+- [x] Влить PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) в `Arena_v1`.
 - [ ] Сохранить архивные теги `archive/main-v0.2` и `archive/Arena_v2-2026-11-18`, обновить `main` из `Arena_v1` (починит GitHub Pages) и удалить дубль `Arena_v2` — точные команды в [`docs/BRANCH_AUDIT.md`](./docs/BRANCH_AUDIT.md) (§5, п. 4).
 
 ### Шаг 2. Продуктовые задачи по приоритету (`HANDOFF.md` §7)
@@ -67,7 +67,7 @@
 
 | ID | Статус | Область | Описание долга | Критерий закрытия |
 |---|---|---|---|---|
-| `TD-17` | `in_progress` | Ветки Git (`main`, `Arena_v1`, `Arena_v2`) | PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) открыт и прошёл CI + смоук `A–N`; осталось влить PR, проставить архивные теги, обновить `main` и удалить дубль `Arena_v2`. | PR влит, `main` зелёная в GitHub Pages, `Arena_v2` сохранена тегом и удалена (`docs/BRANCH_AUDIT.md` §5). |
+| `TD-17` | `in_progress` | Ветки Git (`main`, `Arena_v2`) | PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) влит в `Arena_v1` после зелёного CI + смоука `A–N`; осталось проставить архивные теги, обновить `main` из `Arena_v1` и удалить дубль `Arena_v2`. | `main` обновлена и зелёная в GitHub Pages, `Arena_v2` сохранена тегом и удалена (`docs/BRANCH_AUDIT.md` §5). |
 | `TD-06` | `accepted` | `src/render/sceneController.ts` (`[SEC:render-frame]`) | Зеркала рендерятся с троттлингом (заднее — каждый 2-й кадр, боковые — каждый 3-й) ради FPS на слабом GPU (`ADR-011`). | Не менять без жалоб с пилота; при необходимости вынести частоту в настройку. |
 | `TD-07` | `blocked` | `src/scoring/rules.ts` | Правила оценки (`ru-demo-0.2.0`) и размеры боксов имеют статус `unvalidated` — не выдаются за экзамен ГИБДД (`ADR-003`). | ≥ 90 % согласия на ≥ 20 оценках по `docs/CALIBRATION_GUIDE.md`, подпись `instructor_signed`. |
 | `TD-08` | `blocked` | Корень репо (`LICENSE`), `PrivacyLegalView.tsx` | Есть `NOTICE` и ODbL 1.0, но не выбран и не добавлен файл `LICENSE`. | Решение владельца проекта и добавление `LICENSE`. |
