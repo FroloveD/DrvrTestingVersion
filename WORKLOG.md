@@ -12,9 +12,9 @@
 |---|---|
 | Ветка | `arena/1f511675-drvrtestingversion` |
 | Базовая ветка / коммит | `Arena_v1` (`b272bfa7aa7a2b4b4c46ddb4b5885abbb595b6f8`) |
-| Состояние | **PR В `Arena_v1` ОТКРЫТ (ГОТОВ К РЕВЬЮ И СЛИЯНИЮ)** — все инженерные и документационные задачи плана выполнены |
+| Состояние | **PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) В `Arena_v1` ОТКРЫТ** — все инженерные и документационные задачи плана выполнены |
 | Обновлено | `2026-11-18` (UTC) |
-| Последний гейт | `tsc --noEmit` — OK · `selfTest` — `26/26` · чистое ядро (7 папок, 19 файлов) — OK · 100 % паспортов `@module` + доки/пути/якоря — OK · `dist/index.html` (офлайн) — OK · CI + Playwright `A–N` — OK |
+| Последний гейт | `tsc --noEmit` — OK · `selfTest` — `26/26` · чистое ядро (7 папок, 19 файлов) — OK · 40/40 `@module` + доки/пути/якоря — OK · `dist/index.html` (офлайн) — OK · CI `#44277185736` (`verify` + Playwright `A–N`) — OK |
 
 ---
 
@@ -24,11 +24,11 @@
 - ветка объединяет `Arena_v1` (`v0.3`), модуль и UI `HANDOFF` из `Arena_v2`, чистые блокировки АКПП/стартера (`src/sim/controls.ts`), фикс аварийки на старте (`src/sim/step.ts`), русский справочник `vehicle.ts` и сводный Markdown-отчёт (`analyticsToMarkdown` в `src/analytics/summary.ts` + кнопка «Отчёт .md» в `AnalyticsView.tsx`, тест `T26`);
 - 100 % файлов `src/**/*.{ts,tsx}` имеют паспорта `@module` (контролируется автоматически в `scripts/run-tests.mjs`), а крупные файлы — оглавления и якоря `[SEC:...]`;
 - в GitHub Actions (`.github/workflows/ci.yml`) на каждый push и PR автоматически прогоняются и 4-контурный гейт ядра/доков/офлайна, и полный браузерный смоук Playwright `A–N` (по `http://` и `file://`);
-- открыт Pull Request `arena/1f511675-drvrtestingversion → Arena_v1` для закрытия `TD-17`.
+- открыт Pull Request [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) для закрытия `TD-17` (оба job CI — `verify` и Playwright `A–N` по `http://` и `file://` — прошли с первого раза в прогоне `#44277185736`).
 
 ### История шагов в этой ветке
 
-- **2026-11-18 — Markdown-отчёт (`T26`), 100 % `@module`, Playwright-смоук `A–N` в CI и открытие PR в `Arena_v1`**
+- **2026-11-18 (`a49946f`) — Markdown-отчёт (`T26`), 100 % `@module`, Playwright-смоук `A–N` в CI и открытие PR #1 в `Arena_v1`**
   - В `src/analytics/summary.ts` добавлена чистая функция `analyticsToMarkdown()` (KPI, сверка с ДИ Уилсона, таблица расхождений, ученики, упражнения, нарушения, фокус отработки, статус правил и дисклеймер), подключена кнопкой «Отчёт .md» в `AnalyticsView.tsx`, покрыта автотестом `T26` (`26/26`).
   - Завершены паспорта `@module` во всех оставшихся файлах `src/` (100 % покрытие) и добавлена их обязательная проверка в `scripts/run-tests.mjs`.
   - В `.github/workflows/ci.yml` добавлен job `browser-smoke` (Playwright + headless Chromium, сценарии `A–N` по `http://` и `file://` с сохранением скриншотов при падении).
@@ -67,7 +67,7 @@
 
 | ID | Статус | Область | Описание долга | Критерий закрытия |
 |---|---|---|---|---|
-| `TD-17` | `in_progress` | Ветки Git (`main`, `Arena_v1`, `Arena_v2`) | PR `arena/1f511675-drvrtestingversion → Arena_v1` открыт; осталось влить PR, проставить архивные теги, обновить `main` и удалить дубль `Arena_v2`. | PR влит, `main` зелёная в GitHub Pages, `Arena_v2` сохранена тегом и удалена (`docs/BRANCH_AUDIT.md` §5). |
+| `TD-17` | `in_progress` | Ветки Git (`main`, `Arena_v1`, `Arena_v2`) | PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) открыт и прошёл CI + смоук `A–N`; осталось влить PR, проставить архивные теги, обновить `main` и удалить дубль `Arena_v2`. | PR влит, `main` зелёная в GitHub Pages, `Arena_v2` сохранена тегом и удалена (`docs/BRANCH_AUDIT.md` §5). |
 | `TD-06` | `accepted` | `src/render/sceneController.ts` (`[SEC:render-frame]`) | Зеркала рендерятся с троттлингом (заднее — каждый 2-й кадр, боковые — каждый 3-й) ради FPS на слабом GPU (`ADR-011`). | Не менять без жалоб с пилота; при необходимости вынести частоту в настройку. |
 | `TD-07` | `blocked` | `src/scoring/rules.ts` | Правила оценки (`ru-demo-0.2.0`) и размеры боксов имеют статус `unvalidated` — не выдаются за экзамен ГИБДД (`ADR-003`). | ≥ 90 % согласия на ≥ 20 оценках по `docs/CALIBRATION_GUIDE.md`, подпись `instructor_signed`. |
 | `TD-08` | `blocked` | Корень репо (`LICENSE`), `PrivacyLegalView.tsx` | Есть `NOTICE` и ODbL 1.0, но не выбран и не добавлен файл `LICENSE`. | Решение владельца проекта и добавление `LICENSE`. |
