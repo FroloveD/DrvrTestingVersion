@@ -14,12 +14,15 @@
  * - `[SEC:render-dispose]`  — `getPerfMetrics`, `disposeGroup`, `dispose` (корректная очистка геометрий/материалов/текстур).
  */
 import * as THREE from "three";
+import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
+import { makeRoadSignTexture } from "./roadSignTextures";
 import type {
   CameraMode,
   ObstacleBox,
   ParkedModelKey,
   ParkingBay,
   QualityPreset,
+  RoadSignDef,
   SimState,
   TrafficSignalDef,
   WorldData,
@@ -761,8 +764,11 @@ export class SceneController {
         const mx = (p0.x + p1.x) / 2;
         const mz = (p0.z + p1.z) / 2;
 
-        // Тротуар-подложка для городских улиц
-        if (world.scenarioId === "city_osm") {
+        // Тротуар-подложка для городских и пользовательских улиц (кроме базовой площадки автодрома)
+        const isStreetRoad =
+          world.scenarioId === "city_osm" ||
+          (world.scenarioId === "custom" && road.id !== "custom-lot");
+        if (isStreetRoad) {
           const sw = new THREE.Mesh(
             new THREE.PlaneGeometry(road.width + 3.2, len + road.width * 0.4),
             sidewalkMat
@@ -776,7 +782,7 @@ export class SceneController {
         }
 
         const seg = new THREE.Mesh(
-          new THREE.PlaneGeometry(road.width, len + (world.scenarioId === "city_osm" ? road.width : 0)),
+          new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? road.width : 0)),
           asphaltMat
         );
         seg.rotation.order = "YXZ";
@@ -932,8 +938,16 @@ export class SceneController {
       this.pedVisuals.push({ crosswalkId: cw.id, group: ped, legL, legR });
     }
 
-    // Знаки ограничения скорости 3.24
+    // Дорожные знаки редактора и импорта OSM (все 12 классов, с ориентацией по потоку sign.h)
+    const renderedSignIds = new Set<string>();
+    for (const sign of world.signs ?? []) {
+      renderedSignIds.add(`${SIGN_SPEED_ZONE_PREFIX}${sign.id}`);
+      this.addRoadSignMesh(sign);
+    }
+
+    // Знаки ограничения скорости 3.24 (для встроенных сценариев без дублирования world.signs)
     for (const sz of world.speedZones) {
+      if (renderedSignIds.has(sz.id)) continue;
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.045, 0.045, 2.6, 8),
         new THREE.MeshStandardMaterial({ color: 0x94a3b8 })
@@ -965,27 +979,29 @@ export class SceneController {
       this.checkpointMeshes.push({ id: cp.id, mesh: ring });
     }
 
-    // Лёгкие декоративные деревья за пределами проезжей части
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 });
-    const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f6a44, roughness: 0.85 });
-    const treeCoords: Array<[number, number]> =
-      world.scenarioId === "city_osm"
-        ? [
-            [-9, -42], [9, -38], [-9, -18], [9, 18], [-9, 44], [9, 48],
-            [-18, 56], [-42, 72], [-70, 72], [28, -9], [-28, -9],
-          ]
-        : [
-            [-13, -8], [13, -8], [-13, 13], [13, 13], [0, -14], [0, 18],
-          ];
-    for (const [tx, tz] of treeCoords) {
-      const tg = new THREE.Group();
-      tg.position.set(tx, 0, tz);
-      const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.8, 7), trunkMat);
-      tr.position.y = 0.9;
-      const cr = new THREE.Mesh(new THREE.DodecahedronGeometry(1.45, 0), crownMat);
-      cr.position.y = 2.65;
-      tg.add(tr, cr);
-      this.worldGroup.add(tg);
+    // Декоративные деревья по периметру только для встроенных сценариев (в своём сценарии деревья — объекты карты)
+    if (world.scenarioId !== "custom") {
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 });
+      const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f6a44, roughness: 0.85 });
+      const treeCoords: Array<[number, number]> =
+        world.scenarioId === "city_osm"
+          ? [
+              [-9, -42], [9, -38], [-9, -18], [9, 18], [-9, 44], [9, 48],
+              [-18, 56], [-42, 72], [-70, 72], [28, -9], [-28, -9],
+            ]
+          : [
+              [-13, -8], [13, -8], [-13, 13], [13, 13], [0, -14], [0, 18],
+            ];
+      for (const [tx, tz] of treeCoords) {
+        const tg = new THREE.Group();
+        tg.position.set(tx, 0, tz);
+        const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.8, 7), trunkMat);
+        tr.position.y = 0.9;
+        const cr = new THREE.Mesh(new THREE.DodecahedronGeometry(1.45, 0), crownMat);
+        cr.position.y = 2.65;
+        tg.add(tr, cr);
+        this.worldGroup.add(tg);
+      }
     }
 
     this.resetOrbit();
@@ -1048,7 +1064,102 @@ export class SceneController {
       return;
     }
 
-    // Бордюр или столб
+    if (obs.kind === "tree") {
+      const tg = new THREE.Group();
+      tg.position.set(obs.cx, 0, obs.cz);
+      const h = Math.max(2.2, obs.height);
+      const trunkH = h * 0.44;
+      const crownR = Math.max(0.85, Math.max(obs.halfX, obs.halfZ) * 2.1, h * 0.32);
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.14, 0.21, trunkH, 7),
+        new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 })
+      );
+      trunk.position.y = trunkH / 2;
+      trunk.castShadow = true;
+      const crown = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(crownR, 0),
+        new THREE.MeshStandardMaterial({ color: obs.color ?? 0x2f6a44, roughness: 0.85 })
+      );
+      crown.position.y = trunkH + crownR * 0.65;
+      crown.castShadow = true;
+      tg.add(trunk, crown);
+      this.worldGroup.add(tg);
+      return;
+    }
+
+    if (obs.kind === "fence") {
+      const fg = new THREE.Group();
+      fg.position.set(obs.cx, 0, obs.cz);
+      fg.rotation.y = obs.h;
+      const alongX = obs.halfX >= obs.halfZ;
+      const span = (alongX ? obs.halfX : obs.halfZ) * 2;
+      const thick = Math.max(0.08, (alongX ? obs.halfZ : obs.halfX) * 2);
+      const h = Math.max(0.5, obs.height);
+      const metalMat = new THREE.MeshStandardMaterial({
+        color: obs.color ?? 0x64748b,
+        metalness: 0.35,
+        roughness: 0.6,
+      });
+      // Верхняя и средняя перекладины + вертикальные стойки каждые ~2 м
+      for (const ry of [h * 0.88, h * 0.48]) {
+        const rail = new THREE.Mesh(
+          new THREE.BoxGeometry(alongX ? span : thick, 0.08, alongX ? thick : span),
+          metalMat
+        );
+        rail.position.y = ry;
+        rail.castShadow = true;
+        fg.add(rail);
+      }
+      const posts = Math.max(2, Math.min(24, Math.round(span / 2) + 1));
+      for (let i = 0; i < posts; i++) {
+        const pos = posts === 1 ? 0 : (i / (posts - 1) - 0.5) * Math.max(0.2, span - 0.12);
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, h, 0.09), metalMat);
+        post.position.set(alongX ? pos : 0, h / 2, alongX ? 0 : pos);
+        post.castShadow = true;
+        fg.add(post);
+      }
+      this.worldGroup.add(fg);
+      return;
+    }
+
+    if (obs.kind === "island") {
+      const ig = new THREE.Group();
+      ig.position.set(obs.cx, 0, obs.cz);
+      ig.rotation.y = obs.h;
+      const h = Math.max(0.14, obs.height);
+      const curb = new THREE.Mesh(
+        new THREE.BoxGeometry(obs.halfX * 2, h, obs.halfZ * 2),
+        new THREE.MeshStandardMaterial({ color: 0x9aa6b2, roughness: 0.85 })
+      );
+      curb.position.y = h / 2;
+      curb.receiveShadow = true;
+      ig.add(curb);
+      if (obs.halfX > 0.25 && obs.halfZ > 0.25) {
+        const lawn = new THREE.Mesh(
+          new THREE.BoxGeometry(obs.halfX * 2 - 0.28, 0.04, obs.halfZ * 2 - 0.28),
+          new THREE.MeshStandardMaterial({ color: obs.color ?? 0x3b6e4c, roughness: 0.92 })
+        );
+        lawn.position.y = h + 0.015;
+        lawn.receiveShadow = true;
+        ig.add(lawn);
+      }
+      this.worldGroup.add(ig);
+      return;
+    }
+
+    if (obs.kind === "pole") {
+      const r = Math.max(0.08, Math.min(obs.halfX, obs.halfZ));
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.85, r, obs.height, 10),
+        new THREE.MeshStandardMaterial({ color: obs.color ?? 0x94a3b8, metalness: 0.35, roughness: 0.55 })
+      );
+      mesh.position.set(obs.cx, obs.height / 2, obs.cz);
+      mesh.castShadow = true;
+      this.worldGroup.add(mesh);
+      return;
+    }
+
+    // Бордюр
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(obs.halfX * 2, obs.height, obs.halfZ * 2),
       new THREE.MeshStandardMaterial({ color: obs.color ?? 0x9aa6b2, roughness: 0.85 })
@@ -1057,6 +1168,39 @@ export class SceneController {
     mesh.rotation.y = obs.h;
     mesh.receiveShadow = true;
     this.worldGroup.add(mesh);
+  }
+
+  /** Строит стойку и ориентированный щит дорожного знака (лицевая сторона обращена к потоку sign.h). */
+  private addRoadSignMesh(sign: RoadSignDef): void {
+    const g = new THREE.Group();
+    g.position.set(sign.x, 0, sign.z);
+    g.rotation.y = sign.h;
+
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.045, 0.05, 2.55, 8),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.35, roughness: 0.55 })
+    );
+    pole.position.y = 1.275;
+    pole.castShadow = true;
+
+    const tex = makeRoadSignTexture(sign);
+    const front = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.72, 0.72),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true })
+    );
+    // Смотрит к локальному -Z — навстречу водителю, движущемуся вдоль +Z в системе знака
+    front.position.set(0, 2.52, -0.055);
+    front.rotation.y = Math.PI;
+
+    // Оборотная металлическая сторона щита (чтобы сзади знак не зеркалился)
+    const back = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.66, 0.66),
+      new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 })
+    );
+    back.position.set(0, 2.52, -0.045);
+
+    g.add(pole, front, back);
+    this.worldGroup.add(g);
   }
 
   private addTrafficSignal(sig: TrafficSignalDef, whiteMat: THREE.MeshBasicMaterial): void {

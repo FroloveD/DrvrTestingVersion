@@ -10,25 +10,27 @@
 
 | Поле | Значение |
 |---|---|
-| Ветка | `Arena_v1` (влито из `arena/1f511675-drvrtestingversion` через PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1)) |
-| Базовая ветка / коммит | `Arena_v1` (`b272bfa7aa7a2b4b4c46ddb4b5885abbb595b6f8`) |
-| Состояние | **PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) ВЛИТ В `Arena_v1`** — все инженерные и документационные задачи плана выполнены |
+| Ветка | `arena/a788cfc9-drvrtestingversion` |
+| Базовая ветка / коммит | `Arena_v1` (`650205190f73b19357c02797c1f187c8f49f3e9f`) |
+| Состояние | **В РАБОТЕ (ГОТОВО К ПРОВЕРКЕ / PR В `Arena_v1`)** — реализованы мультиформатный импорт OSM и интерактивный 2D-редактор карт |
 | Обновлено | `2026-11-18` (UTC) |
-| Последний гейт | `tsc --noEmit` — OK · `selfTest` — `26/26` · чистое ядро (7 папок, 19 файлов) — OK · 40/40 `@module` + доки/пути/якоря — OK · `dist/index.html` (офлайн) — OK · CI `#44277185736` (`verify` + Playwright `A–N`) — OK |
+| Последний гейт | `tsc --noEmit` — OK · `selfTest` — `29/29` · чистое ядро (7 папок, 22 файла) — OK · 45/45 `@module` + доки/пути/якоря — OK · `dist/index.html` (1 245,3 КБ, офлайн) — OK |
 
 ---
 
 ## 2. На чём остановились
 
-**Текущая точка:** все пункты инженерного плана закрыты:
-- ветка объединяет `Arena_v1` (`v0.3`), модуль и UI `HANDOFF` из `Arena_v2`, чистые блокировки АКПП/стартера (`src/sim/controls.ts`), фикс аварийки на старте (`src/sim/step.ts`), русский справочник `vehicle.ts` и сводный Markdown-отчёт (`analyticsToMarkdown` в `src/analytics/summary.ts` + кнопка «Отчёт .md» в `AnalyticsView.tsx`, тест `T26`);
-- 100 % файлов `src/**/*.{ts,tsx}` имеют паспорта `@module` (контролируется автоматически в `scripts/run-tests.mjs`), а крупные файлы — оглавления и якоря `[SEC:...]`;
-- в GitHub Actions (`.github/workflows/ci.yml`) на каждый push и PR автоматически прогоняются и 4-контурный гейт ядра/доков/офлайна, и полный браузерный смоук Playwright `A–N` (по `http://` и `file://`);
-- Pull Request [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) (`arena/1f511675-drvrtestingversion → Arena_v1`) прошёл оба job CI (`verify` и Playwright `A–N` по `http://` и `file://` — прогоны `#44277185736`, `#44278996212`, `#44279004416`) и влит в `Arena_v1`.
+**Текущая точка:** по задаче импорта и редактора карт реализован полный офлайн-контур (чистое ядро + 2D-редактор + 3D-рендер + тесты + документация):
+- **Офлайн-импорт карт (`src/maps/osmXml.ts`, `src/maps/osmLoader.ts`, `src/scenarios/custom.ts`):** поддержка `.osm` XML (экспорт с openstreetmap.org / JOSM без `DOMParser`), Overpass `.json`, `.geojson`, JSON сценариев, резервных копий `cdt.backup.v1` и клонирования встроенных миров (включая «Город OSM») с сохранением атрибуции ODbL 1.0 (`mapMeta`); распознавание дорог, зданий, заборов/бордюров, деревьев, опор, островков, светофоров, зебр и дорожных знаков.
+- **Каталог классов (`src/scenarios/signs.ts`, `src/sim/types.ts`):** 12 классов дорожных знаков (`3.24` скорость, `2.5` STOP, `2.4` Уступите дорогу, `2.1` Главная дорога, `5.19` Пешеходный переход, `3.27` Остановка запрещена, `3.1` Въезд запрещён, `6.4` Парковка P, `4.1.1/4.1.2/4.1.3` направления, `5.21` Жилая зона 20 км/ч), 8 классов препятствий (`curb`, `cone`, `pole`, `fence`, `tree`, `island`, `building`, `parked_car`), светофоры со стоп-линиями, пешеходные переходы, ломаные дороги с узлами, парковочные боксы и КТ маршрута.
+- **Симуляция и 3D (`src/sim/step.ts`, `src/render/roadSignTextures.ts`, `src/render/sceneController.ts`, `src/components/DebriefView.tsx`):** скоростные знаки задают активные `SpeedZone`, КТ с `requireStop` требуют полной остановки, `rules.ts` не изменялся (`unvalidated` сохранён); процедурные 3D-знаки (ориентированные к потоку, с оборотной стороной), 3D-ограждения, деревья, островки и отображение на 2D-карте разбора.
+- **Интерактивный 2D-редактор (`src/components/MapCanvasEditor.tsx`, `src/components/CustomScenarioView.tsx`, `src/scenarios/editorOps.ts`):** палитра классов, добавление кликом, перетаскивание мышью/тачем (включая узлы дорог, стоп-линии и центры скоростных зон), ручка поворота, зум колесом/кнопками, панорама, привязка к сетке (`0,5 / 1 / 2 м`), фильтры слоёв, дублирование (`Ctrl+D`), удаление (`Del`), `Undo/Redo` (`Ctrl+Z` / `Ctrl+Y`), автомаршрут по дорогам, подгонка границ и инспектор свойств.
+- **Тесты, CI и GitHub Pages:** добавлены автотесты `T27–T29` (`29/29`), браузерный смоук `O` (`tests/browser-smoke.mjs`), `ADR-013`, синхронизированы `HANDOFF.md`, `README.md`, `docs/ARCHITECTURE.md`; в `.github/workflows/deploy.yml` настроена многоканальная публикация в `gh-pages` (`main` → корень с `keep_files: true`, `Arena_v1` → `/v1/`, `arena/**` → `/arena/`, `GemCommits` → `/preview/`).
 
-### История шагов в этой ветке
+### История шагов
 
-- **2026-11-18 (`a49946f`) — Markdown-отчёт (`T26`), 100 % `@module`, Playwright-смоук `A–N` в CI и открытие PR #1 в `Arena_v1`**
+- **2026-11-18 (`arena/a788cfc9-drvrtestingversion`) — Мультиформатный импорт OSM (`.osm` XML / Overpass / GeoJSON) и интерактивный 2D-редактор карт (`T27–T29`, смоук `O`, `ADR-013`)**
+- **2026-11-18 (`6502051`, PR [#1](https://github.com/FroloveD/DrvrTestingVersion/pull/1) → `Arena_v1`) — Консолидация веток, пакет документации, Markdown-отчёт (`T26`), 100 % `@module` и CI + Playwright `A–N`**
   - В `src/analytics/summary.ts` добавлена чистая функция `analyticsToMarkdown()` (KPI, сверка с ДИ Уилсона, таблица расхождений, ученики, упражнения, нарушения, фокус отработки, статус правил и дисклеймер), подключена кнопкой «Отчёт .md» в `AnalyticsView.tsx`, покрыта автотестом `T26` (`26/26`).
   - Завершены паспорта `@module` во всех оставшихся файлах `src/` (100 % покрытие) и добавлена их обязательная проверка в `scripts/run-tests.mjs`.
   - В `.github/workflows/ci.yml` добавлен job `browser-smoke` (Playwright + headless Chromium, сценарии `A–N` по `http://` и `file://` с сохранением скриншотов при падении).

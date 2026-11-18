@@ -59,6 +59,17 @@ export function createReadyInput(gear: InputState["gear"] = "R"): InputState {
   };
 }
 
+const OBSTACLE_HIT_LABELS: Record<string, string> = {
+  parked_car: "припаркованный автомобиль",
+  curb: "бордюр",
+  cone: "разметочный конус",
+  pole: "опора/столб",
+  building: "здание",
+  fence: "ограждение",
+  tree: "дерево",
+  island: "островок безопасности",
+};
+
 /** Маршрутный сценарий (есть контрольные точки) стартует в D, парковочный — в R. */
 export function defaultGearForWorld(world: WorldData): "D" | "R" {
   return world.checkpoints.length > 0 || world.scenarioId === "city_osm" ? "D" : "R";
@@ -303,7 +314,7 @@ export function stepSimulation(
     gridChecks = Math.max(gridChecks, checked);
     if (hit) {
       hitThisStep = true;
-      hitLabel = hit.label || (hit.kind === "parked_car" ? "припаркованный автомобиль" : hit.kind === "curb" ? "бордюр" : "препятствие");
+      hitLabel = hit.label || OBSTACLE_HIT_LABELS[hit.kind] || "препятствие";
       s.x = px;
       s.z = pz;
       s.h = ph;
@@ -435,17 +446,22 @@ export function stepSimulation(
     }
   }
 
-  // Контрольные точки городского маршрута
+  // Контрольные точки городского маршрута (для requireStop засчитывается после полной остановки в зоне КТ)
   const currentCp = world.checkpoints[s.currentCheckpointIndex];
+  let waitingStopAtCp = false;
   if (currentCp && !currentCp.isFinalPark) {
     const dCp = Math.hypot(s.x - currentCp.x, s.z - currentCp.z);
     if (dCp <= currentCp.radius) {
-      if (currentCp.requireSignal && s.signal !== currentCp.requireSignal) {
-        const expected = currentCp.requireSignal === "right" ? "правый (E)" : "левый (Q)";
-        emit("no_turn_signal", `Выполнение манёвра на КТ без указателя поворота — требовался ${expected}`);
+      if (currentCp.requireStop && absKmh > 0.6) {
+        waitingStopAtCp = true;
+      } else {
+        if (currentCp.requireSignal && s.signal !== currentCp.requireSignal) {
+          const expected = currentCp.requireSignal === "right" ? "правый (E)" : "левый (Q)";
+          emit("no_turn_signal", `Выполнение манёвра на КТ без указателя поворота — требовался ${expected}`);
+        }
+        s.completedCheckpointIds = [...s.completedCheckpointIds, currentCp.id];
+        s.currentCheckpointIndex += 1;
       }
-      s.completedCheckpointIds = [...s.completedCheckpointIds, currentCp.id];
-      s.currentCheckpointIndex += 1;
     }
   }
 
@@ -515,6 +531,8 @@ export function stepSimulation(
     s.statusText = `${fullBay.label}: удерживайте остановку ещё ${left} с...`;
   } else if (partialBay && readyForFinalBay) {
     s.statusText = `${partialBay.label}: заведите все 4 угла внутрь разметки и остановитесь.`;
+  } else if (waitingStopAtCp && activeCp) {
+    s.statusText = `Зона обязательной остановки (${s.currentCheckpointIndex + 1}/${world.checkpoints.length}): полностью остановите автомобиль (S).`;
   } else if (activeCp) {
     s.statusText = `Задание экзаменатора (${s.currentCheckpointIndex + 1}/${world.checkpoints.length}): ${activeCp.instruction}`;
   } else {

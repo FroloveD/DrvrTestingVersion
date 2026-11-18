@@ -1,33 +1,65 @@
 /**
  * @module components/CustomScenarioView
  * @layer ui
- * @role Конструктор «Свой сценарий»: редактирование боксов, препятствий и КТ, валидация, 2D-схема и JSON-обмен.
- * @invariants #1 (координаты на 2D-схеме), #15 (сохранение снимка мира в попытке).
- * @tests T16 (`src/sim/selfTest.ts`), смоук A (`tests/browser-smoke.mjs`)
+ * @role Редактор карт и сценариев: офлайн-импорт OSM (.osm XML / Overpass JSON / GeoJSON), палитра знаков и объектов, 2D drag-and-drop, инспектор и Undo/Redo.
+ * @invariants #1 (координаты и курс h), #8–#9 (офлайн-импорт + атрибуция ODbL 1.0), #15 (снимок мира в попытке), #16 (без неподписанных штрафов).
+ * @tests T16, T27, T28, T29; смоук A, G, O (`tests/browser-smoke.mjs`)
  *
  * Оглавление секций (`grep -n "SEC:custom-"`):
- * - `[SEC:custom-fields]`  — числовые и текстовые поля редактора (`NumField`, `TextField`).
- * - `[SEC:custom-forms]`   — формы параметров площадки, боксов, препятствий и контрольных точек.
- * - `[SEC:custom-preview]` — интерактивная 2D-схема сценария и диагностика ошибок геометрии.
+ * - `[SEC:custom-fields]`  — числовые/текстовые поля ввода и справочники редактора (`NumField`, `TextField`).
+ * - `[SEC:custom-preview]` — палитра классов, сетка/слои, Undo/Redo и интерактивный 2D-холст (`MapCanvasEditor`).
+ * - `[SEC:custom-forms]`   — инспектор выбранного объекта, реестр объектов, параметры карты и памятка импорта OSM.
  */
-import { useMemo, useRef } from "react";
-import { buildParallelScenario, buildPerpendicularScenario } from "../scenarios/catalog";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  buildCityOsmScenario,
+  buildParallelScenario,
+  buildPerpendicularScenario,
+} from "../scenarios/catalog";
 import {
   customFromWorld,
   defaultCustomScenario,
-  nextBayId,
-  nextCheckpointId,
-  nextObstacleId,
+  emptyCustomScenario,
+  importEditorFileText,
   validateCustomScenario,
   type CustomScenarioDef,
 } from "../scenarios/custom";
+import {
+  appendRoadPoint,
+  attachCheckpointToSign,
+  createEditorHistory,
+  deleteSelected,
+  duplicateSelected,
+  fitBoundsToContent,
+  getSelectionAnchor,
+  primarySelection,
+  pushEditorHistory,
+  rebuildRouteFromEditorRoads,
+  redoEditorHistory,
+  rotateSelected,
+  setSelectedHeading,
+  undoEditorHistory,
+  type EditorSelection,
+  type EditorTool,
+} from "../scenarios/editorOps";
+import {
+  formatSignBadge,
+  getObstacleSpec,
+  getRoadSignSpec,
+  isSpeedSignKind,
+  OBSTACLE_CATALOG,
+  ROAD_SIGN_CATALOG,
+} from "../scenarios/signs";
 import type {
   CalibrationConfig,
   ObstacleKind,
   ParkedModelKey,
   ParkingBayKind,
+  RoadSignKind,
 } from "../sim/types";
+import { VEHICLE_DIMS } from "../sim/vehicle";
 import { Chip, downloadJson, Icon } from "./Icons";
+import { DEFAULT_LAYERS, MapCanvasEditor, type LayerVisibility } from "./MapCanvasEditor";
 
 type Props = {
   def: CustomScenarioDef;
@@ -37,10 +69,15 @@ type Props = {
   onNotify: (msg: string) => void;
 };
 
+type ListFilter = "all" | "signs" | "signals" | "crosswalks" | "roads" | "bays" | "obstacles" | "checkpoints";
+
 const radToDeg = (rad: number) => Math.round(((rad * 180) / Math.PI) * 10) / 10;
 const degToRad = (deg: number) => (deg * Math.PI) / 180;
+const hexFromNum = (c: number | undefined, fallback: number): string =>
+  `#${((c ?? fallback) & 0xffffff).toString(16).padStart(6, "0")}`;
+const numFromHex = (hex: string): number => Number.parseInt(hex.replace("#", ""), 16) || 0x94a3b8;
 
-// === [SEC:custom-fields] Вспомогательные поля ввода редактора ===
+// === [SEC:custom-fields] Вспомогательные поля ввода и справочники редактора ===
 function NumField({
   label,
   value,
@@ -100,109 +137,294 @@ function TextField({
   );
 }
 
+const TOOL_BUTTONS: Array<{ id: EditorTool; label: string; badge: string }> = [
+  { id: "select", label: "Выбор / Перенос", badge: "↖" },
+  { id: "pan", label: "Панорама", badge: "✥" },
+  { id: "sign", label: "Дорожный знак", badge: "⊘" },
+  { id: "signal", label: "Светофор", badge: "🚦" },
+  { id: "crosswalk", label: "Переход", badge: "≡" },
+  { id: "road", label: "Дорога", badge: "═" },
+  { id: "bay", label: "Бокс парковки", badge: "P" },
+  { id: "obstacle", label: "Препятствие", badge: "■" },
+  { id: "checkpoint", label: "Точка КТ", badge: "◎" },
+  { id: "start", label: "Старт авто", badge: "▲" },
+];
+
 const BAY_KINDS: Array<{ v: ParkingBayKind; l: string }> = [
   { v: "perpendicular", l: "Перпендикулярный 90°" },
   { v: "parallel", l: "Параллельный карман" },
 ];
 
-const OBSTACLE_KINDS: Array<{ v: ObstacleKind; l: string }> = [
-  { v: "curb", l: "Бордюр" },
-  { v: "cone", l: "Конус" },
-  { v: "building", l: "Здание" },
-  { v: "pole", l: "Столб" },
-  { v: "parked_car", l: "Припаркованный авто" },
+const HIGHWAY_TYPES: Array<{ v: string; l: string }> = [
+  { v: "residential", l: "Жилая улица (residential)" },
+  { v: "secondary", l: "Городская (secondary)" },
+  { v: "primary", l: "Магистральная (primary)" },
+  { v: "tertiary", l: "Районная (tertiary)" },
+  { v: "living_street", l: "Жилая зона (living_street)" },
+  { v: "service", l: "Проезд / площадка (service)" },
 ];
 
 const PARKED_MODELS: ParkedModelKey[] = ["picanto", "rio", "ceed", "xceed", "sorento"];
+const SPEED_PRESETS = [20, 30, 40, 50, 60, 70, 90] as const;
+const SNAP_OPTIONS: Array<{ v: number; l: string }> = [
+  { v: 0, l: "Выкл" },
+  { v: 0.5, l: "0,5 м" },
+  { v: 1, l: "1 м" },
+  { v: 2, l: "2 м" },
+];
+
+const LAYER_LABELS: Array<{ k: keyof LayerVisibility; l: string }> = [
+  { k: "roads", l: "Дороги" },
+  { k: "bays", l: "Боксы" },
+  { k: "obstacles", l: "Препятствия" },
+  { k: "signs", l: "Знаки" },
+  { k: "zones", l: "Зоны км/ч" },
+  { k: "signals", l: "Светофоры" },
+  { k: "crosswalks", l: "Переходы" },
+  { k: "checkpoints", l: "КТ" },
+];
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
 
 export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulator, onNotify }: Props) {
   const importRef = useRef<HTMLInputElement | null>(null);
+  const [tool, setTool] = useState<EditorTool>("select");
+  const [selection, setSelection] = useState<EditorSelection | null>({ kind: "start" });
+  const [snapStep, setSnapStep] = useState<number>(0.5);
+  const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
+  const [fitSignal, setFitSignal] = useState<number>(0);
+
+  // Параметры добавляемого объекта в палитре
+  const [signKind, setSignKind] = useState<RoadSignKind>("speed_limit");
+  const [signSpeedLimit, setSignSpeedLimit] = useState<number>(40);
+  const [obstacleKind, setObstacleKind] = useState<ObstacleKind>("cone");
+  const [parkedModel, setParkedModel] = useState<ParkedModelKey>("rio");
+  const [bayKind, setBayKind] = useState<ParkingBayKind>("perpendicular");
+  const [placeHeadingDeg, setPlaceHeadingDeg] = useState<number>(0);
+
+  // История отмен и фильтр реестра объектов
+  const [history, setHistory] = useState(() => createEditorHistory<CustomScenarioDef>());
+  const [listFilter, setListFilter] = useState<ListFilter>("all");
+  const [showOsmHelp, setShowOsmHelp] = useState(false);
+
   const validation = useMemo(() => validateCustomScenario(def), [def]);
   const blocked = validation.errors.length > 0;
 
-  const setDef = (patch: Partial<CustomScenarioDef>) => onChange({ ...def, ...patch });
+  const commitChange = useCallback(
+    (next: CustomScenarioDef, before: CustomScenarioDef = def) => {
+      if (next === before) return;
+      setHistory((h) => pushEditorHistory(h, before));
+      onChange(next);
+    },
+    [def, onChange]
+  );
 
-  // 2D-превью: sx = −x, sy = −z (+Z вверх, +X влево — как в разборе)
-  const vb = useMemo(() => {
-    const pad = 3;
-    const x = -def.bounds.maxX - pad;
-    const y = -def.bounds.maxZ - pad;
-    const w = def.bounds.maxX - def.bounds.minX + pad * 2;
-    const h = def.bounds.maxZ - def.bounds.minZ + pad * 2;
-    return { x, y, w: Math.max(10, w), h: Math.max(10, h) };
-  }, [def.bounds]);
+  const patchDef = useCallback(
+    (patch: Partial<CustomScenarioDef>) => {
+      commitChange({ ...def, ...patch }, def);
+    },
+    [commitChange, def]
+  );
 
-  const handlePreviewClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    const svg = e.currentTarget;
-    const rect = svg.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const sx = vb.x + ((e.clientX - rect.left) / rect.width) * vb.w;
-    const sy = vb.y + ((e.clientY - rect.top) / rect.height) * vb.h;
-    const x = Number((-sx).toFixed(1));
-    const z = Number((-sy).toFixed(1));
-    if (
-      x < def.bounds.minX ||
-      x > def.bounds.maxX ||
-      z < def.bounds.minZ ||
-      z > def.bounds.maxZ
-    ) {
-      onNotify("Клик за границами мира — старт не перемещён");
+  const handleUndo = useCallback(() => {
+    const res = undoEditorHistory(history, def);
+    if (!res) return;
+    setHistory(res.history);
+    onChange(res.state);
+    onNotify("Действие отменено (Ctrl+Z)");
+  }, [def, history, onChange, onNotify]);
+
+  const handleRedo = useCallback(() => {
+    const res = redoEditorHistory(history, def);
+    if (!res) return;
+    setHistory(res.history);
+    onChange(res.state);
+    onNotify("Действие возвращено (Ctrl+Y)");
+  }, [def, history, onChange, onNotify]);
+
+  const handleDuplicate = useCallback(() => {
+    if (!selection) return;
+    const dup = duplicateSelected(def, selection);
+    if (!dup) {
+      onNotify("Стартовая позиция единственная — перетащите её на нужное место");
       return;
     }
-    onChange({ ...def, start: { ...def.start, x, z } });
+    commitChange(dup.def, def);
+    setSelection(dup.selection);
+    onNotify("Объект продублирован");
+  }, [commitChange, def, onNotify, selection]);
+
+  const handleDelete = useCallback(() => {
+    if (!selection || selection.kind === "start") return;
+    const res = deleteSelected(def, selection);
+    commitChange(res.def, def);
+    setSelection(res.selection);
+    onNotify("Объект удалён");
+  }, [commitChange, def, onNotify, selection]);
+
+  const handleQuickRotate = useCallback(
+    (deltaDeg: number) => {
+      if (!selection) return;
+      const next = rotateSelected(def, selection, degToRad(deltaDeg));
+      commitChange(next, def);
+    },
+    [commitChange, def, selection]
+  );
+
+  // Горячие клавиши редактора (не перехватываются при вводе текста в поля)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableElement(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.code === "KeyZ" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((mod && e.code === "KeyY") || (mod && e.shiftKey && e.code === "KeyZ")) {
+        e.preventDefault();
+        handleRedo();
+      } else if (mod && e.code === "KeyD") {
+        e.preventDefault();
+        handleDuplicate();
+      } else if (e.code === "Delete" || e.code === "Backspace") {
+        if (selection && selection.kind !== "start") {
+          e.preventDefault();
+          handleDelete();
+        }
+      } else if (e.code === "Escape") {
+        setTool("select");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleDelete, handleDuplicate, handleRedo, handleUndo, selection]);
+
+  const applyImportedScenario = (next: CustomScenarioDef, message: string) => {
+    commitChange(next, def);
+    setSelection({ kind: "start" });
+    setTool("select");
+    setFitSignal((n) => n + 1);
+    onNotify(message);
   };
 
-  const startTipX = -(def.start.x + Math.sin(def.start.h) * 2.4);
-  const startTipY = -(def.start.z + Math.cos(def.start.h) * 2.4);
-
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  const readAndImportFile = async (file: File) => {
+    if (file.size > 30 * 1024 * 1024) {
+      onNotify("Файл больше 30 МБ — выберите меньший участок карты OSM");
+      return;
+    }
     try {
-      const parsed = JSON.parse(await file.text()) as Partial<CustomScenarioDef>;
-      if (!parsed || !Array.isArray(parsed.bays) || !Array.isArray(parsed.obstacles) || !parsed.start) {
-        throw new Error("Неверная схема файла сценария (нужны bays, obstacles, start)");
-      }
-      onChange({ ...defaultCustomScenario(), ...parsed, version: 1 });
-      onNotify(`Сценарий «${parsed.title || file.name}» загружен в редактор`);
+      const text = await file.text();
+      const { def: imported, summary } = importEditorFileText(text, file.name);
+      applyImportedScenario(imported, summary);
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : "Не удалось прочитать файл сценария");
+      onNotify(err instanceof Error ? err.message : "Не удалось импортировать файл карты");
     }
   };
 
-  const loadTemplateBay90 = () => {
-    onChange(customFromWorld(buildPerpendicularScenario(calibration), "Мой бокс 90°"));
-    onNotify("Шаблон: копия сценария «Бокс 90°»");
-  };
-  const loadTemplateParallel = () => {
-    onChange(customFromWorld(buildParallelScenario(calibration), "Моя параллельная парковка"));
-    onNotify("Шаблон: копия сценария «Параллельная парковка»");
+  const handleImportInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) await readAndImportFile(file);
   };
 
+  const handleAutoRoute = () => {
+    const res = rebuildRouteFromEditorRoads(def);
+    if (res.count === 0) {
+      onNotify("Для автомаршрута нужна дорога длиной не менее ~30 м");
+      return;
+    }
+    commitChange(res.def, def);
+    setSelection({ kind: "start" });
+    onNotify(`Построен маршрут (${res.count} КТ)${res.roadName ? ` по «${res.roadName}»` : ""}`);
+  };
+
+  const handleFitBounds = () => {
+    const fitted = fitBoundsToContent(def, 12);
+    commitChange(fitted, def);
+    setFitSignal((n) => n + 1);
+    onNotify("Границы мира подогнаны по объектам карты");
+  };
+
+  const roads = def.roads ?? [];
+  const signs = def.signs ?? [];
+  const signals = def.signals ?? [];
+  const crosswalks = def.crosswalks ?? [];
+
+  const primary = primarySelection(selection);
+  const selectedAnchor = getSelectionAnchor(def, selection);
+
+  const selectedSign = primary?.kind === "sign" ? signs.find((s) => s.id === primary.id) ?? null : null;
+  const selectedSignal = primary?.kind === "signal" ? signals.find((s) => s.id === primary.id) ?? null : null;
+  const selectedCrosswalk = primary?.kind === "crosswalk" ? crosswalks.find((c) => c.id === primary.id) ?? null : null;
+  const selectedRoad = primary?.kind === "road" ? roads.find((r) => r.id === primary.id) ?? null : null;
+  const selectedBay = primary?.kind === "bay" ? def.bays.find((b) => b.id === primary.id) ?? null : null;
+  const selectedObstacle = primary?.kind === "obstacle" ? def.obstacles.find((o) => o.id === primary.id) ?? null : null;
+  const selectedCp = primary?.kind === "checkpoint" ? def.checkpoints.find((c) => c.id === primary.id) ?? null : null;
+
+  const totalObjects =
+    roads.length +
+    signs.length +
+    signals.length +
+    crosswalks.length +
+    def.bays.length +
+    def.obstacles.length +
+    def.checkpoints.length;
+
+  const placeOptions = useMemo(
+    () => ({
+      signKind,
+      signSpeedLimit,
+      obstacleKind,
+      parkedModel,
+      bayKind,
+      calibration,
+      headingRad: degToRad(placeHeadingDeg),
+      snapStep,
+    }),
+    [bayKind, calibration, obstacleKind, parkedModel, placeHeadingDeg, signKind, signSpeedLimit, snapStep]
+  );
+
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-4">
+      {/* Шапка редактора карт и кнопка офлайн-импорта */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2 mb-1.5">
-            <Chip tone="amber">Сценарии как данные</Chip>
+            <Chip tone="amber">Редактор карт · Офлайн</Chip>
             <Chip tone={blocked ? "red" : "mint"}>
               {blocked ? `Ошибок: ${validation.errors.length}` : "Готов к заезду"}
             </Chip>
             {validation.warnings.length > 0 && (
-              <Chip tone="amber">Предупреждений: {validation.warnings.length}</Chip>
+              <Chip tone="amber">Подсказок: {validation.warnings.length}</Chip>
             )}
+            {def.mapMeta && <Chip tone="neutral">OSM · ODbL 1.0</Chip>}
           </div>
-          <h2 className="text-2xl font-extrabold tracking-tight">Свой сценарий</h2>
-          <p className="text-[13px] text-[#9bafbc] mt-1">
-            Конструктор упражнений для инструктора: боксы, препятствия и точки маршрута — без правки кода.
-            Сценарий сохраняется в браузере и открывается в 3D-тренажёре четвёртым пунктом.
+          <h2 className="text-2xl font-extrabold tracking-tight">Свой сценарий и редактор карт</h2>
+          <p className="text-[13px] text-[#9bafbc] mt-1 max-w-[78ch]">
+            Конструктор упражнений и городских участков: импортируйте локальные файлы OSM (`.osm` XML, Overpass JSON,
+            GeoJSON), расставляйте и перетаскивайте дорожные знаки, светофоры, переходы, дороги, боксы и препятствия.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <input ref={importRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImport} />
-          <button type="button" className="btn btn-mini" onClick={() => importRef.current?.click()}>
-            <Icon name="upload" size={13} /> Импорт JSON
+
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={importRef}
+            data-testid="editor-import-input"
+            type="file"
+            accept=".osm,.xml,.json,.geojson,application/json,application/xml,text/xml"
+            className="hidden"
+            onChange={handleImportInput}
+          />
+          <button
+            type="button"
+            className="btn btn-mini"
+            title="Загрузить локальный .osm (XML), Overpass .json, .geojson, сценарий или бэкап (до 30 МБ, без сети)"
+            onClick={() => importRef.current?.click()}
+          >
+            <Icon name="upload" size={13} /> Импорт OSM / GeoJSON / JSON
           </button>
           <button
             type="button"
@@ -214,18 +436,16 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           <button
             type="button"
             className="btn btn-mini"
-            onClick={() => {
-              onChange(defaultCustomScenario());
-              onNotify("Восстановлен стартовый шаблон");
-            }}
+            title="Как выгрузить карту города в .osm / Overpass JSON / GeoJSON"
+            onClick={() => setShowOsmHelp((v) => !v)}
           >
-            <Icon name="reset" size={13} /> Шаблон
+            Как импортировать?
           </button>
           <button
             type="button"
             className="btn btn-primary"
             disabled={blocked}
-            title={blocked ? "Исправьте ошибки валидации" : "Открыть сценарий в 3D-тренажёре"}
+            title={blocked ? "Исправьте ошибки валидации" : "Открыть карту в 3D-тренажёре (пункт 4)"}
             onClick={onOpenInSimulator}
           >
             <Icon name="car" size={15} /> Открыть в тренажёре →
@@ -233,8 +453,61 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         </div>
       </div>
 
+      {/* Сворачиваемая памятка по офлайн-импорту карт */}
+      {showOsmHelp && (
+        <div className="panel p-4 text-[12px] text-[#c5d4de] space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-extrabold text-white">Поддерживаемые форматы офлайн-импорта (до 30 МБ)</span>
+            <button type="button" className="btn btn-mini" onClick={() => setShowOsmHelp(false)}>
+              Скрыть
+            </button>
+          </div>
+          <div className="grid sm:grid-cols-3 gap-3 text-[11px] text-[#9bafbc]">
+            <div className="rounded-lg bg-[#091017] border hairline p-3">
+              <div className="font-bold text-white mb-1">1. OpenStreetMap `.osm` (XML)</div>
+              Выберите нужный квартал (300–600 м) на сайте openstreetmap.org или в JOSM → «Экспорт» → сохраните файл
+              `.osm` и загрузите кнопкой «Импорт OSM / GeoJSON / JSON».
+            </div>
+            <div className="rounded-lg bg-[#091017] border hairline p-3">
+              <div className="font-bold text-white mb-1">2. Overpass JSON и GeoJSON</div>
+              Сохраните ответ Overpass API (`elements`) или `FeatureCollection` (`.geojson`). Автоматически
+              переносятся дороги, здания, заборы, деревья, светофоры, зебры и дорожные знаки.
+            </div>
+            <div className="rounded-lg bg-[#091017] border hairline p-3">
+              <div className="font-bold text-white mb-1">3. JSON сценария и бэкап</div>
+              Любой файл `custom-scenario.json` или резервная копия `cdt.backup.v1` открывается для повторного
+              редактирования и обмена между учебными ПК без интернета.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Плашка атрибуции ODbL 1.0 для импортированной карты OpenStreetMap */}
+      {def.mapMeta && (
+        <div
+          data-testid="editor-odbl-banner"
+          className="panel px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#9bafbc]"
+        >
+          <span>
+            <strong className="text-white">{def.mapMeta.source}</strong> · bbox [{def.mapMeta.bbox.join(", ")}] ·{" "}
+            <strong className="text-[#52d6bd]">{def.mapMeta.attribution}</strong> ({def.mapMeta.license})
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {roads.length > 0 && (
+              <button type="button" className="btn btn-mini" onClick={handleAutoRoute}>
+                <Icon name="route" size={12} /> Автомаршрут
+              </button>
+            )}
+            <button type="button" className="btn btn-mini" onClick={handleFitBounds}>
+              Подогнать границы
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Ошибки и предупреждения проверки геометрии */}
       {(blocked || validation.warnings.length > 0) && (
-        <div className="panel p-4 space-y-1.5">
+        <div className="panel p-3.5 space-y-1">
           {validation.errors.map((e, i) => (
             <div key={`e${i}`} className="flex gap-2 text-[12px] text-[#ff9494]">
               <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
@@ -250,587 +523,1564 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         </div>
       )}
 
-      <div className="grid lg:grid-cols-[1fr_380px] gap-4 items-start">
-        {/* [SEC:custom-forms] Левая колонка: формы боксов, препятствий и точек маршрута */}
-        <div className="space-y-4 min-w-0">
-          <div className="panel p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <div className="text-xs font-extrabold">Общие параметры</div>
-              <div className="flex flex-wrap gap-1.5">
-                <button type="button" className="btn btn-mini" onClick={loadTemplateBay90}>
-                  Копия: Бокс 90°
+      {/* === [SEC:custom-preview] Палитра классов, действия Undo/Redo и интерактивный 2D-холст === */}
+      <div className="panel p-3.5 space-y-3">
+        {/* Инструменты палитры + Undo/Redo/Дубль/Удалить */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1.5" role="toolbar" aria-label="Инструменты редактора карт">
+            {TOOL_BUTTONS.map((tb) => {
+              const active = tool === tb.id;
+              return (
+                <button
+                  key={tb.id}
+                  type="button"
+                  data-testid={`editor-tool-${tb.id}`}
+                  onClick={() => setTool(tb.id)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                    active
+                      ? "bg-[#f5b942] text-[#17130a] shadow-[0_0_14px_rgba(245,185,66,.28)]"
+                      : "bg-[#091017] text-[#c3d2dc] border hairline hover:text-white hover:border-white/20"
+                  }`}
+                >
+                  <span className="mono text-[11px]">{tb.badge}</span>
+                  <span>{tb.label}</span>
                 </button>
-                <button type="button" className="btn btn-mini" onClick={loadTemplateParallel}>
-                  Копия: Параллельная
-                </button>
-              </div>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <TextField label="НАЗВАНИЕ" value={def.title} onChange={(v) => setDef({ title: v })} />
-              <TextField label="ПОДЗАГОЛОВОК" value={def.subtitle} onChange={(v) => setDef({ subtitle: v })} />
-            </div>
-            <label className="block mt-3">
-              <span className="mono text-[10px] text-[#7c909d] block mb-1">ЗАДАНИЕ ЭКЗАМЕНАТОРА</span>
-              <textarea
-                value={def.brief}
-                onChange={(e) => setDef({ brief: e.target.value })}
-                rows={2}
-                className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white resize-y"
-              />
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-              <NumField label="ЛИМИТ, КМ/Ч" value={def.defaultSpeedLimitKmh} min={5} max={90} step={5} onChange={(v) => setDef({ defaultSpeedLimitKmh: v })} />
-              <NumField label="ПЛОЩАДКА ±X, М" value={def.lotHalfX} min={5} max={120} onChange={(v) => setDef({ lotHalfX: v })} />
-              <NumField label="ПЛОЩАДКА ±Z, М" value={def.lotHalfZ} min={5} max={120} onChange={(v) => setDef({ lotHalfZ: v })} />
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-              <NumField label="ГРАНИЦА MIN X" value={def.bounds.minX} step={1} onChange={(v) => setDef({ bounds: { ...def.bounds, minX: v } })} />
-              <NumField label="ГРАНИЦА MAX X" value={def.bounds.maxX} step={1} onChange={(v) => setDef({ bounds: { ...def.bounds, maxX: v } })} />
-              <NumField label="ГРАНИЦА MIN Z" value={def.bounds.minZ} step={1} onChange={(v) => setDef({ bounds: { ...def.bounds, minZ: v } })} />
-              <NumField label="ГРАНИЦА MAX Z" value={def.bounds.maxZ} step={1} onChange={(v) => setDef({ bounds: { ...def.bounds, maxZ: v } })} />
-            </div>
+              );
+            })}
           </div>
 
-          <div className="panel p-5">
-            <div className="text-xs font-extrabold mb-1">Стартовая позиция</div>
-            <div className="text-[11px] text-[#7c909d] mb-3">
-              Клик по 2D-схеме справа тоже перемещает старт. Курс: ↑ 0° (на север), → −90°, ↓ 180°, ← +90°.
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <NumField label="X, М" value={def.start.x} onChange={(v) => setDef({ start: { ...def.start, x: v } })} />
-              <NumField label="Z, М" value={def.start.z} onChange={(v) => setDef({ start: { ...def.start, z: v } })} />
-              <NumField
-                label="КУРС, °"
-                value={radToDeg(def.start.h)}
-                step={5}
-                min={-180}
-                max={180}
-                onChange={(v) => setDef({ start: { ...def.start, h: degToRad(v) } })}
-              />
-            </div>
-            <div className="flex flex-wrap gap-1.5 mt-3">
-              {([
-                ["↑ 0°", 0],
-                ["→ −90°", -90],
-                ["↓ 180°", 180],
-                ["← +90°", 90],
-              ] as const).map(([label, deg]) => (
-                <button
-                  key={label}
-                  type="button"
-                  className="btn btn-mini"
-                  onClick={() => setDef({ start: { ...def.start, h: degToRad(deg) } })}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              className="btn btn-mini"
+              disabled={history.past.length === 0}
+              title="Отменить последнее изменение (Ctrl+Z)"
+              onClick={handleUndo}
+            >
+              ↶ Отмена ({history.past.length})
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              disabled={history.future.length === 0}
+              title="Повторить отменённое изменение (Ctrl+Y)"
+              onClick={handleRedo}
+            >
+              ↷ Повтор
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              disabled={!selection || selection.kind === "start"}
+              title="Дублировать выбранный объект (Ctrl+D)"
+              onClick={handleDuplicate}
+            >
+              Дубль
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini text-[#ff9494]"
+              disabled={!selection || selection.kind === "start"}
+              title="Удалить выбранный объект (Delete)"
+              onClick={handleDelete}
+            >
+              Удалить
+            </button>
           </div>
+        </div>
 
-          <div className="panel p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <div className="text-xs font-extrabold">
-                Парковочные места ({def.bays.filter((b) => !b.occupied).length} свободных из {def.bays.length})
-              </div>
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  className="btn btn-mini"
-                  onClick={() => {
-                    const id = nextBayId(def);
-                    onChange({
-                      ...def,
-                      bays: [
-                        ...def.bays,
-                        {
-                          id,
-                          label: `Бокс №${id} (свой)`,
-                          kind: "perpendicular",
-                          cx: 0,
-                          cz: 0,
-                          width: 2.5,
-                          length: 5.3,
-                          h: 0,
-                          openSide: "front",
-                          occupied: false,
-                          requireReverseEntry: true,
-                        },
-                      ],
-                    });
-                  }}
-                >
-                  + Бокс 90°
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-mini"
-                  onClick={() => {
-                    const id = nextBayId(def);
-                    onChange({
-                      ...def,
-                      bays: [
-                        ...def.bays,
-                        {
-                          id,
-                          label: `Карман №${id} (свой)`,
-                          kind: "parallel",
-                          cx: 0,
-                          cz: 6,
-                          width: 2.2,
-                          length: 6.0,
-                          h: 0,
-                          openSide: "left",
-                          occupied: false,
-                          requireReverseEntry: true,
-                        },
-                      ],
-                    });
-                  }}
-                >
-                  + Карман
-                </button>
-              </div>
-            </div>
-            {def.bays.length === 0 && (
-              <div className="text-[12px] text-[#7c909d]">Мест пока нет — добавьте бокс или карман.</div>
-            )}
-            <div className="space-y-2.5">
-              {def.bays.map((bay, i) => (
-                <div key={bay.id} className="panel-soft p-3">
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <span className="mono text-[11px] text-[#f5b942] font-bold">№{bay.id}</span>
-                    <select
-                      value={bay.kind}
-                      onChange={(e) => {
-                        const bays = def.bays.map((b, k) =>
-                          k === i ? { ...b, kind: e.target.value as ParkingBayKind } : b
-                        );
-                        onChange({ ...def, bays });
-                      }}
-                      className="rounded bg-[#091017] border hairline px-1.5 py-1 text-[11px] text-white"
-                    >
-                      {BAY_KINDS.map((k) => (
-                        <option key={k.v} value={k.v}>
-                          {k.l}
-                        </option>
-                      ))}
-                    </select>
-                    <label className="inline-flex items-center gap-1.5 text-[11px] text-[#9bafbc] ml-auto cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={bay.occupied}
-                        onChange={(e) => {
-                          const bays = def.bays.map((b, k) =>
-                            k === i ? { ...b, occupied: e.target.checked } : b
-                          );
-                          onChange({ ...def, bays });
-                        }}
-                      />
-                      Занят
-                    </label>
-                    <button
-                      type="button"
-                      className="mono text-[11px] text-[#ff9494] hover:underline"
-                      onClick={() => onChange({ ...def, bays: def.bays.filter((_, k) => k !== i) })}
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <NumField label="ЦЕНТР X" value={bay.cx} onChange={(v) => {
-                      const bays = def.bays.map((b, k) => (k === i ? { ...b, cx: v } : b));
-                      onChange({ ...def, bays });
-                    }} />
-                    <NumField label="ЦЕНТР Z" value={bay.cz} onChange={(v) => {
-                      const bays = def.bays.map((b, k) => (k === i ? { ...b, cz: v } : b));
-                      onChange({ ...def, bays });
-                    }} />
-                    <NumField label="ПОВОРОТ, °" value={radToDeg(bay.h)} step={5} min={-180} max={180} onChange={(v) => {
-                      const bays = def.bays.map((b, k) => (k === i ? { ...b, h: degToRad(v) } : b));
-                      onChange({ ...def, bays });
-                    }} />
-                    <NumField label="ШИРИНА, М" value={bay.width} step={0.1} min={1.9} max={8} onChange={(v) => {
-                      const bays = def.bays.map((b, k) => (k === i ? { ...b, width: v } : b));
-                      onChange({ ...def, bays });
-                    }} />
-                    <NumField label="ДЛИНА, М" value={bay.length} step={0.1} min={4.4} max={12} onChange={(v) => {
-                      const bays = def.bays.map((b, k) => (k === i ? { ...b, length: v } : b));
-                      onChange({ ...def, bays });
-                    }} />
-                    <label className="block min-w-0">
-                      <span className="mono text-[10px] text-[#7c909d] block mb-1">МОДЕЛЬ АВТО</span>
-                      <select
-                        value={bay.parkedModel ?? "rio"}
-                        disabled={!bay.occupied}
-                        onChange={(e) => {
-                          const bays = def.bays.map((b, k) =>
-                            k === i ? { ...b, parkedModel: e.target.value as ParkedModelKey } : b
-                          );
-                          onChange({ ...def, bays });
-                        }}
-                        className="w-full rounded bg-[#091017] border hairline px-1.5 py-1.5 text-[11px] text-white disabled:opacity-40"
-                      >
-                        {PARKED_MODELS.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="panel p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <div className="text-xs font-extrabold">Препятствия ({def.obstacles.length})</div>
-              <div className="flex flex-wrap gap-1.5">
+        {/* Подпанель выбора класса знака */}
+        {tool === "sign" && (
+          <div className="rounded-xl bg-[#091017] border hairline p-3 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="mono text-[10px] text-[#8fa2ae]">
+                ВЫБЕРИТЕ ДОРОЖНЫЙ ЗНАК И КЛИКНИТЕ ПО КАРТЕ (КУРС УСТАНОВКИ: {placeHeadingDeg}°)
+              </span>
+              <div className="flex items-center gap-1">
                 {([
-                  ["+ Бордюр", "curb"],
-                  ["+ Конус", "cone"],
-                  ["+ Здание", "building"],
-                  ["+ Машина", "parked_car"],
-                ] as const).map(([label, kind]) => (
+                  ["↑ 0°", 0],
+                  ["→ −90°", -90],
+                  ["↓ 180°", 180],
+                  ["← +90°", 90],
+                ] as const).map(([lbl, deg]) => (
                   <button
-                    key={kind}
+                    key={lbl}
                     type="button"
-                    className="btn btn-mini"
-                    onClick={() => {
-                      const preset =
-                        kind === "curb"
-                          ? { halfX: 3, halfZ: 0.18, height: 0.16 }
-                          : kind === "cone"
-                            ? { halfX: 0.14, halfZ: 0.14, height: 0.55 }
-                            : kind === "building"
-                              ? { halfX: 5, halfZ: 5, height: 10 }
-                              : { halfX: 0.9, halfZ: 2.2, height: 1.47 };
-                      onChange({
-                        ...def,
-                        obstacles: [
-                          ...def.obstacles,
-                          {
-                            id: nextObstacleId(def, kind),
-                            kind,
-                            cx: 4,
-                            cz: 4,
-                            ...preset,
-                            h: 0,
-                            color: kind === "cone" ? 0xf97316 : kind === "building" ? 0x52616f : 0x9aa6b2,
-                            model: kind === "parked_car" ? "ceed" : undefined,
-                            label: kind === "cone" ? "разметочный конус" : undefined,
-                          },
-                        ],
-                      });
-                    }}
+                    className={`btn btn-mini ${placeHeadingDeg === deg ? "border-[#f5b942] text-[#f5b942]" : ""}`}
+                    onClick={() => setPlaceHeadingDeg(deg)}
                   >
-                    {label}
+                    {lbl}
                   </button>
                 ))}
               </div>
             </div>
-            {def.obstacles.length === 0 && (
-              <div className="text-[12px] text-[#7c909d]">Препятствий пока нет.</div>
-            )}
-            <div className="space-y-2.5">
-              {def.obstacles.map((o, i) => (
-                <div key={o.id} className="panel-soft p-3">
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <select
-                      value={o.kind}
-                      onChange={(e) => {
-                        const obstacles = def.obstacles.map((x, k) =>
-                          k === i ? { ...x, kind: e.target.value as ObstacleKind } : x
-                        );
-                        onChange({ ...def, obstacles });
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
+              {ROAD_SIGN_CATALOG.map((sp) => {
+                const active = signKind === sp.kind;
+                return (
+                  <button
+                    key={sp.kind}
+                    type="button"
+                    data-testid={`palette-sign-${sp.kind}`}
+                    onClick={() => setSignKind(sp.kind)}
+                    className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] transition cursor-pointer border ${
+                      active
+                        ? "bg-[#f5b942]/15 border-[#f5b942] text-white"
+                        : "bg-[#0d1620] border-white/10 text-[#b7c7d2] hover:border-white/25"
+                    }`}
+                  >
+                    <span
+                      className="mono inline-grid place-items-center h-6 min-w-6 px-1 rounded text-[10px] font-extrabold shrink-0"
+                      style={{
+                        backgroundColor: sp.bgColor,
+                        color: sp.textColor,
+                        border: `2px solid ${sp.borderColor}`,
                       }}
-                      className="rounded bg-[#091017] border hairline px-1.5 py-1 text-[11px] text-white"
                     >
-                      {OBSTACLE_KINDS.map((k) => (
-                        <option key={k.v} value={k.v}>
-                          {k.l}
+                      {sp.kind === "speed_limit" ? signSpeedLimit : sp.shortLabel}
+                    </span>
+                    <span className="truncate leading-tight">
+                      <span className="block mono text-[9px] text-[#7c909d]">{sp.code}</span>
+                      <span className="block font-semibold truncate">{sp.title}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {signKind === "speed_limit" && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="mono text-[10px] text-[#7c909d]">СКОРОСТЬ НА ЗНАКЕ 3.24:</span>
+                {SPEED_PRESETS.map((kmh) => (
+                  <button
+                    key={kmh}
+                    type="button"
+                    className={`btn btn-mini ${signSpeedLimit === kmh ? "border-[#f5b942] text-[#f5b942]" : ""}`}
+                    onClick={() => setSignSpeedLimit(kmh)}
+                  >
+                    {kmh} км/ч
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Подпанель выбора класса препятствия / объекта окружения */}
+        {tool === "obstacle" && (
+          <div className="rounded-xl bg-[#091017] border hairline p-3 space-y-2">
+            <div className="mono text-[10px] text-[#8fa2ae]">КЛАСС ОБЪЕКТА / ПРЕПЯТСТВИЯ (КЛИК ПО КАРТЕ)</div>
+            <div className="flex flex-wrap gap-1.5">
+              {OBSTACLE_CATALOG.map((ob) => (
+                <button
+                  key={ob.kind}
+                  type="button"
+                  data-testid={`palette-obstacle-${ob.kind}`}
+                  onClick={() => setObstacleKind(ob.kind)}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border cursor-pointer ${
+                    obstacleKind === ob.kind
+                      ? "bg-[#f5b942]/15 border-[#f5b942] text-white"
+                      : "bg-[#0d1620] border-white/10 text-[#b7c7d2] hover:border-white/25"
+                  }`}
+                >
+                  <span
+                    className="h-3 w-3 rounded-sm shrink-0"
+                    style={{ backgroundColor: ob.mapFill, border: `1px solid ${ob.mapStroke}` }}
+                  />
+                  {ob.title}
+                </button>
+              ))}
+            </div>
+            {obstacleKind === "parked_car" && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="mono text-[10px] text-[#7c909d]">МОДЕЛЬ АВТО:</span>
+                {PARKED_MODELS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`btn btn-mini ${parkedModel === m ? "border-[#f5b942] text-[#f5b942]" : ""}`}
+                    onClick={() => setParkedModel(m)}
+                  >
+                    {VEHICLE_DIMS[m].name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Подпанель выбора типа парковочного бокса */}
+        {tool === "bay" && (
+          <div className="rounded-xl bg-[#091017] border hairline p-3 flex flex-wrap items-center gap-2">
+            <span className="mono text-[10px] text-[#8fa2ae]">ТИП ПАРКОВОЧНОГО МЕСТА:</span>
+            {BAY_KINDS.map((bk) => (
+              <button
+                key={bk.v}
+                type="button"
+                className={`btn btn-mini ${bayKind === bk.v ? "border-[#f5b942] text-[#f5b942]" : ""}`}
+                onClick={() => setBayKind(bk.v)}
+              >
+                {bk.l}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Привязка к сетке, видимость слоёв и готовые шаблоны */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t hairline text-[11px]">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mono text-[10px] text-[#7c909d]">СЕТКА:</span>
+            {SNAP_OPTIONS.map((so) => (
+              <button
+                key={so.v}
+                type="button"
+                onClick={() => setSnapStep(so.v)}
+                className={`px-2 py-0.5 rounded mono text-[10px] cursor-pointer border ${
+                  snapStep === so.v
+                    ? "bg-[#52d6bd]/15 border-[#52d6bd]/50 text-[#52d6bd]"
+                    : "bg-[#091017] border-white/10 text-[#8fa2ae]"
+                }`}
+              >
+                {so.l}
+              </button>
+            ))}
+            <span className="mono text-[10px] text-[#7c909d] ml-2">СЛОИ:</span>
+            {LAYER_LABELS.map((ly) => {
+              const on = layers[ly.k];
+              return (
+                <button
+                  key={ly.k}
+                  type="button"
+                  onClick={() => setLayers((prev) => ({ ...prev, [ly.k]: !prev[ly.k] }))}
+                  className={`px-2 py-0.5 rounded text-[10px] cursor-pointer border ${
+                    on
+                      ? "bg-white/[0.06] border-white/20 text-[#dbe7ee]"
+                      : "bg-transparent border-white/5 text-[#5a6d7a] line-through"
+                  }`}
+                >
+                  {ly.l}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mono text-[10px] text-[#7c909d]">ШАБЛОНЫ:</span>
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() => applyImportedScenario(defaultCustomScenario(), "Восстановлен стартовый шаблон площадки")}
+            >
+              Площадка
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() =>
+                applyImportedScenario(
+                  customFromWorld(buildPerpendicularScenario(calibration), "Мой бокс 90°"),
+                  "Шаблон: копия «Бокс 90°»"
+                )
+              }
+            >
+              Бокс 90°
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() =>
+                applyImportedScenario(
+                  customFromWorld(buildParallelScenario(calibration), "Моя параллельная"),
+                  "Шаблон: копия «Параллельная»"
+                )
+              }
+            >
+              Параллельная
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() =>
+                applyImportedScenario(
+                  customFromWorld(buildCityOsmScenario(calibration), "Мой городской маршрут"),
+                  "Шаблон: копия «Город OSM» со светофорами, знаком 40 и переходом"
+                )
+              }
+            >
+              Город OSM
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() => applyImportedScenario(emptyCustomScenario(), "Создана чистая учебная карта")}
+            >
+              Пустая
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Основная рабочая область: слева 2D-холст, справа инспектор выбранного объекта */}
+      <div className="grid xl:grid-cols-[1fr_410px] gap-4 items-start">
+        <MapCanvasEditor
+          def={def}
+          tool={tool}
+          selection={selection}
+          snapStep={snapStep}
+          layers={layers}
+          placeOptions={placeOptions}
+          fitSignal={fitSignal}
+          onSelect={setSelection}
+          onLiveChange={onChange}
+          onCommitChange={commitChange}
+        />
+
+        {/* === [SEC:custom-forms] Инспектор выбранного объекта, реестр и параметры карты === */}
+        <div className="space-y-4 min-w-0">
+          {/* Инспектор свойств выбранного объекта */}
+          <div className="panel p-4 space-y-3" data-testid="editor-inspector">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="mono text-[10px] text-[#7c909d]">ИНСПЕКТОР ОБЪЕКТА</div>
+                <div className="text-sm font-extrabold text-white">
+                  {selectedAnchor ? selectedAnchor.label : "Объект не выбран"}
+                </div>
+              </div>
+              {selectedAnchor && selectedAnchor.h !== null && (
+                <div className="flex items-center gap-1" title="Быстрый поворот объекта">
+                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(90)}>
+                    ↺ 90°
+                  </button>
+                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(15)}>
+                    ↺ 15°
+                  </button>
+                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(-15)}>
+                    ↻ 15°
+                  </button>
+                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(-90)}>
+                    ↻ 90°
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {!primary && (
+              <p className="text-[12px] text-[#8fa2ae] leading-relaxed">
+                Кликните по любому объекту на 2D-карте (или в реестре ниже), чтобы перетащить его мышью, повернуть или
+                изменить точные размеры и параметры. Для добавления выберите класс в палитре сверху.
+              </p>
+            )}
+
+            {/* Инспектор: Старт автомобиля */}
+            {primary?.kind === "start" && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X, М"
+                    value={def.start.x}
+                    onChange={(v) => patchDef({ start: { ...def.start, x: v } })}
+                  />
+                  <NumField
+                    label="Z, М"
+                    value={def.start.z}
+                    onChange={(v) => patchDef({ start: { ...def.start, z: v } })}
+                  />
+                  <NumField
+                    label="КУРС, °"
+                    value={radToDeg(def.start.h)}
+                    step={5}
+                    min={-180}
+                    max={180}
+                    onChange={(v) => patchDef({ start: { ...def.start, h: degToRad(v) } })}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    ["↑ 0° (север)", 0],
+                    ["→ −90° (восток)", -90],
+                    ["↓ 180° (юг)", 180],
+                    ["← +90° (запад)", 90],
+                  ] as const).map(([lbl, deg]) => (
+                    <button
+                      key={lbl}
+                      type="button"
+                      className="btn btn-mini"
+                      onClick={() => patchDef({ start: { ...def.start, h: degToRad(deg) } })}
+                    >
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Инспектор: Дорожный знак */}
+            {selectedSign && (
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="mono text-[10px] text-[#7c909d] block mb-1">КЛАСС ДОРОЖНОГО ЗНАКА</span>
+                  <select
+                    value={selectedSign.kind}
+                    onChange={(e) => {
+                      const nextKind = e.target.value as RoadSignKind;
+                      const spec = getRoadSignSpec(nextKind);
+                      patchDef({
+                        signs: signs.map((s) =>
+                          s.id !== selectedSign.id
+                            ? s
+                            : {
+                                ...s,
+                                kind: nextKind,
+                                limitKmh: isSpeedSignKind(nextKind)
+                                  ? s.limitKmh ?? spec.defaultLimitKmh ?? 40
+                                  : undefined,
+                                zoneRadius: isSpeedSignKind(nextKind)
+                                  ? s.zoneRadius ?? spec.defaultZoneRadius ?? 24
+                                  : undefined,
+                                zoneX: isSpeedSignKind(nextKind) ? s.zoneX ?? s.x : undefined,
+                                zoneZ: isSpeedSignKind(nextKind) ? s.zoneZ ?? s.z : undefined,
+                                label:
+                                  nextKind === "speed_limit"
+                                    ? `Знак ${spec.code} «${s.limitKmh ?? spec.defaultLimitKmh ?? 40} км/ч»`
+                                    : `Знак ${spec.code} «${spec.title}»`,
+                              }
+                        ),
+                      });
+                    }}
+                    className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white"
+                  >
+                    {ROAD_SIGN_CATALOG.map((sp) => (
+                      <option key={sp.kind} value={sp.kind}>
+                        {sp.code} · {sp.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <TextField
+                  label="ПОДПИСЬ"
+                  value={selectedSign.label ?? ""}
+                  onChange={(v) =>
+                    patchDef({ signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, label: v } : s)) })
+                  }
+                />
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X СТОЙКИ, М"
+                    value={selectedSign.x}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({ signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, x: v } : s)) })
+                    }
+                  />
+                  <NumField
+                    label="Z СТОЙКИ, М"
+                    value={selectedSign.z}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({ signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, z: v } : s)) })
+                    }
+                  />
+                  <NumField
+                    label="ПОТОК, °"
+                    value={radToDeg(selectedSign.h)}
+                    step={5}
+                    min={-180}
+                    max={180}
+                    onChange={(v) => commitChange(setSelectedHeading(def, selectedSignSel(selectedSign.id), degToRad(v)), def)}
+                  />
+                </div>
+
+                {isSpeedSignKind(selectedSign.kind) && (
+                  <div className="rounded-lg bg-[#091017] border hairline p-2.5 space-y-2">
+                    <div className="mono text-[10px] text-[#f5b942]">АКТИВНАЯ ЗОНА ОГРАНИЧЕНИЯ СКОРОСТИ</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumField
+                        label="ЛИМИТ, КМ/Ч"
+                        value={selectedSign.limitKmh ?? 40}
+                        step={5}
+                        min={5}
+                        max={130}
+                        onChange={(v) =>
+                          patchDef({
+                            signs: signs.map((s) =>
+                              s.id === selectedSign.id
+                                ? {
+                                    ...s,
+                                    limitKmh: v,
+                                    label:
+                                      s.kind === "speed_limit"
+                                        ? `Знак 3.24 «${v} км/ч»`
+                                        : `Знак 5.21 «Жилая зона» (${v} км/ч)`,
+                                  }
+                                : s
+                            ),
+                          })
+                        }
+                      />
+                      <NumField
+                        label="РАДИУС ЗОНЫ, М"
+                        value={selectedSign.zoneRadius ?? 24}
+                        step={1}
+                        min={0}
+                        max={250}
+                        onChange={(v) =>
+                          patchDef({
+                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneRadius: v } : s)),
+                          })
+                        }
+                      />
+                      <NumField
+                        label="ЦЕНТР ЗОНЫ X"
+                        value={selectedSign.zoneX ?? selectedSign.x}
+                        step={0.5}
+                        onChange={(v) =>
+                          patchDef({
+                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneX: v } : s)),
+                          })
+                        }
+                      />
+                      <NumField
+                        label="ЦЕНТР ЗОНЫ Z"
+                        value={selectedSign.zoneZ ?? selectedSign.z}
+                        step={0.5}
+                        onChange={(v) =>
+                          patchDef({
+                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneZ: v } : s)),
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-[11px] text-[#8fa2ae] leading-relaxed">
+                  {getRoadSignSpec(selectedSign.kind).effectNote}
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-mini w-full justify-center"
+                  onClick={() => {
+                    const res = attachCheckpointToSign(def, selectedSign.id);
+                    if (!res) return;
+                    commitChange(res.def, def);
+                    setSelection({ kind: "checkpoint", id: res.checkpointId });
+                    onNotify(`Добавлена связанная точка маршрута ${res.checkpointId}`);
+                  }}
+                >
+                  <Icon name="route" size={13} /> + Связать с КТ маршрута
+                </button>
+              </div>
+            )}
+
+            {/* Инспектор: Светофор */}
+            {selectedSignal && (
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X СТОЙКИ"
+                    value={selectedSignal.x}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({ signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, x: v } : s)) })
+                    }
+                  />
+                  <NumField
+                    label="Z СТОЙКИ"
+                    value={selectedSignal.z}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({ signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, z: v } : s)) })
+                    }
+                  />
+                  <NumField
+                    label="ПОТОК, °"
+                    value={radToDeg(selectedSignal.h)}
+                    step={5}
+                    min={-180}
+                    max={180}
+                    onChange={(v) =>
+                      commitChange(setSelectedHeading(def, { kind: "signal", id: selectedSignal.id }, degToRad(v)), def)
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="СТОП-ЛИНИЯ X"
+                    value={selectedSignal.stopLineX}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({
+                        signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, stopLineX: v } : s)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="СТОП-ЛИНИЯ Z"
+                    value={selectedSignal.stopLineZ}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({
+                        signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, stopLineZ: v } : s)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="ШИРИНА 1.12"
+                    value={selectedSignal.stopLineWidth}
+                    step={0.2}
+                    min={1.5}
+                    max={24}
+                    onChange={(v) =>
+                      patchDef({
+                        signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, stopLineWidth: v } : s)),
+                      })
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="ЗЕЛЁНЫЙ, С"
+                    value={selectedSignal.greenDuration}
+                    step={1}
+                    min={3}
+                    max={180}
+                    onChange={(v) =>
+                      patchDef({
+                        signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, greenDuration: v } : s)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="КРАСНЫЙ, С"
+                    value={selectedSignal.redDuration}
+                    step={1}
+                    min={3}
+                    max={180}
+                    onChange={(v) =>
+                      patchDef({
+                        signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, redDuration: v } : s)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="СДВИГ ФАЗЫ, С"
+                    value={selectedSignal.cycleOffset}
+                    step={1}
+                    min={0}
+                    max={180}
+                    onChange={(v) =>
+                      patchDef({
+                        signals: signals.map((s) => (s.id === selectedSignal.id ? { ...s, cycleOffset: v } : s)),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Инспектор: Пешеходный переход */}
+            {selectedCrosswalk && (
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X ЦЕНТРА"
+                    value={selectedCrosswalk.cx}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) => (c.id === selectedCrosswalk.id ? { ...c, cx: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="Z ЦЕНТРА"
+                    value={selectedCrosswalk.cz}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) => (c.id === selectedCrosswalk.id ? { ...c, cz: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="КУРС ДОРОГИ, °"
+                    value={radToDeg(selectedCrosswalk.h)}
+                    step={5}
+                    min={-180}
+                    max={180}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) =>
+                          c.id === selectedCrosswalk.id ? { ...c, h: degToRad(v) } : c
+                        ),
+                      })
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumField
+                    label="ШИРИНА ДОРОГИ, М"
+                    value={selectedCrosswalk.width}
+                    step={0.5}
+                    min={2}
+                    max={30}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) => (c.id === selectedCrosswalk.id ? { ...c, width: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="ДЛИНА ЗЕБРЫ, М"
+                    value={selectedCrosswalk.length}
+                    step={0.2}
+                    min={1.5}
+                    max={15}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) => (c.id === selectedCrosswalk.id ? { ...c, length: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="СКОР. ПЕШЕХОДА, М/С"
+                    value={selectedCrosswalk.pedSpeed}
+                    step={0.1}
+                    min={0}
+                    max={3}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) => (c.id === selectedCrosswalk.id ? { ...c, pedSpeed: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="СДВИГ ФАЗЫ, С"
+                    value={selectedCrosswalk.pedPhaseOffset}
+                    step={0.5}
+                    min={0}
+                    max={60}
+                    onChange={(v) =>
+                      patchDef({
+                        crosswalks: crosswalks.map((c) =>
+                          c.id === selectedCrosswalk.id ? { ...c, pedPhaseOffset: v } : c
+                        ),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Инспектор: Дорога */}
+            {selectedRoad && (
+              <div className="space-y-2.5">
+                <TextField
+                  label="НАЗВАНИЕ УЛИЦЫ"
+                  value={selectedRoad.name ?? ""}
+                  placeholder="ул. Учебная"
+                  onChange={(v) =>
+                    patchDef({ roads: roads.map((r) => (r.id === selectedRoad.id ? { ...r, name: v } : r)) })
+                  }
+                />
+                <label className="block">
+                  <span className="mono text-[10px] text-[#7c909d] block mb-1">КЛАСС ДОРОГИ (OSM HIGHWAY)</span>
+                  <select
+                    value={selectedRoad.highway}
+                    onChange={(e) =>
+                      patchDef({
+                        roads: roads.map((r) => (r.id === selectedRoad.id ? { ...r, highway: e.target.value } : r)),
+                      })
+                    }
+                    className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white"
+                  >
+                    {HIGHWAY_TYPES.map((ht) => (
+                      <option key={ht.v} value={ht.v}>
+                        {ht.l}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="ШИРИНА, М"
+                    value={selectedRoad.width}
+                    step={0.5}
+                    min={2.5}
+                    max={30}
+                    onChange={(v) =>
+                      patchDef({ roads: roads.map((r) => (r.id === selectedRoad.id ? { ...r, width: v } : r)) })
+                    }
+                  />
+                  <NumField
+                    label="ПОЛОС"
+                    value={selectedRoad.lanes}
+                    step={1}
+                    min={1}
+                    max={6}
+                    onChange={(v) =>
+                      patchDef({
+                        roads: roads.map((r) =>
+                          r.id === selectedRoad.id ? { ...r, lanes: Math.max(1, Math.min(6, Math.round(v))) } : r
+                        ),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="ЛИМИТ, КМ/Ч"
+                    value={selectedRoad.speedLimitKmh ?? 40}
+                    step={5}
+                    min={5}
+                    max={110}
+                    onChange={(v) =>
+                      patchDef({
+                        roads: roads.map((r) => (r.id === selectedRoad.id ? { ...r, speedLimitKmh: v } : r)),
+                      })
+                    }
+                  />
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selectedRoad.hasSolidCenter)}
+                    onChange={(e) =>
+                      patchDef({
+                        roads: roads.map((r) =>
+                          r.id === selectedRoad.id ? { ...r, hasSolidCenter: e.target.checked } : r
+                        ),
+                      })
+                    }
+                    className="accent-[#f5b942]"
+                  />
+                  <span>Сплошная осевая 1.1 (иначе прерывистая 1.5)</span>
+                </label>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="mono text-[10px] text-[#7c909d]">
+                    УЗЛОВ: {selectedRoad.points.length} (перетаскивайте кружки на карте)
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-mini"
+                    onClick={() => {
+                      const res = appendRoadPoint(def, selectedRoad.id);
+                      commitChange(res.def, def);
+                      setSelection({ kind: "road_point", id: selectedRoad.id, index: res.pointIndex });
+                    }}
+                  >
+                    + Продлить узел
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Инспектор: Парковочный бокс */}
+            {selectedBay && (
+              <div className="space-y-2.5">
+                <TextField
+                  label="ПОДПИСЬ"
+                  value={selectedBay.label}
+                  onChange={(v) =>
+                    patchDef({ bays: def.bays.map((b) => (b.id === selectedBay.id ? { ...b, label: v } : b)) })
+                  }
+                />
+                <label className="block">
+                  <span className="mono text-[10px] text-[#7c909d] block mb-1">ТИП БОКСА</span>
+                  <select
+                    value={selectedBay.kind}
+                    onChange={(e) => {
+                      const kind = e.target.value as ParkingBayKind;
+                      patchDef({
+                        bays: def.bays.map((b) =>
+                          b.id === selectedBay.id
+                            ? { ...b, kind, openSide: kind === "parallel" ? "left" : "front" }
+                            : b
+                        ),
+                      });
+                    }}
+                    className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white"
+                  >
+                    {BAY_KINDS.map((bk) => (
+                      <option key={bk.v} value={bk.v}>
+                        {bk.l}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X, М"
+                    value={selectedBay.cx}
+                    onChange={(v) =>
+                      patchDef({ bays: def.bays.map((b) => (b.id === selectedBay.id ? { ...b, cx: v } : b)) })
+                    }
+                  />
+                  <NumField
+                    label="Z, М"
+                    value={selectedBay.cz}
+                    onChange={(v) =>
+                      patchDef({ bays: def.bays.map((b) => (b.id === selectedBay.id ? { ...b, cz: v } : b)) })
+                    }
+                  />
+                  <NumField
+                    label="УГОЛ, °"
+                    value={radToDeg(selectedBay.h)}
+                    step={5}
+                    min={-180}
+                    max={180}
+                    onChange={(v) =>
+                      patchDef({
+                        bays: def.bays.map((b) => (b.id === selectedBay.id ? { ...b, h: degToRad(v) } : b)),
+                      })
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumField
+                    label="ШИРИНА, М"
+                    value={selectedBay.width}
+                    min={1.9}
+                    max={8}
+                    onChange={(v) =>
+                      patchDef({ bays: def.bays.map((b) => (b.id === selectedBay.id ? { ...b, width: v } : b)) })
+                    }
+                  />
+                  <NumField
+                    label="ДЛИНА, М"
+                    value={selectedBay.length}
+                    min={4.4}
+                    max={12}
+                    onChange={(v) =>
+                      patchDef({ bays: def.bays.map((b) => (b.id === selectedBay.id ? { ...b, length: v } : b)) })
+                    }
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedBay.occupied}
+                      onChange={(e) =>
+                        patchDef({
+                          bays: def.bays.map((b) =>
+                            b.id === selectedBay.id
+                              ? {
+                                  ...b,
+                                  occupied: e.target.checked,
+                                  parkedModel: e.target.checked ? b.parkedModel ?? "rio" : undefined,
+                                }
+                              : b
+                          ),
+                        })
+                      }
+                      className="accent-[#f5b942]"
+                    />
+                    <span>Занят автомобилем</span>
+                  </label>
+                  {selectedBay.occupied && (
+                    <select
+                      value={selectedBay.parkedModel ?? "rio"}
+                      onChange={(e) =>
+                        patchDef({
+                          bays: def.bays.map((b) =>
+                            b.id === selectedBay.id ? { ...b, parkedModel: e.target.value as ParkedModelKey } : b
+                          ),
+                        })
+                      }
+                      className="rounded-lg bg-[#091017] border hairline px-2 py-1 text-xs text-white"
+                    >
+                      {PARKED_MODELS.map((m) => (
+                        <option key={m} value={m}>
+                          {VEHICLE_DIMS[m].name}
                         </option>
                       ))}
                     </select>
-                    <span className="mono text-[10px] text-[#6e8492] truncate">{o.id}</span>
-                    <button
-                      type="button"
-                      className="mono text-[11px] text-[#ff9494] hover:underline ml-auto"
-                      onClick={() => onChange({ ...def, obstacles: def.obstacles.filter((_, k) => k !== i) })}
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <NumField label="ЦЕНТР X" value={o.cx} onChange={(v) => {
-                      const obstacles = def.obstacles.map((x, k) => (k === i ? { ...x, cx: v } : x));
-                      onChange({ ...def, obstacles });
-                    }} />
-                    <NumField label="ЦЕНТР Z" value={o.cz} onChange={(v) => {
-                      const obstacles = def.obstacles.map((x, k) => (k === i ? { ...x, cz: v } : x));
-                      onChange({ ...def, obstacles });
-                    }} />
-                    <NumField label="ПОВОРОТ, °" value={radToDeg(o.h)} step={5} min={-180} max={180} onChange={(v) => {
-                      const obstacles = def.obstacles.map((x, k) => (k === i ? { ...x, h: degToRad(v) } : x));
-                      onChange({ ...def, obstacles });
-                    }} />
-                    <NumField label="ПОЛУШИРИНА X" value={o.halfX} step={0.1} min={0.05} max={60} onChange={(v) => {
-                      const obstacles = def.obstacles.map((x, k) => (k === i ? { ...x, halfX: v } : x));
-                      onChange({ ...def, obstacles });
-                    }} />
-                    <NumField label="ПОЛУДЛИНА Z" value={o.halfZ} step={0.1} min={0.05} max={60} onChange={(v) => {
-                      const obstacles = def.obstacles.map((x, k) => (k === i ? { ...x, halfZ: v } : x));
-                      onChange({ ...def, obstacles });
-                    }} />
-                    <NumField label="ВЫСОТА, М" value={o.height} step={0.5} min={0.1} max={40} onChange={(v) => {
-                      const obstacles = def.obstacles.map((x, k) => (k === i ? { ...x, height: v } : x));
-                      onChange({ ...def, obstacles });
-                    }} />
-                  </div>
+                  )}
                 </div>
+              </div>
+            )}
+
+            {/* Инспектор: Препятствие / объект окружения (8 классов) */}
+            {selectedObstacle && (
+              <div className="space-y-2.5">
+                <label className="block">
+                  <span className="mono text-[10px] text-[#7c909d] block mb-1">КЛАСС ОБЪЕКТА</span>
+                  <select
+                    value={selectedObstacle.kind}
+                    onChange={(e) => {
+                      const k = e.target.value as ObstacleKind;
+                      const sp = getObstacleSpec(k);
+                      patchDef({
+                        obstacles: def.obstacles.map((o) =>
+                          o.id === selectedObstacle.id
+                            ? {
+                                ...o,
+                                kind: k,
+                                halfX: sp.halfX,
+                                halfZ: sp.halfZ,
+                                height: sp.height,
+                                color: sp.color,
+                                model: k === "parked_car" ? o.model ?? "rio" : undefined,
+                                label: sp.defaultLabel,
+                              }
+                            : o
+                        ),
+                      });
+                    }}
+                    className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white"
+                  >
+                    {OBSTACLE_CATALOG.map((ob) => (
+                      <option key={ob.kind} value={ob.kind}>
+                        {ob.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <TextField
+                  label="ПОДПИСЬ"
+                  value={selectedObstacle.label ?? ""}
+                  onChange={(v) =>
+                    patchDef({
+                      obstacles: def.obstacles.map((o) => (o.id === selectedObstacle.id ? { ...o, label: v } : o)),
+                    })
+                  }
+                />
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X, М"
+                    value={selectedObstacle.cx}
+                    onChange={(v) =>
+                      patchDef({
+                        obstacles: def.obstacles.map((o) => (o.id === selectedObstacle.id ? { ...o, cx: v } : o)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="Z, М"
+                    value={selectedObstacle.cz}
+                    onChange={(v) =>
+                      patchDef({
+                        obstacles: def.obstacles.map((o) => (o.id === selectedObstacle.id ? { ...o, cz: v } : o)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="УГОЛ, °"
+                    value={radToDeg(selectedObstacle.h)}
+                    step={5}
+                    min={-180}
+                    max={180}
+                    onChange={(v) =>
+                      patchDef({
+                        obstacles: def.obstacles.map((o) =>
+                          o.id === selectedObstacle.id ? { ...o, h: degToRad(v) } : o
+                        ),
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="ПОЛУШИР. X"
+                    value={selectedObstacle.halfX}
+                    min={0.08}
+                    max={120}
+                    onChange={(v) =>
+                      patchDef({
+                        obstacles: def.obstacles.map((o) => (o.id === selectedObstacle.id ? { ...o, halfX: v } : o)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="ПОЛУДЛИНА Z"
+                    value={selectedObstacle.halfZ}
+                    min={0.08}
+                    max={120}
+                    onChange={(v) =>
+                      patchDef({
+                        obstacles: def.obstacles.map((o) => (o.id === selectedObstacle.id ? { ...o, halfZ: v } : o)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="ВЫСОТА, М"
+                    value={selectedObstacle.height}
+                    min={0.1}
+                    max={48}
+                    onChange={(v) =>
+                      patchDef({
+                        obstacles: def.obstacles.map((o) => (o.id === selectedObstacle.id ? { ...o, height: v } : o)),
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <span className="mono text-[10px] text-[#7c909d]">ЦВЕТ 3D:</span>
+                    <input
+                      type="color"
+                      value={hexFromNum(selectedObstacle.color, getObstacleSpec(selectedObstacle.kind).color)}
+                      onChange={(e) =>
+                        patchDef({
+                          obstacles: def.obstacles.map((o) =>
+                            o.id === selectedObstacle.id ? { ...o, color: numFromHex(e.target.value) } : o
+                          ),
+                        })
+                      }
+                      className="h-6 w-10 rounded bg-transparent border hairline cursor-pointer"
+                    />
+                  </label>
+                  {selectedObstacle.kind === "parked_car" && (
+                    <select
+                      value={selectedObstacle.model ?? "rio"}
+                      onChange={(e) => {
+                        const m = e.target.value as ParkedModelKey;
+                        const dim = VEHICLE_DIMS[m];
+                        patchDef({
+                          obstacles: def.obstacles.map((o) =>
+                            o.id === selectedObstacle.id
+                              ? {
+                                  ...o,
+                                  model: m,
+                                  halfX: Number((dim.width / 2).toFixed(2)),
+                                  halfZ: Number((dim.length / 2).toFixed(2)),
+                                  height: dim.height,
+                                }
+                              : o
+                          ),
+                        });
+                      }}
+                      className="rounded-lg bg-[#091017] border hairline px-2 py-1 text-xs text-white"
+                    >
+                      {PARKED_MODELS.map((m) => (
+                        <option key={m} value={m}>
+                          {VEHICLE_DIMS[m].name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Инспектор: Контрольная точка маршрута (КТ) */}
+            {selectedCp && (
+              <div className="space-y-2.5">
+                <TextField
+                  label="ЗАДАНИЕ ЭКЗАМЕНАТОРА"
+                  value={selectedCp.instruction}
+                  onChange={(v) =>
+                    patchDef({
+                      checkpoints: def.checkpoints.map((c) => (c.id === selectedCp.id ? { ...c, instruction: v } : c)),
+                    })
+                  }
+                />
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField
+                    label="X, М"
+                    value={selectedCp.x}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({
+                        checkpoints: def.checkpoints.map((c) => (c.id === selectedCp.id ? { ...c, x: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="Z, М"
+                    value={selectedCp.z}
+                    step={0.5}
+                    onChange={(v) =>
+                      patchDef({
+                        checkpoints: def.checkpoints.map((c) => (c.id === selectedCp.id ? { ...c, z: v } : c)),
+                      })
+                    }
+                  />
+                  <NumField
+                    label="РАДИУС, М"
+                    value={selectedCp.radius}
+                    step={0.5}
+                    min={1}
+                    max={18}
+                    onChange={(v) =>
+                      patchDef({
+                        checkpoints: def.checkpoints.map((c) => (c.id === selectedCp.id ? { ...c, radius: v } : c)),
+                      })
+                    }
+                  />
+                </div>
+                <label className="block">
+                  <span className="mono text-[10px] text-[#7c909d] block mb-1">ТРЕБУЕМЫЙ ПОВОРОТНИК</span>
+                  <select
+                    value={selectedCp.requireSignal ?? ""}
+                    onChange={(e) =>
+                      patchDef({
+                        checkpoints: def.checkpoints.map((c) =>
+                          c.id === selectedCp.id
+                            ? {
+                                ...c,
+                                requireSignal:
+                                  e.target.value === "left" || e.target.value === "right" ? e.target.value : undefined,
+                              }
+                            : c
+                        ),
+                      })
+                    }
+                    className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white"
+                  >
+                    <option value="">Не требуется</option>
+                    <option value="left">Левый поворотник (Q)</option>
+                    <option value="right">Правый поворотник (E)</option>
+                  </select>
+                </label>
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedCp.requireStop)}
+                      onChange={(e) =>
+                        patchDef({
+                          checkpoints: def.checkpoints.map((c) =>
+                            c.id === selectedCp.id ? { ...c, requireStop: e.target.checked || undefined } : c
+                          ),
+                        })
+                      }
+                      className="accent-[#f5b942]"
+                    />
+                    <span>Обязательная остановка в зоне КТ (знак STOP)</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedCp.isFinalPark)}
+                      onChange={(e) =>
+                        patchDef({
+                          checkpoints: def.checkpoints.map((c) =>
+                            c.id === selectedCp.id ? { ...c, isFinalPark: e.target.checked || undefined } : c
+                          ),
+                        })
+                      }
+                      className="accent-[#52d6bd]"
+                    />
+                    <span>Финишная парковка в свободном боксе</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Реестр всех объектов на карте с быстрым переходом */}
+          <div className="panel p-4 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-extrabold">Объекты на карте ({totalObjects})</span>
+              {roads.length > 0 && (
+                <button type="button" className="btn btn-mini" onClick={handleAutoRoute}>
+                  Автомаршрут
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-1">
+              {([
+                ["all", `Все (${totalObjects})`],
+                ["signs", `Знаки (${signs.length})`],
+                ["signals", `Светоф. (${signals.length})`],
+                ["crosswalks", `Зебры (${crosswalks.length})`],
+                ["roads", `Дороги (${roads.length})`],
+                ["bays", `Боксы (${def.bays.length})`],
+                ["obstacles", `Объекты (${def.obstacles.length})`],
+                ["checkpoints", `КТ (${def.checkpoints.length})`],
+              ] as Array<[ListFilter, string]>).map(([f, lbl]) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setListFilter(f)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer border ${
+                    listFilter === f
+                      ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-[#f5b942]"
+                      : "bg-[#091017] border-white/10 text-[#8fa2ae]"
+                  }`}
+                >
+                  {lbl}
+                </button>
               ))}
+            </div>
+
+            <div className="max-h-[250px] overflow-y-auto scroll-thin space-y-1 pr-0.5">
+              {(listFilter === "all" || listFilter === "signs") &&
+                signs.map((sn) => {
+                  const active = primary?.kind === "sign" && primary.id === sn.id;
+                  return (
+                    <button
+                      key={sn.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "sign", id: sn.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">
+                        <strong className="text-[#f5b942] mr-1.5">[{formatSignBadge(sn)}]</strong>
+                        {sn.label || getRoadSignSpec(sn.kind).title}
+                      </span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">
+                        {sn.x.toFixed(0)}, {sn.z.toFixed(0)}
+                      </span>
+                    </button>
+                  );
+                })}
+
+              {(listFilter === "all" || listFilter === "signals") &&
+                signals.map((sg) => {
+                  const active = primary?.kind === "signal" && primary.id === sg.id;
+                  return (
+                    <button
+                      key={sg.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "signal", id: sg.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">Светофор {sg.id} ({sg.greenDuration}/{sg.redDuration} с)</span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">
+                        {sg.x.toFixed(0)}, {sg.z.toFixed(0)}
+                      </span>
+                    </button>
+                  );
+                })}
+
+              {(listFilter === "all" || listFilter === "crosswalks") &&
+                crosswalks.map((cw) => {
+                  const active = primary?.kind === "crosswalk" && primary.id === cw.id;
+                  return (
+                    <button
+                      key={cw.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "crosswalk", id: cw.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">Переход {cw.id} ({cw.width}×{cw.length} м)</span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">
+                        {cw.cx.toFixed(0)}, {cw.cz.toFixed(0)}
+                      </span>
+                    </button>
+                  );
+                })}
+
+              {(listFilter === "all" || listFilter === "roads") &&
+                roads.map((r) => {
+                  const active = primary?.kind === "road" && primary.id === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "road", id: r.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">Дорога: {r.name || r.id} ({r.lanes} п., {r.width} м)</span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">{r.points.length} узл.</span>
+                    </button>
+                  );
+                })}
+
+              {(listFilter === "all" || listFilter === "bays") &&
+                def.bays.map((b) => {
+                  const active = primary?.kind === "bay" && primary.id === b.id;
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "bay", id: b.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">
+                        {b.label} {b.occupied ? "(занят)" : "(свободен)"}
+                      </span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">
+                        {b.width}×{b.length}
+                      </span>
+                    </button>
+                  );
+                })}
+
+              {(listFilter === "all" || listFilter === "checkpoints") &&
+                def.checkpoints.map((c, idx) => {
+                  const active = primary?.kind === "checkpoint" && primary.id === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "checkpoint", id: c.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">
+                        КТ #{idx + 1}: {c.instruction}
+                      </span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">r={c.radius}</span>
+                    </button>
+                  );
+                })}
+
+              {(listFilter === "all" || listFilter === "obstacles") &&
+                def.obstacles.slice(0, 120).map((o) => {
+                  const active = primary?.kind === "obstacle" && primary.id === o.id;
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => {
+                        setTool("select");
+                        setSelection({ kind: "obstacle", id: o.id });
+                      }}
+                      className={`w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] cursor-pointer border ${
+                        active ? "bg-[#f5b942]/15 border-[#f5b942]/50 text-white" : "bg-[#091017] border-white/5 text-[#c3d2dc]"
+                      }`}
+                    >
+                      <span className="truncate">
+                        {getObstacleSpec(o.kind).title}: {o.label || o.id}
+                      </span>
+                      <span className="mono text-[10px] text-[#7c909d] shrink-0">
+                        {o.cx.toFixed(0)}, {o.cz.toFixed(0)}
+                      </span>
+                    </button>
+                  );
+                })}
+
+              {totalObjects === 0 && (
+                <div className="text-[11px] text-[#7c909d] py-3 text-center">
+                  На карте пока только стартовая позиция — выберите класс сверху и кликните по 2D-карте.
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="panel p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <div className="text-xs font-extrabold">Точки маршрута ({def.checkpoints.length})</div>
-              <button
-                type="button"
-                className="btn btn-mini"
-                onClick={() =>
-                  onChange({
-                    ...def,
-                    checkpoints: [
-                      ...def.checkpoints,
-                      {
-                        id: nextCheckpointId(def),
-                        x: 0,
-                        z: 10,
-                        radius: 5,
-                        instruction: "Двигайтесь к следующей точке.",
-                      },
-                    ],
-                  })
-                }
-              >
-                + Точка
+          {/* Общие параметры сценария, площадки и границ мира */}
+          <div className="panel p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-extrabold">Параметры карты и границы</span>
+              <button type="button" className="btn btn-mini" onClick={handleFitBounds}>
+                Подогнать границы
               </button>
             </div>
-            <div className="text-[11px] text-[#7c909d] mb-3">
-              Если точек нет — это упражнение на парковку. Если есть — маршрутный заезд со стартом в D.
+            <div className="grid sm:grid-cols-2 gap-2">
+              <TextField label="НАЗВАНИЕ" value={def.title} onChange={(v) => patchDef({ title: v })} />
+              <TextField label="ПОДЗАГОЛОВОК" value={def.subtitle} onChange={(v) => patchDef({ subtitle: v })} />
             </div>
-            <div className="space-y-2.5">
-              {def.checkpoints.map((cp, i) => (
-                <div key={cp.id} className="panel-soft p-3">
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <span className="mono text-[11px] text-[#52d6bd] font-bold">
-                      {i + 1}. {cp.id}
-                    </span>
-                    <button
-                      type="button"
-                      className="mono text-[11px] text-[#ff9494] hover:underline ml-auto"
-                      onClick={() =>
-                        onChange({ ...def, checkpoints: def.checkpoints.filter((_, k) => k !== i) })
-                      }
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2.5 mb-2.5">
-                    <NumField label="X" value={cp.x} onChange={(v) => {
-                      const checkpoints = def.checkpoints.map((c, k) => (k === i ? { ...c, x: v } : c));
-                      onChange({ ...def, checkpoints });
-                    }} />
-                    <NumField label="Z" value={cp.z} onChange={(v) => {
-                      const checkpoints = def.checkpoints.map((c, k) => (k === i ? { ...c, z: v } : c));
-                      onChange({ ...def, checkpoints });
-                    }} />
-                    <NumField label="РАДИУС" value={cp.radius} step={0.5} min={1} max={15} onChange={(v) => {
-                      const checkpoints = def.checkpoints.map((c, k) => (k === i ? { ...c, radius: v } : c));
-                      onChange({ ...def, checkpoints });
-                    }} />
-                  </div>
-                  <TextField label="ЗАДАНИЕ ЭКЗАМЕНАТОРА" value={cp.instruction} onChange={(v) => {
-                    const checkpoints = def.checkpoints.map((c, k) => (k === i ? { ...c, instruction: v } : c));
-                    onChange({ ...def, checkpoints });
-                  }} />
-                  <div className="flex flex-wrap items-center gap-3 mt-2.5">
-                    <label className="inline-flex items-center gap-1.5 text-[11px] text-[#9bafbc]">
-                      Поворотник:
-                      <select
-                        value={cp.requireSignal ?? ""}
-                        onChange={(e) => {
-                          const v = e.target.value as "" | "left" | "right";
-                          const checkpoints = def.checkpoints.map((c, k) =>
-                            k === i ? { ...c, requireSignal: v === "" ? undefined : v } : c
-                          );
-                          onChange({ ...def, checkpoints });
-                        }}
-                        className="rounded bg-[#091017] border hairline px-1.5 py-1 text-[11px] text-white"
-                      >
-                        <option value="">не требуется</option>
-                        <option value="left">левый (Q)</option>
-                        <option value="right">правый (E)</option>
-                      </select>
-                    </label>
-                    <label className="inline-flex items-center gap-1.5 text-[11px] text-[#9bafbc] cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(cp.isFinalPark)}
-                        onChange={(e) => {
-                          const checkpoints = def.checkpoints.map((c, k) =>
-                            k === i ? { ...c, isFinalPark: e.target.checked || undefined } : c
-                          );
-                          onChange({ ...def, checkpoints });
-                        }}
-                      />
-                      Финиш — парковка
-                    </label>
-                  </div>
-                </div>
-              ))}
+            <label className="block">
+              <span className="mono text-[10px] text-[#7c909d] block mb-1">ЗАДАНИЕ ЭКЗАМЕНАТОРА</span>
+              <textarea
+                value={def.brief}
+                onChange={(e) => patchDef({ brief: e.target.value })}
+                rows={2}
+                className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 text-xs text-white resize-y"
+              />
+            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={def.useLotSurface !== false}
+                  onChange={(e) => patchDef({ useLotSurface: e.target.checked })}
+                  className="accent-[#f5b942]"
+                />
+                <span>Асфальтовая площадка автодрома</span>
+              </label>
+              <div className="w-28">
+                <NumField
+                  label="БАЗОВЫЙ КМ/Ч"
+                  value={def.defaultSpeedLimitKmh}
+                  min={5}
+                  max={110}
+                  step={5}
+                  onChange={(v) => patchDef({ defaultSpeedLimitKmh: v })}
+                />
+              </div>
             </div>
-          </div>
-        </div>
-
-        {/* [SEC:custom-preview] Правая колонка: 2D-схема площадки и проверка коллизий */}
-        <div className="panel p-4 lg:sticky lg:top-[72px]">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-extrabold">Схема (клик — переместить старт)</div>
-            <Chip tone="neutral">+Z ↑ · +X ←</Chip>
-          </div>
-          <div className="rounded-xl bg-[#091017] border hairline overflow-hidden">
-            <svg
-              viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-              onClick={handlePreviewClick}
-              className="w-full h-[380px] cursor-crosshair"
-              role="img"
-              aria-label="Схема своего сценария"
-            >
-              {/* Площадка и границы */}
-              <rect
-                x={-def.lotHalfX}
-                y={-def.lotHalfZ}
-                width={def.lotHalfX * 2}
-                height={def.lotHalfZ * 2}
-                fill="#1f2a35"
-                stroke="#3b4a5a"
-                strokeWidth={0.2}
+            {def.useLotSurface !== false && (
+              <div className="grid grid-cols-2 gap-2">
+                <NumField
+                  label="ПЛОЩАДКА ±X, М"
+                  value={def.lotHalfX}
+                  min={5}
+                  max={200}
+                  step={1}
+                  onChange={(v) => patchDef({ lotHalfX: v })}
+                />
+                <NumField
+                  label="ПЛОЩАДКА ±Z, М"
+                  value={def.lotHalfZ}
+                  min={5}
+                  max={200}
+                  step={1}
+                  onChange={(v) => patchDef({ lotHalfZ: v })}
+                />
+              </div>
+            )}
+            <div className="grid grid-cols-4 gap-2">
+              <NumField
+                label="MIN X"
+                value={def.bounds.minX}
+                step={2}
+                onChange={(v) => patchDef({ bounds: { ...def.bounds, minX: v } })}
               />
-              <rect
-                x={-def.bounds.maxX}
-                y={-def.bounds.maxZ}
-                width={def.bounds.maxX - def.bounds.minX}
-                height={def.bounds.maxZ - def.bounds.minZ}
-                fill="none"
-                stroke="#f5b942"
-                strokeOpacity={0.4}
-                strokeDasharray="1.2 0.8"
-                strokeWidth={0.15}
+              <NumField
+                label="MAX X"
+                value={def.bounds.maxX}
+                step={2}
+                onChange={(v) => patchDef({ bounds: { ...def.bounds, maxX: v } })}
               />
-              {/* Боксы */}
-              {def.bays.map((b) => (
-                <g
-                  key={b.id}
-                  transform={`translate(${-b.cx} ${-b.cz}) rotate(${(-b.h * 180) / Math.PI})`}
-                >
-                  <rect
-                    x={-b.width / 2}
-                    y={-b.length / 2}
-                    width={b.width}
-                    height={b.length}
-                    fill={b.occupied ? "rgba(100,116,139,0.3)" : "rgba(245,185,66,0.12)"}
-                    stroke={b.occupied ? "#64748b" : "#e2e8f0"}
-                    strokeWidth={0.12}
-                  />
-                  <text
-                    x={0}
-                    y={0.35}
-                    textAnchor="middle"
-                    fontSize={0.9}
-                    fill={b.occupied ? "#94a3b8" : "#f5b942"}
-                    transform="scale(-1,-1)"
-                  >
-                    {b.id}
-                  </text>
-                </g>
-              ))}
-              {/* Препятствия */}
-              {def.obstacles.map((o) => (
-                <g
-                  key={o.id}
-                  transform={`translate(${-o.cx} ${-o.cz}) rotate(${(-o.h * 180) / Math.PI})`}
-                >
-                  <rect
-                    x={-o.halfX}
-                    y={-o.halfZ}
-                    width={o.halfX * 2}
-                    height={o.halfZ * 2}
-                    fill={
-                      o.kind === "parked_car"
-                        ? "#3b82f6"
-                        : o.kind === "building"
-                          ? "#334155"
-                          : o.kind === "cone"
-                            ? "#f97316"
-                            : "#94a3b8"
-                    }
-                    opacity={0.85}
-                  />
-                </g>
-              ))}
-              {/* Точки маршрута */}
-              {def.checkpoints.map((cp, i) => (
-                <g key={cp.id}>
-                  <circle
-                    cx={-cp.x}
-                    cy={-cp.z}
-                    r={cp.radius}
-                    fill="none"
-                    stroke="#52d6bd"
-                    strokeWidth={0.18}
-                    strokeDasharray="0.7 0.5"
-                  />
-                  <text x={-cp.x} y={-cp.z + 0.45} textAnchor="middle" fontSize={1.1} fill="#52d6bd">
-                    {i + 1}
-                  </text>
-                </g>
-              ))}
-              {/* Старт */}
-              <line
-                x1={-def.start.x}
-                y1={-def.start.z}
-                x2={startTipX}
-                y2={startTipY}
-                stroke="#f5b942"
-                strokeWidth={0.3}
+              <NumField
+                label="MIN Z"
+                value={def.bounds.minZ}
+                step={2}
+                onChange={(v) => patchDef({ bounds: { ...def.bounds, minZ: v } })}
               />
-              <circle cx={-def.start.x} cy={-def.start.z} r={0.55} fill="#f5b942" />
-              <circle cx={startTipX} cy={startTipY} r={0.3} fill="#f5b942" />
-            </svg>
-          </div>
-          <div className="flex flex-wrap gap-3 mt-2.5 mono text-[10px] text-[#8fa2ae]">
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-[#f5b942]" />
-              старт
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-sm border border-[#e2e8f0]" />
-              свободный бокс
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-sm bg-[#64748b]" />
-              занят / здание
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full border border-[#52d6bd]" />
-              точка маршрута
-            </span>
+              <NumField
+                label="MAX Z"
+                value={def.bounds.maxZ}
+                step={2}
+                onChange={(v) => patchDef({ bounds: { ...def.bounds, maxZ: v } })}
+              />
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function selectedSignSel(id: string): EditorSelection {
+  return { kind: "sign", id };
 }

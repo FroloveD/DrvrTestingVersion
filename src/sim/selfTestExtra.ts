@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown-отчёт (T26).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
@@ -16,13 +16,37 @@ import {
   updateAxisArming,
   type GamepadSnapshot,
 } from "../input/gamepad";
+import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { buildScenarioWorld } from "../scenarios/catalog";
+import {
+  buildCustomWorld,
+  customFromOsmPack,
+  customFromWorld,
+  emptyCustomScenario,
+  importEditorFileText,
+  validateCustomScenario,
+} from "../scenarios/custom";
+import {
+  appendRoadPoint,
+  attachCheckpointToSign,
+  createEditorHistory,
+  deleteSelected,
+  duplicateSelected,
+  fitBoundsToContent,
+  moveSelected,
+  placeObjectAt,
+  pushEditorHistory,
+  redoEditorHistory,
+  rotateSelected,
+  undoEditorHistory,
+} from "../scenarios/editorOps";
+import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
 import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
-import { createInitialState, createReadyInput, stepSimulation } from "./step";
+import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { SimEvent } from "./types";
 import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, STEER_WHEEL, wheelDegToSteerRad } from "./vehicle";
 
@@ -439,6 +463,282 @@ export const extraCases: SelfTestCase[] = [
       assert(signedMd.includes("instructor_signed") && signedMd.includes("Иванов И.И."), "Не отражена подпись инструктора");
 
       return `Markdown ${md.length} симв. · 5 разделов · ДИ Уилсона · экранирование таблиц · дисклеймер на месте`;
+    },
+  },
+  {
+    id: "T27",
+    suite: "osm",
+    name: "Парсер .osm XML и автоопределение форматов: дороги, здания, знаки, заборы, деревья и ODbL",
+    fn: () => {
+      const sampleXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="JOSM">
+  <!-- Тестовый офлайн-фрагмент квартала -->
+  <node id="1" lat="55.7500" lon="37.6100"/>
+  <node id="2" lat="55.7512" lon="37.6100">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="3" lat="55.7506" lon="37.6100">
+    <tag k="highway" v="crossing"/>
+  </node>
+  <node id="4" lat="55.7503" lon="37.6101">
+    <tag k="highway" v="stop"/>
+    <tag k="direction" v="N"/>
+  </node>
+  <node id="5" lat="55.7508" lon="37.6101">
+    <tag k="traffic_sign" v="RU:3.24[30]"/>
+  </node>
+  <node id="6" lat="55.7505" lon="37.6097">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="7" lat="55.7501" lon="37.6096" visible="false">
+    <tag k="highway" v="give_way"/>
+  </node>
+  <node id="10" lat="55.7502" lon="37.6104"/>
+  <node id="11" lat="55.7502" lon="37.6107"/>
+  <node id="12" lat="55.7505" lon="37.6107"/>
+  <node id="13" lat="55.7505" lon="37.6104"/>
+  <node id="20" lat="55.7501" lon="37.6102"/>
+  <node id="21" lat="55.7504" lon="37.6102"/>
+  <way id="100">
+    <nd ref="1"/><nd ref="3"/><nd ref="2"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="ул. &quot;Школьная&quot; &amp; Садовая"/>
+    <tag k="lanes" v="2"/>
+    <tag k="maxspeed" v="40"/>
+  </way>
+  <way id="101">
+    <nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="10"/>
+    <tag k="building" v="school"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="102">
+    <nd ref="20"/><nd ref="21"/>
+    <tag k="barrier" v="fence"/>
+  </way>
+</osm>`;
+
+      const pack = parseOsmXml(sampleXml, "Квартал из .osm");
+      assert(pack.roads.length === 1, `Ожидалась 1 дорога, получено ${pack.roads.length}`);
+      assert(pack.roads[0].name === 'ул. "Школьная" & Садовая', `Не декодированы XML-сущности: ${pack.roads[0].name}`);
+      assert(pack.buildings.length === 1 && Math.abs(pack.buildings[0].height - 12.8) < 0.1, "Высота здания 4 эт. != 12.8 м");
+      assert(pack.signals.length === 1 && pack.crosswalks.length === 1, "Не распознаны светофор или переход");
+      // 3 знака: от maxspeed=40 на дороге + stop (node 4) + 3.24[30] (node 5); visible=false (node 7) пропущен
+      assert(pack.signs.some((s) => s.kind === "stop"), "Не распознан знак STOP");
+      assert(pack.signs.some((s) => s.kind === "speed_limit" && s.limitKmh === 30), "Не распознан знак 3.24[30]");
+      assert(!pack.signs.some((s) => s.kind === "give_way"), "Удалённый узел visible=false не должен попадать в пакет");
+      assert(
+        pack.extraObstacles.some((o) => o.kind === "fence") && pack.extraObstacles.some((o) => o.kind === "tree"),
+        "Не распознаны забор barrier=fence или дерево natural=tree"
+      );
+      assert(
+        pack.meta.attribution.includes("OpenStreetMap") && pack.meta.license.includes("ODbL"),
+        "Потеряна атрибуция ODbL 1.0"
+      );
+
+      // Универсальный импорт в редактор принимает и .osm XML, и GeoJSON, и JSON сценария
+      const impXml = importEditorFileText(sampleXml, "school.osm");
+      assert(impXml.kind === "osm_xml" && (impXml.def.roads?.length ?? 0) === 1, "importEditorFileText не распознал .osm");
+      const gj = JSON.stringify({
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            properties: { highway: "tertiary", name: "пр. Тестовый" },
+            geometry: { type: "LineString", coordinates: [[37.61, 55.75], [37.61, 55.751]] },
+          },
+          {
+            type: "Feature",
+            properties: { highway: "give_way" },
+            geometry: { type: "Point", coordinates: [37.6101, 55.7505] },
+          },
+        ],
+      });
+      const impGj = parseMapFileText(gj, "area.geojson");
+      assert(impGj.format === "geojson" && impGj.pack.signs.some((s) => s.kind === "give_way"), "GeoJSON знак 2.4 не распознан");
+
+      let badRejected = false;
+      try {
+        parseOsmXml("<html>not osm</html>");
+      } catch {
+        badRejected = true;
+      }
+      assert(badRejected, "Некорректный XML должен отклоняться с понятной ошибкой");
+
+      return `.osm: дорог ${pack.roads.length}, зданий ${pack.buildings.length}, знаков ${pack.signs.length}, доп. объектов ${pack.extraObstacles.length} · GeoJSON + ODbL OK`;
+    },
+  },
+  {
+    id: "T28",
+    suite: "scenarios",
+    name: "Редактор карт в симуляции: импорт OSM, знаки 3.24/5.21, STOP на КТ, новые препятствия и реплей",
+    fn: () => {
+      assert(ROAD_SIGN_CATALOG.length === 12, `Ожидалось 12 классов знаков, есть ${ROAD_SIGN_CATALOG.length}`);
+      assert(OBSTACLE_CATALOG.length === 8, `Ожидалось 8 классов препятствий, есть ${OBSTACLE_CATALOG.length}`);
+
+      // Клон встроенного города переносит дороги, светофоры, переход, знак 40 и ODbL
+      const cityWorld = buildScenarioWorld("city_osm", DEFAULT_CALIBRATION);
+      const clonedCity = customFromWorld(cityWorld, "Клон города");
+      assert(
+        (clonedCity.roads?.length ?? 0) === 3 &&
+          (clonedCity.signals?.length ?? 0) === 2 &&
+          (clonedCity.crosswalks?.length ?? 0) === 1 &&
+          (clonedCity.signs?.length ?? 0) >= 1 &&
+          Boolean(clonedCity.mapMeta),
+        "customFromWorld(city_osm) потерял объекты города"
+      );
+      assert(validateCustomScenario(clonedCity).errors.length === 0, "Клон города должен проходить валидацию");
+
+      // Собираем карту со знаком 3.24 «30», жилой зоной 5.21 «20», знаком STOP с КТ и новыми препятствиями
+      let def = emptyCustomScenario();
+      def = {
+        ...def,
+        start: { x: 0, z: 0, h: 0 },
+        defaultSpeedLimitKmh: 60,
+        signs: [
+          { id: "s-30", kind: "speed_limit", x: -3, z: 2, h: 0, limitKmh: 30, zoneRadius: 10, zoneX: 0, zoneZ: 2 },
+          { id: "s-lz", kind: "living_zone", x: -3, z: 25, h: 0, limitKmh: 20, zoneRadius: 8, zoneX: 0, zoneZ: 25 },
+          { id: "s-stop", kind: "stop", x: -3, z: 5, h: 0 },
+        ],
+        obstacles: [
+          { id: "o-fence", kind: "fence", cx: -8, cz: 0, halfX: 0.15, halfZ: 4, h: 0, height: 1.15 },
+          { id: "o-tree", kind: "tree", cx: 8, cz: 4, halfX: 0.5, halfZ: 0.5, h: 0, height: 4.2 },
+          { id: "o-island", kind: "island", cx: 8, cz: -6, halfX: 1.2, halfZ: 2.5, h: 0, height: 0.2 },
+        ],
+        checkpoints: [
+          { id: "cp-stop", x: 0, z: 4, radius: 3.5, requireStop: true, instruction: "Остановитесь у STOP" },
+        ],
+      };
+      assert(validateCustomScenario(def).errors.length === 0, "Карта со знаками и заборами должна быть валидна");
+
+      const world = buildCustomWorld(def);
+      assert(getActiveSpeedLimit(0, 2, world) === 30, "Знак 3.24 должен снижать лимит до 30 км/ч");
+      assert(getActiveSpeedLimit(0, 25, world) === 20, "Знак 5.21 должен снижать лимит до 20 км/ч");
+      assert(getActiveSpeedLimit(-20, -20, world) === 60, "Вне зон должен действовать базовый лимит 60 км/ч");
+
+      const grid = new SpatialGrid(world.obstacles, 10);
+      assert(grid.queryCarHit(-8, 0, 0).hit?.kind === "fence", "Ограждение fence должно участвовать в коллизиях");
+      assert(grid.queryCarHit(8, 4, 0).hit?.kind === "tree", "Дерево tree должно участвовать в коллизиях");
+      assert(grid.queryCarHit(8, -6, 0).hit?.kind === "island", "Островок island должен участвовать в коллизиях");
+
+      // Проезд КТ с requireStop: на ходу не засчитывается, после остановки — засчитывается, реплей совпадает
+      let state = createInitialState(world, true);
+      const rec = new AttemptRecorder(state, true);
+      let enteredWhileMoving = false;
+      for (let t = 0; t < 240; t++) {
+        const inZone = Math.hypot(state.x - 0, state.z - 4) <= 3.0;
+        if (inZone && Math.abs(state.v) * 3.6 > 2) {
+          enteredWhileMoving = true;
+          assert(state.currentCheckpointIndex === 0, "КТ STOP не должна засчитываться без остановки");
+        }
+        const inp = {
+          ...createReadyInput("D"),
+          signal: t < 30 ? ("left" as const) : null,
+          throttle: !enteredWhileMoving ? 0.55 : 0,
+          brake: enteredWhileMoving ? 0.85 : 0,
+        };
+        const out = stepSimulation(state, inp, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        state = out.state;
+        rec.recordTick(inp, state, out.newEvents);
+        if (state.finished) break;
+      }
+      assert(enteredWhileMoving && state.finished, "После остановки в зоне КТ STOP маршрут должен завершиться");
+      const snap = rec.snapshot(state, world, DEFAULT_CALIBRATION, DEFAULT_RULESET);
+      assert(Boolean(snap.customWorld?.signs?.length), "Снимок customWorld должен сохранять знаки для реплея");
+      const rep = replayInputStream(snap.inputStream, snap.customWorld!, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
+      assert(rep.finalState.x === state.x && rep.finalState.z === state.z, "Реплей по карте со знаками разошёлся");
+
+      // Конвертация OSM-пакета в редактор сохраняет дороги и валидность
+      const osmDef = customFromOsmPack(
+        parseMapFileText(
+          JSON.stringify({
+            elements: [
+              { type: "node", id: 1, lat: 55.75, lon: 37.61 },
+              { type: "node", id: 2, lat: 55.751, lon: 37.61 },
+              { type: "way", id: 5, nodes: [1, 2], tags: { highway: "secondary", name: "ул. Мира" } },
+            ],
+          }),
+          "mira.json"
+        ).pack
+      );
+      assert(validateCustomScenario(osmDef).errors.length === 0, "Импортированная OSM-карта должна быть валидна");
+
+      return "12 знаков · 8 препятствий · лимиты 30/20 км/ч · КТ STOP ждёт остановки · реплей бит-в-бит";
+    },
+  },
+  {
+    id: "T29",
+    suite: "scenarios",
+    name: "Операции 2D-редактора: добавление, перенос по сетке, поворот, узлы дорог, дубль, удаление и Undo/Redo",
+    fn: () => {
+      const opts = {
+        signKind: "turn_right" as const,
+        signSpeedLimit: 40,
+        obstacleKind: "fence" as const,
+        parkedModel: "rio" as const,
+        bayKind: "parallel" as const,
+        calibration: DEFAULT_CALIBRATION,
+        snapStep: 0.5,
+      };
+      let hist = createEditorHistory<ReturnType<typeof emptyCustomScenario>>();
+      const s0 = emptyCustomScenario();
+
+      // 1. Размещаем знак с привязкой к сетке 0,5 м и перетаскиваем его
+      const p1 = placeObjectAt(s0, "sign", 3.23, -4.76, opts);
+      hist = pushEditorHistory(hist, s0);
+      let cur = p1.def;
+      assert(cur.signs?.[0].x === 3.0 && cur.signs?.[0].z === -5.0, "Привязка к сетке 0,5 м сработала неверно");
+
+      const moved = moveSelected(cur, p1.selection, 6.24, 1.74, 0.5);
+      hist = pushEditorHistory(hist, cur);
+      cur = moved;
+      assert(cur.signs?.[0].x === 6.0 && cur.signs?.[0].z === 1.5, "Перенос знака с привязкой к сетке неверен");
+
+      // 2. Поворачиваем знак на -90° и связываем с КТ (должен проставиться requireSignal: right)
+      cur = rotateSelected(cur, p1.selection, -Math.PI / 2);
+      const linked = attachCheckpointToSign(cur, cur.signs![0].id);
+      assert(Boolean(linked), "Не удалось создать КТ для знака 4.1.2");
+      cur = linked!.def;
+      const newCp = cur.checkpoints.find((c) => c.id === linked!.checkpointId);
+      assert(newCp?.requireSignal === "right", "КТ от знака 4.1.2 должна требовать правый поворотник");
+
+      // 3. Добавляем светофор: перенос стойки двигает стоп-линию синхронно, ручка стоп-линии — отдельно
+      const pSig = placeObjectAt(cur, "signal", -4, 8, { ...opts, snapStep: 0 });
+      cur = pSig.def;
+      const slBefore = { x: cur.signals![0].stopLineX, z: cur.signals![0].stopLineZ };
+      cur = moveSelected(cur, pSig.selection, -2, 11, 0);
+      assert(
+        Math.abs(cur.signals![0].stopLineX - (slBefore.x + 2)) < 0.02 &&
+          Math.abs(cur.signals![0].stopLineZ - (slBefore.z + 3)) < 0.02,
+        "Стоп-линия должна переноситься вместе со светофором"
+      );
+      cur = moveSelected(cur, { kind: "signal_stopline", id: cur.signals![0].id }, 0, 9, 0);
+      assert(cur.signals![0].stopLineX === 0 && cur.signals![0].stopLineZ === 9, "Независимый перенос стоп-линии неверен");
+
+      // 4. Добавляем дорогу, продлеваем узел, удаляем узел (дорога из 2 узлов остаётся)
+      const pRoad = placeObjectAt(cur, "road", 0, 0, { ...opts, snapStep: 1 });
+      cur = pRoad.def;
+      const roadId = cur.roads![0].id;
+      const ext = appendRoadPoint(cur, roadId);
+      cur = ext.def;
+      assert(cur.roads![0].points.length === 3, "appendRoadPoint должен добавить 3-й узел");
+      cur = deleteSelected(cur, { kind: "road_point", id: roadId, index: 2 }).def;
+      assert(cur.roads![0].points.length === 2, "Удаление 3-го узла должно оставить сегмент из 2 узлов");
+
+      // 5. Дублирование, удаление и подгонка границ
+      const dup = duplicateSelected(cur, p1.selection, 2);
+      assert(Boolean(dup) && (dup!.def.signs?.length ?? 0) === 2, "Дублирование знака не создало копию");
+      cur = deleteSelected(dup!.def, dup!.selection).def;
+      assert((cur.signs?.length ?? 0) === 1, "Удаление копии знака не сработало");
+      cur = fitBoundsToContent(cur, 10);
+      assert(cur.bounds.minX < cur.bounds.maxX && cur.bounds.minZ < cur.bounds.maxZ, "fitBoundsToContent вернул некорректные границы");
+
+      // 6. Undo / Redo восстанавливают предыдущее и следующее состояния
+      const u1 = undoEditorHistory(hist, cur);
+      assert(Boolean(u1) && u1!.state.signs?.[0].x === 3.0, "Undo не вернул исходную позицию знака");
+      const r1 = redoEditorHistory(u1!.history, u1!.state);
+      assert(Boolean(r1) && r1!.state.signs?.[0].x === 6.0, "Redo не вернул перенесённое состояние");
+
+      return "Сетка 0,5 м · перенос/поворот · КТ от знака 4.1.2 · стоп-линия · узлы дороги · дубль/удаление · Undo/Redo OK";
     },
   },
 ];

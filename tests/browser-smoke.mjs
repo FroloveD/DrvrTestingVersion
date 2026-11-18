@@ -785,6 +785,102 @@ try {
   check("N сценарий выполнен без исключений", false, String(e.message).slice(-460));
 }
 
+// ───────── O. Редактор карт: импорт .osm XML, размещение и перенос знаков/объектов, открытие в 3D ─────────
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  await tab(page, "Свой сценарий");
+  await sleep(400);
+
+  // 1. Импортируем локальный .osm XML с дорогой, светофором, знаком STOP, забором и деревом
+  const osmXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <node id="1" lat="55.7500" lon="37.6100"/>
+  <node id="2" lat="55.7510" lon="37.6100"><tag k="highway" v="traffic_signals"/></node>
+  <node id="3" lat="55.7504" lon="37.6101"><tag k="highway" v="stop"/></node>
+  <node id="4" lat="55.7505" lon="37.6098"><tag k="natural" v="tree"/></node>
+  <node id="5" lat="55.7502" lon="37.6102"/>
+  <node id="6" lat="55.7506" lon="37.6102"/>
+  <way id="50">
+    <nd ref="1"/><nd ref="2"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="ул. Учебная OSM"/>
+    <tag k="maxspeed" v="40"/>
+  </way>
+  <way id="51"><nd ref="5"/><nd ref="6"/><tag k="barrier" v="fence"/></way>
+</osm>`;
+  await page.getByTestId("editor-import-input").setInputFiles({
+    name: "uchebnaya.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(osmXml),
+  });
+  await sleep(500);
+  const odblText = await page.getByTestId("editor-odbl-banner").innerText();
+  check("O1 импорт .osm XML показывает источник и атрибуцию ODbL 1.0",
+    odblText.includes("OpenStreetMap") && odblText.includes("ODbL 1.0"), odblText.slice(0, 120));
+
+  // 2. Выбираем инструмент «Дорожный знак» -> «Уступите дорогу» и ставим кликом по 2D-карте
+  const signsBefore = await page.locator('[data-testid^="map-sign-"]').count();
+  await page.getByTestId("editor-tool-sign").click();
+  await page.getByTestId("palette-sign-give_way").click();
+  const canvas = page.getByTestId("map-editor-canvas");
+  const cBox = await canvas.boundingBox();
+  await page.mouse.click(cBox.x + cBox.width * 0.62, cBox.y + cBox.height * 0.45);
+  await sleep(250);
+  const signsAfter = await page.locator('[data-testid^="map-sign-"]').count();
+  check("O2 новый дорожный знак ставится кликом на 2D-карту",
+    signsAfter === signsBefore + 1, `было ${signsBefore}, стало ${signsAfter}`);
+
+  // 3. Перетаскиваем новый знак мышью в режиме «Выбор / Перенос» и проверяем смену координат + Undo
+  await page.getByTestId("editor-tool-select").click();
+  const newSign = page.locator('[data-testid^="map-sign-sign-give_way"]').first();
+  const beforeTf = await newSign.getAttribute("transform");
+  const sBox = await newSign.boundingBox();
+  await page.mouse.move(sBox.x + sBox.width / 2, sBox.y + sBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sBox.x + sBox.width / 2 + 55, sBox.y + sBox.height / 2 - 40, { steps: 6 });
+  await page.mouse.up();
+  await sleep(200);
+  const afterTf = await newSign.getAttribute("transform");
+  check("O3 дорожный знак перетаскивается мышью на 2D-карте",
+    Boolean(beforeTf && afterTf && beforeTf !== afterTf), `${beforeTf} -> ${afterTf}`);
+
+  await page.getByRole("button", { name: /Отмена \(/ }).click();
+  await sleep(150);
+  const undoneTf = await newSign.getAttribute("transform");
+  check("O4 отмена действия (Undo) возвращает знак на прежнее место",
+    undoneTf === beforeTf, `${undoneTf} vs ${beforeTf}`);
+
+  // 4. Открываем отредактированную карту со знаками, светофором, забором и деревом в 3D-тренажёре
+  await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
+  await sleep(1200);
+  const simLow = await low(page);
+  check("O5 отредактированная OSM-карта со знаками, объектами и ODbL открывается в 3D",
+    simLow.includes("импорт osm: дорог 1") && simLow.includes("знаков")
+      && simLow.includes("openstreetmap") && simLow.includes("odbl"),
+    simLow.slice(0, 140));
+  await page.screenshot({ path: `${shotDir}/editor-osm-3d.png` });
+
+  // 5. Короткий заезд по отредактированной карте и проверка детерминизма реплея + 2D-разбора
+  await page.getByRole("button", { name: "Быстрый старт" }).click();
+  await sleep(350);
+  await page.keyboard.down("KeyW");
+  await sleep(1200);
+  await page.keyboard.up("KeyW");
+  await page.getByRole("button", { name: /Завершить/ }).click();
+  await sleep(700);
+  await page.getByRole("button", { name: /Проверить детерминизм/ }).click();
+  await sleep(600);
+  const debriefRaw = await page.evaluate(() => document.body.innerText);
+  const detMatch = debriefRaw.match(/Детерминизм подтверждён[^\n]*/);
+  check("O6 реплей заезда по отредактированной .osm-карте со знаками совпадает побитно",
+    Boolean(detMatch), (detMatch ?? ["нет подтверждения"])[0].slice(0, 120));
+  check("O7 ошибок в консоли и WebGL нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+  await ctx.close();
+} catch (e) {
+  check("O сценарий выполнен без исключений", false, String(e.message).slice(-460));
+}
+
 await browser.close();
 console.log(failed === 0 ? "SMOKE: все проверки пройдены" : `SMOKE: не пройдено ${failed}`);
 process.exit(failed === 0 ? 0 : 1);

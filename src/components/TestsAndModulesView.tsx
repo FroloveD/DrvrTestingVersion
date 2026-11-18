@@ -53,10 +53,16 @@ const MODULE_MAP = [
     guarantees: "rulesVersion, immediate/penalty, status: unvalidated, сравнение с v8",
   },
   {
-    path: "src/maps/osmLoader.ts",
-    role: "Офлайн-парсер OSM JSON + GeoJSON",
-    replaces: "loadOsm(data) только для Overpass",
-    guarantees: "Лимит 600 зданий, проекция +Z север / −X восток, атрибуция ODbL",
+    path: "src/maps/osmLoader.ts · src/maps/osmXml.ts",
+    role: "Офлайн-парсер .osm XML + Overpass JSON + GeoJSON",
+    replaces: "loadOsm(data) только для Overpass JSON",
+    guarantees: "Без DOMParser, лимит 600 зданий, дороги, знаки, заборы, деревья, проекция +Z север / −X восток, ODbL 1.0",
+  },
+  {
+    path: "src/scenarios/custom.ts · signs.ts · editorOps.ts",
+    role: "Интерактивный 2D-редактор карт и сценариев",
+    replaces: "Жёстко зашитые координаты без правки",
+    guarantees: "Импорт OSM/GeoJSON в редактор, 12 классов знаков, 8 препятствий, перенос по сетке, поворот и Undo/Redo",
   },
   {
     path: "src/scenarios/catalog.ts",

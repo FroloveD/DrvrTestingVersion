@@ -85,7 +85,48 @@ export type SimState = {
   statusText: string;
 };
 
-export type ObstacleKind = "curb" | "parked_car" | "building" | "pole" | "cone";
+export type ObstacleKind =
+  | "curb"
+  | "parked_car"
+  | "building"
+  | "pole"
+  | "cone"
+  | "fence"
+  | "tree"
+  | "island";
+
+/** Классы учебных дорожных знаков редактора и импорта OSM (нумерация ПДД РФ справочная). */
+export type RoadSignKind =
+  | "speed_limit" // 3.24 «Ограничение максимальной скорости»
+  | "stop" // 2.5 «Движение без остановки запрещено»
+  | "give_way" // 2.4 «Уступите дорогу»
+  | "main_road" // 2.1 «Главная дорога»
+  | "crosswalk" // 5.19 «Пешеходный переход»
+  | "no_stopping" // 3.27 «Остановка запрещена»
+  | "no_entry" // 3.1 «Въезд запрещён»
+  | "parking" // 6.4 «Парковка (парковочное место)»
+  | "ahead_only" // 4.1.1 «Движение прямо»
+  | "turn_right" // 4.1.2 «Движение направо»
+  | "turn_left" // 4.1.3 «Движение налево»
+  | "living_zone"; // 5.21 «Жилая зона» (20 км/ч)
+
+/** Дорожный знак на карте сценария (виден в 2D/3D; скоростные знаки создают SpeedZone). */
+export type RoadSignDef = {
+  id: string;
+  kind: RoadSignKind;
+  x: number;
+  z: number;
+  /** Курс потока, для которого установлен знак (рад, 0 = движение вдоль +Z, + влево). */
+  h: number;
+  label?: string;
+  /** Значение ограничения скорости (км/ч) для speed_limit и living_zone. */
+  limitKmh?: number;
+  /** Радиус зоны действия ограничения скорости (м); 0 или undefined — без активной зоны. */
+  zoneRadius?: number;
+  /** Центр зоны действия ограничения (м); если не задан, берётся точка на полосе рядом со знаком. */
+  zoneX?: number;
+  zoneZ?: number;
+};
 
 export type ParkedModelKey = "picanto" | "rio" | "ceed" | "xceed" | "sorento";
 
@@ -241,6 +282,7 @@ export type MapPackMeta = {
   roadsCount: number;
   buildingsCount: number;
   signalsCount: number;
+  signsCount?: number;
 };
 
 export type WorldData = {
@@ -252,6 +294,8 @@ export type WorldData = {
   bays: ParkingBay[];
   obstacles: ObstacleBox[];
   roads: RoadSegment[];
+  /** Дорожные знаки редактора и импорта OSM (опционально для совместимости со старыми записями). */
+  signs?: RoadSignDef[];
   signals: TrafficSignalDef[];
   speedZones: SpeedZone[];
   crosswalks: CrosswalkDef[];

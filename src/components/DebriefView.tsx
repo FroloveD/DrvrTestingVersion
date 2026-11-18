@@ -632,6 +632,22 @@ export function DebriefView({
                 </g>
               ))}
 
+              {/* Пешеходные переходы */}
+              {replayWorld.crosswalks.map((cw) => (
+                <g key={cw.id} transform={`translate(${-cw.cx} ${-cw.cz}) rotate(${(-cw.h * 180) / Math.PI})`}>
+                  <rect
+                    x={-cw.width / 2}
+                    y={-cw.length / 2}
+                    width={cw.width}
+                    height={cw.length}
+                    fill="rgba(241,245,249,0.28)"
+                    stroke="#cbd5e1"
+                    strokeDasharray="0.45 0.35"
+                    strokeWidth={0.12}
+                  />
+                </g>
+              ))}
+
               {/* Препятствия */}
               {replayWorld.obstacles.map((o) => (
                 <g key={o.id} transform={`translate(${-o.cx} ${-o.cz}) rotate(${(-o.h * 180) / Math.PI})`}>
@@ -640,10 +656,33 @@ export function DebriefView({
                     y={-o.halfZ}
                     width={o.halfX * 2}
                     height={o.halfZ * 2}
-                    fill={o.kind === "parked_car" ? "#3b82f6" : o.kind === "building" ? "#334155" : "#94a3b8"}
+                    fill={
+                      o.kind === "parked_car"
+                        ? "#3b82f6"
+                        : o.kind === "building"
+                          ? "#334155"
+                          : o.kind === "tree" || o.kind === "island"
+                            ? "#2f855a"
+                            : o.kind === "cone"
+                              ? "#f97316"
+                              : "#94a3b8"
+                    }
                     opacity={o.kind === "building" ? 0.65 : 0.85}
                   />
                 </g>
+              ))}
+
+              {/* Дорожные знаки */}
+              {(replayWorld.signs ?? []).map((sn) => (
+                <circle
+                  key={sn.id}
+                  cx={-sn.x}
+                  cy={-sn.z}
+                  r={0.55}
+                  fill={sn.kind === "stop" || sn.kind === "speed_limit" || sn.kind === "no_entry" ? "#dc2626" : "#2563eb"}
+                  stroke="#f8fafc"
+                  strokeWidth={0.14}
+                />
               ))}
 
               {/* Линия траектории (бирюзовый — вперёд, янтарный — задний ход R) */}
