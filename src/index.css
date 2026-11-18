@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #080d12;
+  --panel: #101820;
+  --panel-2: #141e28;
+  --line: rgba(148, 176, 194, 0.14);
+  --amber: #f5b942;
+  --mint: #52d6bd;
+  --red: #ff6b6b;
+  --text: #e9f1f5;
+  --muted: #8b9eab;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+.app-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(900px 620px at 78% -8%, rgba(82, 214, 189, 0.09), transparent 65%),
+    radial-gradient(760px 560px at 8% 12%, rgba(245, 185, 66, 0.07), transparent 62%),
+    linear-gradient(rgba(148, 176, 194, 0.032) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 176, 194, 0.032) 1px, transparent 1px);
+  background-size: auto, auto, 44px 44px, 44px 44px;
+}
+
+.panel {
+  background: linear-gradient(160deg, rgba(20, 30, 40, 0.94), rgba(12, 19, 26, 0.9));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.panel-soft {
+  background: rgba(16, 24, 32, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.hairline { border-color: var(--line); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tag-amber { color: var(--amber); border-color: rgba(245, 185, 66, 0.35); background: rgba(245, 185, 66, 0.08); }
+.tag-mint { color: var(--mint); border-color: rgba(82, 214, 189, 0.35); background: rgba(82, 214, 189, 0.08); }
+.tag-red { color: var(--red); border-color: rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.08); }
+.tag-neutral { color: #a9bcc9; }
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #8fa2ae;
+  text-align: left;
+  transition: 0.18s ease;
+}
+.nav-link:hover { color: var(--text); background: rgba(148, 176, 194, 0.07); }
+.nav-link.active { color: var(--amber); background: rgba(245, 185, 66, 0.1); }
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+.nav-link.active .nav-dot { opacity: 1; box-shadow: 0 0 10px var(--amber); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(148, 176, 194, 0.06);
+  transition: 0.18s ease;
+  cursor: pointer;
+}
+.btn:hover { border-color: rgba(245, 185, 66, 0.45); background: rgba(245, 185, 66, 0.1); }
+.btn-primary { background: var(--amber); color: #17130a; border-color: var(--amber); }
+.btn-primary:hover { background: #ffc95c; border-color: #ffc95c; }
+.btn-mini { padding: 5px 10px; font-size: 11px; border-radius: 8px; }
+
+.segmented { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 10px; background: rgba(8, 13, 18, 0.6); }
+.segmented button { padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 700; color: #8fa2ae; transition: 0.15s ease; }
+.segmented button:hover { color: var(--text); }
+.segmented button.on { background: rgba(245, 185, 66, 0.14); color: var(--amber); }
+
+.road-line {
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(245, 185, 66, 0.55) 0 22px, transparent 22px 42px);
+}
+
+.matrix-grid {
+  background-image:
+    linear-gradient(rgba(148, 176, 194, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 176, 194, 0.07) 1px, transparent 1px);
+  background-size: 25% 25%;
+}
+.dot-pulse { animation: pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.fade-in { animation: fadeUp 0.45s ease both; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+.scroll-thin::-webkit-scrollbar { width: 7px; height: 7px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: rgba(148, 176, 194, 0.25); border-radius: 8px; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+input[type="range"] { accent-color: var(--amber); }
+input[type="checkbox"] { accent-color: var(--mint); }
+
+/* Калибровка передней оси: значение относится к колесу, не к диапазону USB-руля. */
+.wheel-lock-control { border: 1px solid #364033; border-radius: 12px; padding: 13px 14px 10px; background: linear-gradient(135deg, #20241f, #111c23 74%); }
+.wheel-lock-heading, .wheel-lock-scale, .wheel-lock-details { display: flex; align-items: center; justify-content: space-between; }
+.wheel-lock-heading label { color: #edf2ec; font-size: 13px; font-weight: 750; }
+.wheel-lock-heading p { color: #9cacae; font-size: 10px; margin-top: 2px; }
+.wheel-lock-value { color: #f5b942; font-size: 26px; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.wheel-lock-value small { font-size: 17px; vertical-align: top; }
+.wheel-lock-control input[type="range"] { display: block; width: 100%; appearance: none; height: 5px; border-radius: 4px; margin: 19px 0 9px; cursor: pointer; }
+.wheel-lock-control input[type="range"]::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #ffd27a; border: 3px solid #f5b942; box-shadow: 0 0 0 3px #f5b9421f; }
+.wheel-lock-control input[type="range"]::-moz-range-thumb { width: 11px; height: 11px; border-radius: 50%; background: #ffd27a; border: 3px solid #f5b942; }
+.wheel-lock-scale { color: #a7b7bf; font-size: 10px; }
+.wheel-lock-scale button { color: #c5b681; padding: 2px 6px; font: 500 10px ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+.wheel-lock-scale button:hover { color: #ffd27a; text-decoration: underline; }
+.wheel-lock-details { gap: 10px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #50636845; }
+.wheel-lock-details span { display: block; color: #96aab3; font-size: 9px; }
+.wheel-lock-details b { font-size: 12px; color: #dae6e9; font-weight: 550; }
+.wheel-readout { color: #a4b5c1; font-size: 9px; font-variant-numeric: tabular-nums; }
+.wheel-limit-shortcut { display: flex; align-items: center; width: 100%; gap: 5px; border-top: 1px solid #52616e60; padding: 5px 9px 0 1px; color: #b0c0c9; font-size: 10px; cursor: pointer; }
+.wheel-limit-shortcut b { margin-left: auto; color: var(--amber); }
+.wheel-limit-shortcut:hover { color: #fff; }
+
+/* Полоса захвата не перекрывает рабочую поверхность педали. */
+.pedal-grab { display: grid; place-items: center; width: 100%; height: 24px; color: #91a4b2; background: linear-gradient(#23313c, #17222b); border-bottom: 1px solid #41515e; touch-action: none; cursor: grab; }
+.pedal-grab:hover, .pedal-grab:active { color: #f5b942; background: #29323a; }
+.pedal-grab:active { cursor: grabbing; }
+.pedal-grab:focus-visible, .pedal-face:focus-visible, .wheel-lock-control input:focus-visible, .wheel-limit-shortcut:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.pedal-face { --pedal-color: #71ddc3; --pedal-bg: #123029; display: flex; width: 100%; height: 58px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--pedal-color); background: linear-gradient(160deg, var(--pedal-bg), #0b141a 85%); cursor: pointer; touch-action: none; user-select: none; -webkit-touch-callout: none; }
+.pedal-brake { --pedal-color: #ff9a94; --pedal-bg: #322125; }
+.pedal-tread { width: 30px; height: 12px; border-radius: 2px; opacity: .65; background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 7px); }
+.pedal-caption { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 10px; font-weight: 800; letter-spacing: .035em; }
+.pedal-caption kbd { display: inline-grid; place-items: center; width: 14px; height: 15px; color: #c9d9df; border: 1px solid #5c717b80; border-radius: 3px; font: 500 9px ui-monospace, monospace; }
+.pedal-face[aria-pressed="true"] { background: var(--pedal-color); color: #101b21; }
+.pedal-face[aria-pressed="true"] kbd { border-color: #43575d80; color: #172228; }
+::selection { background: rgba(245, 185, 66, 0.35); color: #fff; }
