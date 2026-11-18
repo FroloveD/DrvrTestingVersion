@@ -1,3 +1,9 @@
+/**
+ * @module components/Icons
+ * @layer ui
+ * @role Встроенные векторные иконки (без CDN), бейджи `Chip`, копирование в буфер и выгрузка файлов `downloadText`/`downloadJson`.
+ * @invariants #8 (офлайн — ноль внешних иконочных шрифтов и запросов).
+ */
 import type { ReactNode } from "react";
 
 const ICONS: Record<string, string> = {

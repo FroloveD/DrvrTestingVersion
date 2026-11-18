@@ -1,3 +1,10 @@
+/**
+ * @module components/AnalyticsView
+ * @layer ui
+ * @role Вкладка «Статистика»: успеваемость учеников, топ нарушений, сверка с инструкторами (ДИ Уилсона), выгрузка CSV/Markdown/JSON.
+ * @invariants #8 (локальные данные без сервера), #16 (явный статус `unvalidated` / `instructor_signed` и порог 90 % при ≥ 20 оценках).
+ * @tests Смоук A, D (`tests/browser-smoke.mjs`); ядро — T18, T19, T26
+ */
 import { useMemo, useState } from "react";
 import {
   MIN_REVIEWS_FOR_VERDICT,
@@ -5,11 +12,11 @@ import {
   type AgreementStatus,
   type AgreementSummary,
 } from "../analytics/calibration";
-import { attemptsToCsv, studentOf, summarizeAttempts, UNKNOWN_STUDENT } from "../analytics/summary";
+import { analyticsToMarkdown, attemptsToCsv, studentOf, summarizeAttempts, UNKNOWN_STUDENT } from "../analytics/summary";
 import { evaluateAttempt, type RuleSet } from "../scoring/rules";
 import type { AttemptMeta } from "../sim/journal";
 import type { JournalBackend } from "../storage/journalStore";
-import { Chip, downloadJson, Icon } from "./Icons";
+import { Chip, downloadJson, downloadText, Icon } from "./Icons";
 
 type Props = {
   journal: AttemptMeta[];
@@ -178,6 +185,24 @@ export function AnalyticsView({
             }}
           >
             <Icon name="download" size={13} /> CSV для Excel
+          </button>
+          <button
+            type="button"
+            className="btn btn-mini"
+            title="Читаемый сводный отчёт в Markdown: KPI, сверка с инструкторами, ученики, нарушения и дисклеймер"
+            onClick={() => {
+              if (filtered.length === 0) {
+                onNotify("Нечего экспортировать: в выборке нет попыток");
+                return;
+              }
+              downloadText(
+                `cdt-report-${today}.md`,
+                analyticsToMarkdown(summary, agreement, ruleSet, today),
+                onNotify
+              );
+            }}
+          >
+            <Icon name="download" size={13} /> Отчёт .md
           </button>
           <button
             type="button"

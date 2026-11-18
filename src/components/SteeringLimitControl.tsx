@@ -1,3 +1,10 @@
+/**
+ * @module components/SteeringLimitControl
+ * @layer ui
+ * @role Ползунок калибровки предела внутреннего переднего колеса (33–42°, шаг 0,5°) с живым расчётом Аккермана и радиуса.
+ * @invariants #10 (руль ±540°, базовый выворот 35°, диапазон 33–42°).
+ * @tests T23, T24, смоук L (`tests/browser-smoke.mjs`)
+ */
 import { useId } from "react";
 import { ackermannAngle, centralSteerLimit, normalizeWheelLock, outerTurningRadius, WHEEL_LOCK } from "../sim/vehicle";
 

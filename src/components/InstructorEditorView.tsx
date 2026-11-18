@@ -1,3 +1,10 @@
+/**
+ * @module components/InstructorEditorView
+ * @layer ui
+ * @role Вкладка «Инструктор и Правила»: настройка штрафов, размеров боксов, выворота 33–42° и подписи `instructor_signed`.
+ * @invariants #10 (выворот 33–42°), #16 (статус `unvalidated` до подписи инструктора; не называть экзаменом ГИБДД).
+ * @tests Смоук A, J, L (`tests/browser-smoke.mjs`)
+ */
 import { useRef } from "react";
 import {
   DEFAULT_CALIBRATION,

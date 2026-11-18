@@ -151,5 +151,18 @@
    - обновлён `scripts/run-tests.mjs` (4 автоматических гейта) и настроены `.github/workflows/ci.yml` + `.github/workflows/deploy.yml` (без UTF-8 BOM).
 3. **Самодокументируемый код:**
    - добавлены паспорта `@module` во все модули ядра и ввода, а также оглавления и секционные якоря `[SEC:...]` в `SimulatorView.tsx`, `sceneController.ts`, `DebriefView.tsx`, `CustomScenarioView.tsx`.
-4. **Что осталось для окончательной уборки веток (`TD-17`):**
-   - влить `arena/1f511675-drvrtestingversion` в `Arena_v1` через PR, затем актуализировать `main` (для рабочего деплоя GitHub Pages) и заархивировать дублирующую ветку `Arena_v2` тегом.
+4. **Пошаговая инструкция окончательной консолидации веток (`TD-17`):**
+   1. Влить открытый Pull Request `arena/1f511675-drvrtestingversion → Arena_v1` (после зелёных проверок `verify` и `browser-smoke`).
+   2. Перед обновлением `main` и удалением `Arena_v2` сохранить обе исторические точки неизменяемыми Git-тегами (ни один старый коммит, включая прототип `traffic.ts`, не потеряется):
+      ```bash
+      git fetch origin
+      git tag archive/main-v0.2 origin/main
+      git tag archive/Arena_v2-2026-11-18 origin/Arena_v2
+      git push origin archive/main-v0.2 archive/Arena_v2-2026-11-18
+      ```
+   3. Обновить `main` актуальным проверенным состоянием `Arena_v1` (запустится зелёный `deploy.yml` на GitHub Pages) и удалить дублирующую ветку `Arena_v2`:
+      ```bash
+      git push --force-with-lease origin origin/Arena_v1:refs/heads/main
+      git push origin --delete Arena_v2
+      ```
+   4. Дальнейшие задачи вести от единой эталонной ветки через короткие рабочие ветки и PR с обязательным зелёным CI.

@@ -1,4 +1,11 @@
+/**
+ * @module sim/selfTestExtra
+ * @layer pure-core
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown-отчёт (T26).
+ * @invariants #7 (чистое ядро без DOM и Three.js).
+ */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
+import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
   advanceCalibration,
   createAxisArming,
@@ -389,6 +396,49 @@ export const extraCases: SelfTestCase[] = [
       assert(leftSig.length === 0 && rightSig.length === 0, "Левый (Q) и правый (E) поворотники разрешают начало движения");
 
       return "АКПП: P на ходу и выход из P без ДВС заблокированы · стартер только P/N · старт: hazard → ошибка, Q/E → OK";
+    },
+  },
+  {
+    id: "T26",
+    suite: "analytics",
+    name: "Сводный Markdown-отчёт: KPI, сверка с ДИ Уилсона, ученики, нарушения и дисклеймер",
+    fn: () => {
+      const { attempt } = recordSampleAttempt();
+      const { meta } = splitAttempt(attempt);
+      const a1 = upsertReview(
+        { ...meta, id: "md-1", student: "Петров П.|гр.1" },
+        { instructor: "Иванов И.", verdict: "СДАЛ", reviewedAt: "2026-11-18T10:00:00.000Z" }
+      );
+      const a2 = upsertReview(
+        { ...meta, id: "md-2", student: "Сидорова А." },
+        {
+          instructor: "Иванов И.",
+          verdict: "НЕ СДАЛ",
+          comment: "Поздно пристегнулся",
+          reviewedAt: "2026-11-18T11:00:00.000Z",
+        }
+      );
+      const summary = summarizeAttempts([a1, a2], DEFAULT_RULESET);
+      const agreement = summarizeAgreement([a1, a2], DEFAULT_RULESET);
+      const md = analyticsToMarkdown(summary, agreement, DEFAULT_RULESET, "2026-11-18");
+
+      assert(md.includes("# CityDrivingTraining — сводный учебный отчёт (2026-11-18)"), "Нет заголовка с датой");
+      assert(md.includes("unvalidated"), "Должен быть явно указан статус unvalidated");
+      assert(md.includes("1 из 2 оценок (50%") && md.includes("ДИ Уилсона"), "Нет блока сверки и ДИ Уилсона");
+      assert(md.includes("симулятор мягче") && md.includes("Поздно пристегнулся"), "Нет строки расхождения с комментарием");
+      assert(md.includes("Петров П.\\|гр.1") && md.includes("Сидорова А."), "Нет таблицы учеников или не экранирован символ |");
+      assert(md.includes("belt_unfastened") && md.includes("Приоритет для разбора"), "Нет блока нарушений и рекомендаций");
+      assert(md.includes("Не является официальным экзаменом ГИБДД"), "Потерян обязательный дисклеймер");
+
+      const signedMd = analyticsToMarkdown(
+        summary,
+        agreement,
+        { ...DEFAULT_RULESET, status: "instructor_signed", instructorSignOff: "Иванов И.И., 2026-11-18" },
+        "2026-11-18"
+      );
+      assert(signedMd.includes("instructor_signed") && signedMd.includes("Иванов И.И."), "Не отражена подпись инструктора");
+
+      return `Markdown ${md.length} симв. · 5 разделов · ДИ Уилсона · экранирование таблиц · дисклеймер на месте`;
     },
   },
 ];

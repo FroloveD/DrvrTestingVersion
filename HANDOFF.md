@@ -30,8 +30,8 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 25 автотестов ядра (T01–T25), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–N, ~100 проверок (Playwright + headless Chromium) |
+| Тесты ядра | 26 автотестов ядра (T01–T26), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–N, ~100 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
@@ -98,7 +98,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 25 автотестов ядра (T01–T25) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 26 автотестов ядра (T01–T26) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
 | `src/maps/osmLoader.ts` | офлайн-парсер OSM JSON и GeoJSON, атрибуция ODbL |
 | `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |
@@ -106,7 +106,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/scenarios/custom.ts` | «Свой сценарий»: схема, валидация, 2D-схема, авто-припаркованные авто |
 | `src/render/sceneController.ts` | весь Three.js: сцена, машина, зеркальные камеры, dispose (якоря `[SEC:...]`) |
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
-| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сверка вердиктов (ДИ Уилсона) |
+| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |
 | `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, экспорт strategy.md |
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |

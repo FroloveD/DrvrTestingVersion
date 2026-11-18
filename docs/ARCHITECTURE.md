@@ -158,7 +158,7 @@ requestAnimationFrame(now)
 - **`cdt.backup.v1` (`.json`)** — полная резервная копия всех попыток, правил, калибровки, своего сценария и заметки о лицензии (`src/components/PrivacyLegalView.tsx`).
 - **CSV отчёт (`.csv`)** — UTF-8 с BOM и разделителем `;` для прямого открытия в русскоязычном Excel (`src/analytics/summary.ts`).
 - **Свой сценарий (`.json`)** — описание площадки/маршрута с валидацией через `validateCustomScenario` (`src/scenarios/custom.ts`).
-- **`HANDOFF.md` / `strategy.md`** — текстовые выгрузки через `downloadText` (`src/components/Icons.tsx`).
+- **`HANDOFF.md` / `strategy.md` / `cdt-report-YYYY-MM-DD.md`** — текстовые выгрузки через `downloadText` (`src/components/Icons.tsx`, `analyticsToMarkdown` в `src/analytics/summary.ts`).
 
 ---
 
@@ -194,7 +194,7 @@ requestAnimationFrame(now)
 
 ## 7. Каталог автоматических проверок
 
-### 7.1. Автотесты чистого ядра (`25` кейсов, `src/sim/selfTest.ts` + `src/sim/selfTestExtra.ts`)
+### 7.1. Автотесты чистого ядра (`26` кейсов, `src/sim/selfTest.ts` + `src/sim/selfTestExtra.ts`)
 
 | ID | Группа | Что гарантирует |
 |---|---|---|
@@ -223,6 +223,7 @@ requestAnimationFrame(now)
 | `T23` | `vehicle` | Калибровка выворота `33–42°`: Аккерман, симметрия, радиус и совместимость при `35°` |
 | `T24` | `replay` | Изменение выворота в движении (`33° → 42° → 37,5°`): разделение RLE-блоков и точный реплей |
 | `T25` | `controls` | `checkGearChange` / `checkEngineToggle` и старт на маршруте: аварийка `Z` → `no_turn_signal`, `Q`/`E` → OK |
+| `T26` | `analytics` | `analyticsToMarkdown`: KPI, сверка с ДИ Уилсона, расхождения, таблицы учеников/нарушений, экранирование и дисклеймер |
 
 ### 7.2. Браузерный смоук (`tests/browser-smoke.mjs`, сценарии `A–N`)
 

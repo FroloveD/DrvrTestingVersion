@@ -1,3 +1,10 @@
+/**
+ * @module components/PrivacyLegalView
+ * @layer ui
+ * @role Правовой блок: атрибуция ODbL 1.0, учебный дисклеймер, заметка о лицензии, резервная копия `cdt.backup.v1` и очистка данных.
+ * @invariants #8 (все данные локально), #9 (атрибуция ODbL 1.0), #16 (честный статус симуляции).
+ * @tests Смоук J (`tests/browser-smoke.mjs`)
+ */
 import { useRef, useState } from "react";
 import type { RuleSet } from "../scoring/rules";
 import type { CustomScenarioDef } from "../scenarios/custom";

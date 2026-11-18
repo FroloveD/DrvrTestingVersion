@@ -1,13 +1,14 @@
 /**
  * @module analytics/summary
  * @layer pure-core
- * @role Агрегация статистики по ученикам, упражнениям и нарушениям, а также выгрузка CSV (UTF-8 BOM, `;`) для Excel.
- * @invariants #7 (чистое ядро), #8 (локальная обработка без сервера).
- * @tests T18
+ * @role Агрегация статистики по ученикам, упражнениям и нарушениям, выгрузка CSV (для Excel) и сводного Markdown-отчёта.
+ * @invariants #7 (чистое ядро), #8 (локальная обработка без сервера), #16 (явный статус правил и учебный дисклеймер в отчёте).
+ * @tests T18, T26
  */
 import { evaluateAttempt, type RuleSet } from "../scoring/rules";
 import type { AttemptMeta } from "../sim/journal";
 import type { ScenarioId, SimEventCode } from "../sim/types";
+import type { AgreementStatus, AgreementSummary } from "./calibration";
 
 export type StudentStat = {
   student: string;
@@ -197,4 +198,128 @@ export function attemptsToCsv(attempts: readonly AttemptMeta[], ruleSet: RuleSet
     ];
   });
   return [header, ...rows].map((r) => r.map(csvCell).join(";")).join("\r\n");
+}
+
+function escapeMdCell(value: string | number): string {
+  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+const AGREEMENT_STATUS_TEXT: Record<AgreementStatus, string> = {
+  no_data: "оценок инструкторов пока нет",
+  insufficient: "мало данных для вывода",
+  below_target: "ниже целевого порога",
+  meets_target: "целевой порог достигнут",
+};
+
+/**
+ * Формирует читаемый сводный Markdown-отчёт для инструктора, автошколы и протокола калибровки.
+ * Чистая функция без DOM; дата передаётся снаружи для детерминированности тестов.
+ *
+ * @param summary Сводная статистика попыток (`summarizeAttempts`).
+ * @param agreement Сводка сверки вердиктов с инструкторами (`summarizeAgreement`).
+ * @param ruleSet Активный набор правил (версия, статус `unvalidated` / `instructor_signed`, порог).
+ * @param reportDate Дата отчёта в формате `YYYY-MM-DD` (по умолчанию текущая дата UTC).
+ */
+export function analyticsToMarkdown(
+  summary: AnalyticsSummary,
+  agreement: AgreementSummary,
+  ruleSet: RuleSet,
+  reportDate: string = new Date().toISOString().slice(0, 10)
+): string {
+  const statusText =
+    ruleSet.status === "instructor_signed"
+      ? `instructor_signed (подписано: ${ruleSet.instructorSignOff || "ФИО не указано"})`
+      : "unvalidated (предварительный демо-профиль, требует сверки с инструктором)";
+
+  const L: string[] = [];
+  L.push(`# CityDrivingTraining — сводный учебный отчёт (${reportDate})`);
+  L.push("");
+  L.push(`- **Версия правил:** \`${ruleSet.version}\` (порог несдачи: ${ruleSet.failThreshold} б., от ${ruleSet.effectiveFrom})`);
+  L.push(`- **Статус правил:** ${statusText}`);
+  L.push(`- **Источник правил:** ${ruleSet.source}`);
+  L.push("");
+
+  L.push("## 1. Общие показатели выборки");
+  L.push("");
+  L.push("| Показатель | Значение |");
+  L.push("|---|---|");
+  L.push(`| Всего попыток | ${summary.total} |`);
+  L.push(`| СДАЛ / НЕ СДАЛ | ${summary.passed} / ${summary.failed} |`);
+  L.push(`| Доля сдачи | ${summary.passRate}% |`);
+  L.push(`| Средние штрафные баллы | ${summary.avgPoints} |`);
+  L.push(`| Средняя длительность | ${summary.avgDurationSec} с |`);
+  L.push("");
+
+  L.push("## 2. Сверка вердиктов с инструкторами");
+  L.push("");
+  L.push(
+    `- **Статус:** ${AGREEMENT_STATUS_TEXT[agreement.status]} (цель ≥ ${agreement.target}% при выборке ≥ ${agreement.minReviews} оценок)`
+  );
+  if (agreement.reviews > 0 && agreement.agreementRate !== null) {
+    const ci =
+      agreement.intervalLow !== null && agreement.intervalHigh !== null
+        ? `, 95% ДИ Уилсона ${agreement.intervalLow}–${agreement.intervalHigh}%`
+        : "";
+    L.push(
+      `- **Совпадение:** ${agreement.agree} из ${agreement.reviews} оценок (${agreement.agreementRate}%${ci}) по ${agreement.reviewedAttempts} попыткам`
+    );
+    L.push(
+      `- **Расхождения:** симулятор мягче — ${agreement.simTooLenient}, симулятор строже — ${agreement.simTooStrict}, разногласия между инструкторами — ${agreement.instructorsSplit}`
+    );
+    if (agreement.disagreements.length > 0) {
+      L.push("");
+      L.push("| Попытка | Ученик | Сценарий | Инструктор | Симулятор | Тип | Комментарий |");
+      L.push("|---|---|---|---|---|---|---|");
+      for (const d of agreement.disagreements) {
+        const kindLabel = d.kind === "sim_too_lenient" ? "симулятор мягче" : "симулятор строже";
+        L.push(
+          `| \`${escapeMdCell(d.attemptId)}\` | ${escapeMdCell(d.student)} | ${escapeMdCell(d.scenarioTitle)} | ${escapeMdCell(d.instructor)}: ${d.instructorVerdict} | ${d.simVerdict} (${d.simPoints} б.) | ${kindLabel} | ${escapeMdCell(d.comment || "—")} |`
+        );
+      }
+    }
+  }
+  L.push("");
+
+  if (summary.students.length > 0) {
+    L.push("## 3. Результаты по ученикам");
+    L.push("");
+    L.push("| Ученик | Попыток | СДАЛ | НЕ СДАЛ | Доля сдачи | Средний балл | Лучший балл |");
+    L.push("|---|---:|---:|---:|---:|---:|---:|");
+    for (const st of summary.students) {
+      L.push(
+        `| ${escapeMdCell(st.student)} | ${st.attempts} | ${st.passed} | ${st.failed} | ${st.passRate}% | ${st.avgPoints} | ${st.bestPoints} |`
+      );
+    }
+    L.push("");
+  }
+
+  if (summary.scenarios.length > 0) {
+    L.push("## 4. Разбивка по упражнениям");
+    L.push("");
+    L.push("| Упражнение | Попыток | Доля сдачи |");
+    L.push("|---|---:|---:|");
+    for (const sc of summary.scenarios) {
+      L.push(`| ${escapeMdCell(sc.title)} | ${sc.attempts} | ${sc.passRate}% |`);
+    }
+    L.push("");
+  }
+
+  L.push("## 5. Частые нарушения и фокус отработки");
+  L.push("");
+  if (summary.violations.length === 0) {
+    L.push("Нарушений в выбранных попытках не зафиксировано.");
+  } else {
+    L.push("| Нарушение | Баллы | Повторений |");
+    L.push("|---|---:|---:|");
+    for (const v of summary.violations) {
+      L.push(`| ${escapeMdCell(v.title)} (\`${v.code}\`) | ${v.points} | ${v.count} |`);
+    }
+    const top = summary.violations.slice(0, 3).map((v) => `«${v.title}» (${v.count})`);
+    L.push("");
+    L.push(`**Приоритет для разбора с инструктором:** ${top.join(", ")}.`);
+  }
+  L.push("");
+  L.push("---");
+  L.push("Учебная симуляция. Не является официальным экзаменом ГИБДД и не заменяет обучение с инструктором.");
+  return L.join("\n") + "\n";
 }

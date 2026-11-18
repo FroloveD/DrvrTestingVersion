@@ -1,3 +1,9 @@
+/**
+ * @module components/AuditView
+ * @layer ui-archive
+ * @role Исторический обзор аудита прототипа v8 (приоритеты, расхождения, риски, чек-лист `cdt-checklist-v1`).
+ * @tests Смоук A (`tests/browser-smoke.mjs`)
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   checklist,

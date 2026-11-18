@@ -1,3 +1,10 @@
+/**
+ * @module components/FloatingPanel
+ * @layer ui
+ * @role Перемещаемая и масштабируемая панель HUD/зеркал (grip `⠿`, удержание 420 мс, хранение в `cdt.layout.v1`).
+ * @invariants #14 (перенос за grip или longPress 420 мс; у педалей grip отделён от рабочей зоны).
+ * @tests Смоук E, H, K, M (`tests/browser-smoke.mjs`)
+ */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icons";
 

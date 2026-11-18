@@ -53,13 +53,13 @@ const REQUIRED_DOCS = [
   "docs/CALIBRATION_GUIDE.md",
 ];
 
-function walkTs(dir) {
+function walkTs(dir, includeTsx = false) {
   const res = [];
   if (!existsSync(dir)) return res;
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) res.push(...walkTs(full));
-    else if (full.endsWith(".ts")) res.push(full);
+    if (statSync(full).isDirectory()) res.push(...walkTs(full, includeTsx));
+    else if (full.endsWith(".ts") || (includeTsx && full.endsWith(".tsx"))) res.push(full);
   }
   return res;
 }
@@ -164,6 +164,15 @@ try {
     }
   }
 
+  // Проверяем, что каждый .ts/.tsx-модуль в src/ имеет паспорт @module в шапке
+  const allSrcFiles = walkTs(resolve(root, "src"), true);
+  for (const file of allSrcFiles) {
+    const head = readFileSync(file, "utf8").slice(0, 600);
+    if (!head.includes("@module ")) {
+      fail(`файл \`${relative(root, file).replace(/\\/g, "/")}\` не содержит паспорт @module в шапке`);
+    }
+  }
+
   // Проверяем, что заявленное в HANDOFF.md число автотестов совпадает с фактическим
   const countMatch = handoffDisk.match(/\|\s*Тесты ядра\s*\|\s*(\d+)\s+автотест/);
   if (!countMatch || Number(countMatch[1]) !== results.length) {
@@ -171,7 +180,9 @@ try {
       `число автотестов в HANDOFF.md (${countMatch ? countMatch[1] : "не найдено"}) != фактическому (${results.length})`
     );
   }
-  console.log(`GATE 3/4 · Документация (${REQUIRED_DOCS.length} файлов, HANDOFF синхронен, пути и счётчики верны): OK`);
+  console.log(
+    `GATE 3/4 · Документация (${REQUIRED_DOCS.length} доков, ${allSrcFiles.length} @module, HANDOFF/пути/якоря/счётчики): OK`
+  );
 
   // ───────── GATE 4: Автономность прод-бандла dist/index.html ─────────
   const distHtml = resolve(root, "dist/index.html");

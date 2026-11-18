@@ -1,3 +1,9 @@
+/**
+ * @module sim/selfTest
+ * @layer pure-core
+ * @role Главный набор и раннер автотестов чистого ядра (`runAllSelfTests`: T01–T16, T18, T20, T21 + `extraCases`).
+ * @invariants #7 (исполняется и в чистом Node.js, и в браузере без DOM/Three.js).
+ */
 import { summarizeAttempts, attemptsToCsv, studentOf } from "../analytics/summary";
 import {
   DECISIONS,

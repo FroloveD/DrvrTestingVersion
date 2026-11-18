@@ -1,3 +1,9 @@
+/**
+ * @module components/StrategyView
+ * @layer ui
+ * @role Вкладка «План и стратегия»: принципы, дорожная карта, приоритеты, журнал решений, чек-лист действий и экспорт `strategy.md`.
+ * @tests T20 (`src/sim/selfTest.ts`), смоук A (`tests/browser-smoke.mjs`)
+ */
 import { useMemo, useState } from "react";
 import {
   DECISIONS,
@@ -88,7 +94,7 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
           </div>
           <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2.5">
             {[
-              "Детерминированное ядро: 25/25 автотестов, реплей совпадает побитно",
+              "Детерминированное ядро: 26/26 автотестов, реплей совпадает побитно",
               "Офлайн-бандл без внешних запросов, холодный старт P и блокировки АКПП",
               "Правила как данные, golden-набор с checksum, сверка с инструкторами (ДИ Уилсона)",
               "Город: OSM, светофоры, стоп-линии, пешеходы и маршруты по реальной улице",

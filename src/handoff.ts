@@ -48,8 +48,8 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 25 автотестов ядра (T01–T25), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
-L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–N, ~100 проверок (Playwright + headless Chromium) |");
+L.push("| Тесты ядра | 26 автотестов ядра (T01–T26), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–N, ~100 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
 L.push("| Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |");
@@ -118,7 +118,7 @@ L.push("| `src/sim/step.ts` | единственный шаг физики и д
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 25 автотестов ядра (T01–T25) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 26 автотестов ядра (T01–T26) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts` | офлайн-парсер OSM JSON и GeoJSON, атрибуция ODbL |");
 L.push("| `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |");
@@ -126,7 +126,7 @@ L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `ba
 L.push("| `src/scenarios/custom.ts` | «Свой сценарий»: схема, валидация, 2D-схема, авто-припаркованные авто |");
 L.push("| `src/render/sceneController.ts` | весь Three.js: сцена, машина, зеркальные камеры, dispose (якоря `[SEC:...]`) |");
 L.push("| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |");
-L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сверка вердиктов (ДИ Уилсона) |");
+L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |");
 L.push("| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |");
 L.push("| `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, экспорт strategy.md |");
 L.push("| `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |");

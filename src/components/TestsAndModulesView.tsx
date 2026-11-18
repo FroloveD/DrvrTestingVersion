@@ -1,3 +1,9 @@
+/**
+ * @module components/TestsAndModulesView
+ * @layer ui
+ * @role Вкладка «Тесты и Модули»: запуск автотестов ядра в браузере, карта модулей, выгрузка `HANDOFF.md` и шаблоны CI/Tauri.
+ * @tests Смоук A, N (`tests/browser-smoke.mjs`)
+ */
 import { useEffect, useState } from "react";
 import { runAllSelfTests, type TestCaseResult } from "../sim/selfTest";
 import { HANDOFF_FILE, HANDOFF_MARKDOWN, HANDOFF_PROMPT } from "../handoff";
@@ -78,9 +84,9 @@ const MODULE_MAP = [
   },
   {
     path: "src/analytics/summary.ts",
-    role: "Статистика учеников и CSV",
+    role: "Статистика учеников, CSV и Markdown",
     replaces: "Только мгновенный балл без истории",
-    guarantees: "Доля сдавших, топ нарушений, успеваемость по ученикам, CSV для Excel",
+    guarantees: "Доля сдавших, топ нарушений, успеваемость по ученикам, CSV для Excel и сводный отчёт .md",
   },
   {
     path: "src/strategy/plan.ts",
