@@ -114,6 +114,25 @@ export function CopyButton({
   );
 }
 
+/** Выгрузка произвольного текста (Markdown, CSV, конфиг) — без обёртки в JSON. */
+export function downloadText(
+  filename: string,
+  text: string,
+  onDone?: (msg: string) => void,
+  mime = "text/markdown;charset=utf-8"
+): void {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  onDone?.(`Файл ${filename} сохранён`);
+}
+
 export function downloadJson(filename: string, data: unknown, onDone?: (msg: string) => void): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);

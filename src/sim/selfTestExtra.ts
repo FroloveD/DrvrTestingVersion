@@ -11,6 +11,7 @@ import {
 } from "../input/gamepad";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
+import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
@@ -339,6 +340,55 @@ export const extraCases: SelfTestCase[] = [
       const fixed = replayInputStream([{ count: 240, input: inp, maxInnerWheelDeg: 33 }], world, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
       assert(Math.abs(fixed.finalState.h - state.h) > 0.01, "Настройка должна менять движение, а не только визуальные колёса");
       return "240 тиков: 33° → 42° → 37,5° · 3 блока RLE · поза совпала точно";
+    },
+  },
+  {
+    id: "T25",
+    suite: "controls",
+    name: "Блокировки АКПП/стартера и старт на маршруте: аварийка не заменяет поворотник",
+    fn: () => {
+      // 1. Блокировки селектора АКПП и запуска двигателя (src/sim/controls.ts)
+      assert(checkGearChange({ gear: "D", engineOn: true }, 1.2, "P") !== null, "P на ходу должен блокироваться");
+      assert(checkGearChange({ gear: "R", engineOn: true }, -(PARK_LOCK_MAX_SPEED_MS + 0.05), "P") !== null, "P при откате назад должен блокироваться");
+      assert(checkGearChange({ gear: "D", engineOn: true }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
+      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true }, 0, "D") === null, "Выход из P с запущенным ДВС разрешён");
+      assert(checkEngineToggle({ gear: "D", engineOn: false }) !== null, "Запуск ДВС в D запрещён");
+      assert(checkEngineToggle({ gear: "R", engineOn: false }) !== null, "Запуск ДВС в R запрещён");
+      assert(checkEngineToggle({ gear: "P", engineOn: false }) === null && checkEngineToggle({ gear: "N", engineOn: false }) === null, "Запуск ДВС в P и N разрешён");
+      assert(checkEngineToggle({ gear: "D", engineOn: true }) === null, "Заглушить ДВС можно в любом режиме");
+
+      // 2. Детектор начала движения на маршруте: null и hazard дают no_turn_signal, left и right — нет
+      const routeWorld = {
+        ...buildScenarioWorld("city_osm", DEFAULT_CALIBRATION),
+        obstacles: [],
+        signals: [],
+        crosswalks: [],
+      };
+      const grid = new SpatialGrid([], 10);
+      const startWithSignal = (signal: "left" | "right" | "hazard" | null): SimEvent[] => {
+        let s = createInitialState(routeWorld, true);
+        const events: SimEvent[] = [];
+        const inp = { ...createReadyInput("D"), throttle: 0.7, signal };
+        for (let t = 0; t < 60; t++) {
+          const out = stepSimulation(s, inp, routeWorld, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+          s = out.state;
+          events.push(...out.newEvents);
+        }
+        assert(s.hasMoved, "Машина должна набрать > 1,2 км/ч за 1 с");
+        return events.filter((e) => e.code === "no_turn_signal");
+      };
+
+      const noSig = startWithSignal(null);
+      const hazSig = startWithSignal("hazard");
+      const leftSig = startWithSignal("left");
+      const rightSig = startWithSignal("right");
+      assert(noSig.length === 1, `Без поворотника ожидалась 1 ошибка no_turn_signal, получено ${noSig.length}`);
+      assert(hazSig.length === 1 && hazSig[0].detail.includes("аварийной"), "Аварийка (Z) на старте должна фиксироваться как no_turn_signal");
+      assert(leftSig.length === 0 && rightSig.length === 0, "Левый (Q) и правый (E) поворотники разрешают начало движения");
+
+      return "АКПП: P на ходу и выход из P без ДВС заблокированы · стартер только P/N · старт: hazard → ошибка, Q/E → OK";
     },
   },
 ];

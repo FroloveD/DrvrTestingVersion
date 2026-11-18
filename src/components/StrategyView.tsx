@@ -10,7 +10,7 @@ import {
   strategyToMarkdown,
   type PhaseStatus,
 } from "../strategy/plan";
-import { Chip, CopyButton, downloadJson, Icon } from "./Icons";
+import { Chip, CopyButton, downloadText, Icon } from "./Icons";
 
 const STATUS_META: Record<PhaseStatus, { label: string; tone: "mint" | "amber" | "neutral"; icon: string }> = {
   done: { label: "завершена", tone: "mint", icon: "check" },
@@ -58,7 +58,7 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
           <button
             type="button"
             className="btn btn-mini"
-            onClick={() => downloadJson("strategy.md.txt", { markdown }, onNotify)}
+            onClick={() => downloadText("strategy.md", markdown, onNotify)}
           >
             <Icon name="download" size={13} /> strategy.md
           </button>
@@ -88,14 +88,14 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
           </div>
           <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2.5">
             {[
-              "Детерминированное ядро: 20/20 автотестов, реплей совпадает точно",
-              "Офлайн-бандл без внешних запросов, холодный старт P",
-              "Правила как данные, golden-набор с checksum",
-              "Город: OSM, светофоры, пешеходы, встречный трафик",
+              "Детерминированное ядро: 25/25 автотестов, реплей совпадает побитно",
+              "Офлайн-бандл без внешних запросов, холодный старт P и блокировки АКПП",
+              "Правила как данные, golden-набор с checksum, сверка с инструкторами (ДИ Уилсона)",
+              "Город: OSM, светофоры, стоп-линии, пешеходы и маршруты по реальной улице",
               "Конструктор «Свой сценарий» с валидацией и 2D-схемой",
-              "Журнал в IndexedDB, отчёты для автошколы, USB-руль",
-              "Правовые блоки: атрибуция ODbL, дисклеймер, удаление данных",
-              "Браузерный смоук A–J: заезд переживает вкладки и закрытие",
+              "Журнал в IndexedDB (до 300 заездов), статистика учеников, USB-руль и выворот 33–42°",
+              "Правовые блоки: атрибуция ODbL, дисклеймер, бэкап, удаление данных",
+              "Браузерный смоук A–N: заезд переживает вкладки, HANDOFF синхронен с UI",
             ].map((t, i) => (
               <div key={i} className="flex gap-2.5 text-[12px] leading-relaxed text-[#b9c9d3]">
                 <span className="text-[#52d6bd] mt-0.5">✓</span>

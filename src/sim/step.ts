@@ -1,3 +1,10 @@
+/**
+ * @module sim/step
+ * @layer pure-core
+ * @role Единственный чистый шаг физики автомобиля и детекторов экзаменационных событий (`stepSimulation`, `dt = 1/60` с).
+ * @invariants #1–#7, #10–#11, #15 (детерминизм, холодный старт P, S не даёт реверс в D, аварийка не заменяет Q/E на старте).
+ * @tests T01, T03, T04, T08, T10, T15, T22, T24, T25
+ */
 import type { RuleSet } from "../scoring/rules";
 import { findBayLineCross, findBayUnderCarCenter, findCompletedBay, SpatialGrid } from "./spatialGrid";
 import type {
@@ -338,9 +345,14 @@ export function stepSimulation(
     if (!s.hasMoved) {
       s.hasMoved = true;
       const isRoute = world.scenarioId === "city_osm" || world.checkpoints.length > 0;
-      if (isRoute && !s.signal && !s.movedWithoutSignalFlagged) {
+      if (isRoute && s.signal !== "left" && s.signal !== "right" && !s.movedWithoutSignalFlagged) {
         s.movedWithoutSignalFlagged = true;
-        emit("no_turn_signal", "Начало движения на маршруте без включения левого указателя поворота (Q)");
+        emit(
+          "no_turn_signal",
+          s.signal === "hazard"
+            ? "Начало движения на маршруте с аварийной сигнализацией (Z) вместо указателя поворота (Q/E)"
+            : "Начало движения на маршруте без включения указателя поворота (Q/E)"
+        );
       }
     }
     if (!s.belt && !s.movedWithoutBeltFlagged) {

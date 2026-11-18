@@ -9,14 +9,14 @@
 ```text
 Продолжаем CityDrivingTraining — офлайн 3D-тренажёр вождения (React 19 + Vite + Three.js 0.187, всё в одном dist/index.html).
 
-Прочитай HANDOFF.md в корне репозитория целиком: там карта модулей, инварианты, точные команды проверки и открытые задачи.
+Прочитай целиком AGENTS.md, HANDOFF.md и WORKLOG.md в корне репозитория (при работе с ядром и рендером — docs/ARCHITECTURE.md и docs/ADR.md).
 
 Обязательный гейт перед любым ответом:
   npx tsc --noEmit
   ./node_modules/.bin/esbuild src/sim/selfTest.ts --bundle --platform=node --format=esm --outfile=/tmp/st.mjs --log-level=error && node --input-type=module -e "const {runAllSelfTests}=await import('/tmp/st.mjs');const r=runAllSelfTests();console.log(r.filter(t=>!t.passed));if(r.some(t=>!t.passed))process.exit(1)"
-  npm run build
+  npm run build && node scripts/run-tests.mjs --check-dist
 
-Правила работы: правки точечные; src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy — без импортов three, window и document; ничего не загружаем из сети; правила оценки и размеры боксов не выдаём за норматив ГИБДД (статус unvalidated до подписи инструктора); package.json и vite.config.ts руками не правим.
+Правила работы: правки точечные; src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy — без импортов three, window и document; ничего не загружаем из сети; правила оценки и размеры боксов не выдаём за норматив ГИБДД (статус unvalidated до подписи инструктора); package.json и vite.config.ts руками не правим; после каждого шага обновляем WORKLOG.md.
 
 Задача: <опиши задачу>
 ```
@@ -30,10 +30,11 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты в браузере | 24 автотеста ядра (T01–T24), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–M, ~94 проверки (Playwright + headless Chromium) |
+| Тесты ядра | 25 автотестов ядра (T01–T25), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–N, ~100 проверок (Playwright + headless Chromium) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
+| Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
 
 Ядро детерминированное: шаг 1/60 с, одинаковый ввод даёт одинаковый заезд при 30 и 144 FPS,
 поэтому реплей, golden-набор и автотесты работают без браузера.
@@ -62,10 +63,13 @@ const r=runAllSelfTests();console.log(r.filter(t=>!t.passed));if(r.some(t=>!t.pa
 ! grep -rlE "from ['\"]three|window\.|document\." \
   src/sim src/scoring src/maps src/scenarios src/analytics src/storage src/strategy
 
-# 4. Сборка и автономность бандла
+# 4. Сборка, автономность бандла и синхронность документации
 npm run build
 ! grep -Eq '<(script|link)[^>]+(src|href)="https?://' dist/index.html
+node scripts/run-tests.mjs --check-dist   # единый раннер шагов 2–4 + проверка HANDOFF.md и docs/
 ```
+
+Если менялся `src/handoff.ts`, перед гейтом пересобери корневой файл: `node scripts/write-handoff.mjs`.
 
 Браузерный смоук (нужен, если меняли HUD, раскладку, зеркала, педали, журнал или реплей):
 
@@ -88,33 +92,37 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 |---|---|
 | `src/sim/types.ts` | контракты: InputState, SimState, WorldData, SimEvent, CalibrationConfig |
 | `src/sim/vehicle.ts` | Kia Ceed: база 2,65 м, колея 1,57 м, Аккерман, выворот 33–42°, АКПП, фазы светофора, пешеход |
+| `src/sim/controls.ts` | чистые блокировки АКПП (`checkGearChange`) и стартера (`checkEngineToggle`) |
 | `src/sim/spatialGrid.ts` | сетка 10 м, OBB через SAT, insideBay, findBayLineCross, правый борт |
 | `src/sim/step.ts` | единственный шаг физики и детекторов; чистая функция, dt = 1/60 |
-| `src/sim/recorder.ts` | RLE-запись ввода, снапшот попытки, replayInputStream |
-| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, перенос старого журнала |
-| `src/sim/golden.ts` | FNV-1a checksum, golden-набор для сверки с инструктором |
-| `src/sim/selfTest.ts`, `selfTestExtra.ts` | 24 автотеста ядра |
+| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
+| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
+| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 25 автотестов ядра (T01–T25) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
 | `src/maps/osmLoader.ts` | офлайн-парсер OSM JSON и GeoJSON, атрибуция ODbL |
 | `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |
-| `src/scenarios/catalog.ts` | bay_90, parallel_v2, city_osm |
+| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
 | `src/scenarios/custom.ts` | «Свой сценарий»: схема, валидация, 2D-схема, авто-припаркованные авто |
-| `src/render/sceneController.ts` | весь Three.js: сцена, машина, зеркальные камеры, dispose |
-| `src/input/gamepad.ts`, `browserGamepads.ts` | калибровка USB-руля и чтение Gamepad API |
-| `src/analytics/summary.ts`, `calibration.ts` | статистика учеников, CSV, сверка вердиктов |
-| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), деградация без падения |
-| `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, strategy.md |
-| `src/components/*` | вкладки и плавающие панели HUD |
-| `src/handoff.ts` | этот документ (генерирует HANDOFF.md) |
+| `src/render/sceneController.ts` | весь Three.js: сцена, машина, зеркальные камеры, dispose (якоря `[SEC:...]`) |
+| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
+| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сверка вердиктов (ДИ Уилсона) |
+| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |
+| `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, экспорт strategy.md |
+| `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
+| `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
+| `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–N |
+| `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
 
 Проверяются автотестами; если задача требует изменить инвариант — сначала спроси пользователя.
 
 1. **Координаты**: +Z вперёд, +X — левый борт, −X — правый, положительный heading — поворот влево.
-2. **Поворотники**: Q — левый, E — правый, Z — аварийка; цикл 700 мс, фаза считается от model time.
+2. **Поворотники**: Q — левый, E — правый, Z — аварийка; цикл 700 мс от model time. При начале движения на маршруте аварийка не заменяет Q/E.
 3. **Педали**: W — газ, S — тормоз. В D тормоз гасит скорость до 0 и никогда не даёт реверс.
-4. **КПП**: P / R / N / D (F). P механически блокирует движение; запуск ДВС разрешён только из P или N.
+4. **КПП**: P / R / N / D (F). P блокирует движение и включается только на остановке; выход из P — при запущенном ДВС; запуск ДВС — только из P или N (`src/sim/controls.ts`).
 5. **Холодный старт**: ДВС заглушен, КПП в P, ручник затянут, ремень снят — при открытии и после «Сброс».
 6. **Фиксированный шаг** 1/60 с с аккумулятором; рендер интерполирует, физика — нет.
 7. **Чистое ядро**: в sim/scoring/maps/scenarios/analytics/storage/strategy запрещены three, window, document.
@@ -144,16 +152,18 @@ cdt.controls.v1         скорость руления с клавиатуры
 cdt.calibration.v1      размеры боксов, выворот колёс, табличка «У»
 cdt.ruleset.v1          активный набор правил
 cdt.customScenario.v1   свой сценарий
-cdt.gamepad.profile.v2  включённые устройства, оси, мёртвые зоны
-cdt.gamepad.mapping.v1  результаты калибровки по шагам
+cdt.gamepad.profile.v2  включённое устройство, откалиброванные оси/педали, мёртвые зоны
 cdt.activeStudent.v1    активный ученик в кабинете инструктора
 cdt.instructorName.v1   имя инструктора для сверки
 cdt.blindReview.v1      слепой режим: вердикты скрыты до оценки
 cdt.strategy.v1         прогресс по следующим действиям стратегии
 cdt.licenseNote.v1      решение владельца по лицензии
+cdt-checklist-v1        чек-лист исторического аудита (AuditView)
 cdt.attempts.journal.v1 устаревший ключ: переносится в IndexedDB и удаляется
+cdt.gamepad.mapping.v1  устаревший ключ: удаляется при чтении профиля (заменён на cdt.gamepad.profile.v2)
 ```
 
+Форматы выгружаемых JSON-файлов: `cdt.golden.v1` (golden-набор с FNV-1a checksum) и `cdt.backup.v1` (полная резервная копия кабинета).
 Все обращения к хранилищу — в try/catch: приватный режим или переполнение квоты не должны ронять заезд.
 
 ## 6. Чего не делать
@@ -185,23 +195,24 @@ cdt.attempts.journal.v1 устаревший ключ: переносится в
 
 ## 8. Как принимать задачу
 
-1. Прочитать этот документ и затронутые модули целиком — не по памяти.
-2. Если решение спорное, зафиксировать его одной строкой в журнале решений (`src/strategy/plan.ts`).
+1. Прочитать `AGENTS.md`, этот документ, `WORKLOG.md` и затронутые модули целиком — не по памяти.
+2. Архитектурное решение зафиксировать в `docs/ADR.md` и одной строкой в `src/strategy/plan.ts`.
 3. Сначала контракт и тест: новое поведение покрыть кейсом в `selfTest*.ts` или проверкой в смоуке.
-4. Правки точечные, малыми порциями; не переписывать файл целиком без необходимости.
-5. Прогнать гейт из раздела 2; при изменениях HUD — ещё и смоук.
-6. В ответе: что сделано, что проверено автоматически, что нужно проверить руками, какие остались долги.
+4. Правки точечные, малыми порциями; в крупных файлах ориентироваться по якорям `[SEC:...]`.
+5. При изменении модулей/инвариантов/ключей обновить `src/handoff.ts` (`node scripts/write-handoff.mjs`) и `docs/ARCHITECTURE.md`.
+6. Обновить `WORKLOG.md` (статус, точка остановки, следующие шаги, техдолг `TD-*`), прогнать гейт из раздела 2 (и смоук при правках HUD).
+7. В ответе: что сделано, что проверено автоматически, что нужно проверить руками, какие остались долги.
 
 ## 9. Что не проверено и известные долги
 
-- Реальный USB-руль и педали не подключались: адаптер испытан на подставном устройстве через Gamepad API.
-- Tauri-сборка не выполнялась: в этой среде Windows-оболочку не собрать и не проверить.
-- Правила оценки и размеры боксов не подтверждены инструктором — статус `unvalidated`.
-- Встроенный городской пакет — учебная схема квартала, а не выгрузка конкретного города.
-- `TabId` в `src/App.tsx` содержит значение `strategy`, которое больше не рендерится (стратегия объединена
-  с вкладкой «План и стратегия»): можно убрать при следующей правке файла.
-- Зеркала обновляются с троттлингом (заднее каждый 2-й кадр, боковые каждый 3-й) — на слабом GPU это
-  осознанный компромисс в пользу FPS основного вида.
+Полный живой реестр техдолга со статусами ведётся в `WORKLOG.md` (раздел 4). Ключевые ограничения:
+
+- Реальный USB-руль и педали не подключались (`TD-09`): адаптер испытан на подставном устройстве через Gamepad API.
+- Tauri-сборка не выполнялась (`TD-10`): Windows-оболочку нужно собрать и проверить в целевой ОС.
+- Правила оценки и размеры боксов не подтверждены инструктором (`TD-07`) — статус `unvalidated` (протокол сверки: `docs/CALIBRATION_GUIDE.md`).
+- Файл `LICENSE` и условия распространения ждут решения владельца (`TD-08`).
+- Встроенный городской пакет — учебная схема квартала, трафик пока статичный (`TD-11`, см. `ADR-009` в `docs/ADR.md`).
+- Зеркала обновляются с троттлингом (заднее каждый 2-й кадр, боковые каждый 3-й, `TD-06`) — осознанный компромисс в пользу FPS.
 
 ## 10. Стиль
 
