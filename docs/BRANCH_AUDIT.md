@@ -134,4 +134,22 @@
 1. **Паспорт модуля** в шапке каждого файла `src/**` (5–8 строк): назначение, слой (`pure-core` / `input` / `three-render` / `ui`), ключевые инварианты, покрывающие тесты (`T01…T24` / смоук `A…N`).
 2. **Секционные якоря** `// === [SEC:имя] Описание ===` в файлах >400 строк (`SimulatorView.tsx`, `sceneController.ts`, `DebriefView.tsx`, `CustomScenarioView.tsx`) с оглавлением в шапке файла.
 3. **JSDoc на публичных типах и функциях ядра** с единицами измерения (`м`, `м/с`, `км/ч`, `рад`, `°`, `с`) и знаками осей (`+Z` вперёд, `+X` влево, `+h` влево).
-4. **Автоматический гейт документации** в `scripts/run-tests.mjs` и CI: проверка чистоты всех 7 каталогов ядра, прогон `runAllSelfTests()`, сверка `HANDOFF.md` с `src/handoff.ts`, проверка существования всех путей из карты модулей и автономности `dist/index.html`.
+4. **Автоматический гейт документации** в `scripts/run-tests.mjs` и CI: проверка чистоты всех 7 каталогов ядра, прогон `runAllSelfTests()`, сверка `HANDOFF.md` с `src/handoff.ts`, проверка существования всех путей из карты модулей, проверка секционных якорей `[SEC:...]` и автономности `dist/index.html`.
+
+---
+
+## 5. Итог выполнения в ветке `arena/1f511675-drvrtestingversion` (2026-11-18)
+
+Все три согласованные итерации выполнены:
+
+1. **Консолидация веток в рабочую ветку:**
+   - перенесены все недостающие файлы и изменения из `origin/Arena_v2` (`src/handoff.ts`, `scripts/write-handoff.mjs`, `downloadText` в `src/components/Icons.tsx`, блок передачи контекста и актуальные шаблоны в `src/components/TestsAndModulesView.tsx`, смоук-сценарий `N` в `tests/browser-smoke.mjs`);
+   - перенесены ценные наработки из `origin/main`: чистые блокировки АКПП и стартера (`src/sim/controls.ts`), запрет трогания на маршруте с аварийкой (`Z`) вместо указателя поворота (`src/sim/step.ts`) и актуализированный русский справочник в `src/sim/vehicle.ts`; добавлен автотест `T25` (теперь `25/25`).
+2. **Пакет документации и автогейт:**
+   - созданы `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/ADR.md` (`ADR-001`–`ADR-012`), `docs/CALIBRATION_GUIDE.md`; перегенерирован `HANDOFF.md`;
+   - закрыты рассинхроны в `src/strategy/plan.ts`, `src/components/StrategyView.tsx`, `src/data.ts`, `src/App.tsx`;
+   - обновлён `scripts/run-tests.mjs` (4 автоматических гейта) и настроены `.github/workflows/ci.yml` + `.github/workflows/deploy.yml` (без UTF-8 BOM).
+3. **Самодокументируемый код:**
+   - добавлены паспорта `@module` во все модули ядра и ввода, а также оглавления и секционные якоря `[SEC:...]` в `SimulatorView.tsx`, `sceneController.ts`, `DebriefView.tsx`, `CustomScenarioView.tsx`.
+4. **Что осталось для окончательной уборки веток (`TD-17`):**
+   - влить `arena/1f511675-drvrtestingversion` в `Arena_v1` через PR, затем актуализировать `main` (для рабочего деплоя GitHub Pages) и заархивировать дублирующую ветку `Arena_v2` тегом.
