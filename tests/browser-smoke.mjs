@@ -824,8 +824,12 @@ try {
   await page.getByTestId("editor-tool-sign").click();
   await page.getByTestId("palette-sign-give_way").click();
   const canvas = page.getByTestId("map-editor-canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  await sleep(150);
   const cBox = await canvas.boundingBox();
-  await page.mouse.click(cBox.x + cBox.width * 0.62, cBox.y + cBox.height * 0.45);
+  await canvas.click({
+    position: { x: Math.round(cBox.width * 0.62), y: Math.round(cBox.height * 0.45) },
+  });
   await sleep(250);
   const signsAfter = await page.locator('[data-testid^="map-sign-"]').count();
   check("O2 новый дорожный знак ставится кликом на 2D-карту",
@@ -833,20 +837,23 @@ try {
 
   // 3. Перетаскиваем новый знак мышью в режиме «Выбор / Перенос» и проверяем смену координат + Undo
   await page.getByTestId("editor-tool-select").click();
+  await canvas.scrollIntoViewIfNeeded();
+  await sleep(150);
   const newSign = page.locator('[data-testid^="map-sign-sign-give_way"]').first();
+  await newSign.scrollIntoViewIfNeeded();
   const beforeTf = await newSign.getAttribute("transform");
   const sBox = await newSign.boundingBox();
   await page.mouse.move(sBox.x + sBox.width / 2, sBox.y + sBox.height / 2);
   await page.mouse.down();
   await page.mouse.move(sBox.x + sBox.width / 2 + 55, sBox.y + sBox.height / 2 - 40, { steps: 6 });
   await page.mouse.up();
-  await sleep(200);
+  await sleep(250);
   const afterTf = await newSign.getAttribute("transform");
   check("O3 дорожный знак перетаскивается мышью на 2D-карте",
     Boolean(beforeTf && afterTf && beforeTf !== afterTf), `${beforeTf} -> ${afterTf}`);
 
   await page.getByRole("button", { name: /Отмена \(/ }).click();
-  await sleep(150);
+  await sleep(200);
   const undoneTf = await newSign.getAttribute("transform");
   check("O4 отмена действия (Undo) возвращает знак на прежнее место",
     undoneTf === beforeTf, `${undoneTf} vs ${beforeTf}`);

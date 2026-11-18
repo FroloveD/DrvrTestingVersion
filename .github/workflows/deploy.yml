@@ -71,7 +71,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
           keep_files: true
-          commit_message: "deploy(root): ${GITHUB_REF_NAME}@${GITHUB_SHA}"
+          commit_message: "deploy(root): ${{ github.ref_name }}"
 
       - name: Deploy branch build to /${{ steps.target.outputs.dir }}/
         if: steps.target.outputs.dir != ''
@@ -80,7 +80,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
           destination_dir: ${{ steps.target.outputs.dir }}
-          commit_message: "deploy(${{ steps.target.outputs.dir }}): ${GITHUB_REF_NAME}@${GITHUB_SHA}"
+          commit_message: "deploy(${{ steps.target.outputs.dir }}): ${{ github.ref_name }}"
 
       - name: Write Pages URL to job summary
         run: |
