@@ -48,8 +48,8 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 26 автотестов ядра (T01–T26), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
-L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–N, ~100 проверок (Playwright + headless Chromium, автозапуск в CI) |");
+L.push("| Тесты ядра | 29 автотестов ядра (T01–T29), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–O, >105 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
 L.push("| Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |");
@@ -118,13 +118,14 @@ L.push("| `src/sim/step.ts` | единственный шаг физики и д
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 26 автотестов ядра (T01–T26) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 29 автотестов ядра (T01–T29) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
-L.push("| `src/maps/osmLoader.ts` | офлайн-парсер OSM JSON и GeoJSON, атрибуция ODbL |");
+L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер `.osm` XML, Overpass JSON и GeoJSON (дороги, здания, знаки, заборы, деревья), ODbL |");
 L.push("| `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |");
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
-L.push("| `src/scenarios/custom.ts` | «Свой сценарий»: схема, валидация, 2D-схема, авто-припаркованные авто |");
-L.push("| `src/render/sceneController.ts` | весь Three.js: сцена, машина, зеркальные камеры, dispose (якоря `[SEC:...]`) |");
+L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
+L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |");
+L.push("| `src/render/sceneController.ts`, `src/render/roadSignTextures.ts` | весь Three.js: сцена, машина, процедурные текстуры 12 знаков, зеркала, dispose (`[SEC:...]`) |");
 L.push("| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |");
 L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |");
 L.push("| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |");
@@ -132,7 +133,7 @@ L.push("| `src/strategy/plan.ts` | фазы, принципы, приорите�
 L.push("| `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |");
 L.push("| `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |");
 L.push("| `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |");
-L.push("| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–N |");
+L.push("| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–O |");
 L.push("| `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |");
 L.push("");
 

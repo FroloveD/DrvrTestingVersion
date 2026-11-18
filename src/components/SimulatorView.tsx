@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
-import { parseOsmOrGeoJson, type NormalizedOsmPack } from "../maps/osmLoader";
+import { parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
 import { streetNameAt } from "../maps/route";
 import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { buildScenarioWorld } from "../scenarios/catalog";
@@ -940,19 +940,19 @@ export function SimulatorView({
     }
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
-      const pack = parseOsmOrGeoJson(parsed, `OSM: ${file.name.replace(/\.(geo)?json$/i, "")}`);
+      const { pack } = parseMapFileText(text, file.name);
       if (pack.roads.length === 0) {
         onNotify("В файле не найдено дорог с тегом highway");
         return;
       }
       onCustomOsmChange(pack);
       onScenarioChange("city_osm");
+      const signsPart = pack.signs.length > 0 ? `, знаков ${pack.signs.length}` : "";
       onNotify(
-        `Загружен пакет: дорог ${pack.meta.roadsCount}, зданий ${pack.meta.buildingsCount}, светофоров ${pack.meta.signalsCount}`
+        `Загружен пакет: дорог ${pack.meta.roadsCount}, зданий ${pack.meta.buildingsCount}, светофоров ${pack.meta.signalsCount}${signsPart}`
       );
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : "Ошибка разбора OSM/GeoJSON-файла");
+      onNotify(err instanceof Error ? err.message : "Ошибка разбора файла карты (.osm / JSON / GeoJSON)");
     }
   };
 
@@ -992,7 +992,7 @@ export function SimulatorView({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".json,.geojson,application/json"
+          accept=".osm,.xml,.json,.geojson,application/json,application/xml,text/xml"
           className="hidden"
           onChange={handleOsmFile}
         />
@@ -1000,7 +1000,7 @@ export function SimulatorView({
           type="button"
           className="btn btn-mini"
           onClick={() => fileInputRef.current?.click()}
-          title="Импорт локального Overpass OSM JSON или GeoJSON (до 30 МБ, офлайн)"
+          title="Импорт локального .osm XML, Overpass OSM JSON или GeoJSON (до 30 МБ, офлайн)"
         >
           <Icon name="upload" size={13} /> OSM / GeoJSON
         </button>

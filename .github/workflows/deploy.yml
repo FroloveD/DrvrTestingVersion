@@ -2,15 +2,23 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - Arena_v1
+      - "arena/**"
+      - GemCommits
+  workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
+
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
+    name: Build, Verify & Deploy to gh-pages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +34,58 @@ jobs:
         run: npm run build
       - name: Verify core tests, architecture boundaries, docs & offline bundle
         run: node scripts/run-tests.mjs --check-dist
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+
+      - name: Resolve target subfolder on gh-pages
+        id: target
+        run: |
+          BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+          case "${GITHUB_REF}" in
+            refs/heads/main)
+              DIR=""
+              URL="${BASE_URL}/"
+              ;;
+            refs/heads/Arena_v1)
+              DIR="v1"
+              URL="${BASE_URL}/v1/"
+              ;;
+            refs/heads/arena/*)
+              DIR="arena"
+              URL="${BASE_URL}/arena/"
+              ;;
+            refs/heads/GemCommits)
+              DIR="preview"
+              URL="${BASE_URL}/preview/"
+              ;;
+            *)
+              echo "Unsupported ref for Pages deploy: ${GITHUB_REF}" >&2
+              exit 1
+              ;;
+          esac
+          echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy main to Pages root (preserving subfolders)
+        if: steps.target.outputs.dir == ''
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: dist
-      - uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          keep_files: true
+          commit_message: "deploy(root): ${{ github.ref_name }}"
+
+      - name: Deploy branch build to /${{ steps.target.outputs.dir }}/
+        if: steps.target.outputs.dir != ''
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          destination_dir: ${{ steps.target.outputs.dir }}
+          commit_message: "deploy(${{ steps.target.outputs.dir }}): ${{ github.ref_name }}"
+
+      - name: Write Pages URL to job summary
+        run: |
+          {
+            echo "### GitHub Pages Deployment"
+            echo "- **Branch:** \`${GITHUB_REF_NAME}\` (\`${GITHUB_SHA:0:7}\`)"
+            echo "- **URL:** ${{ steps.target.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
