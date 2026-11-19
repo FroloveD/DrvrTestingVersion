@@ -11,6 +11,7 @@
  * - `[SEC:custom-forms]`   — инспектор выбранного объекта, реестр объектов, параметры карты и памятка импорта OSM.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BOUNDARY_SHAPE_PRESETS, polygonArea, type BoundaryShapePreset } from "../maps/boundary";
 import {
   buildCityOsmScenario,
   buildParallelScenario,
@@ -26,6 +27,9 @@ import {
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  applyPresetBoundaryShape,
+  clearBoundaryPolygon,
+  setCustomBoundaryPolygon,
   attachCheckpointToSign,
   createEditorHistory,
   deleteSelected,
@@ -56,6 +60,7 @@ import type {
   ParkedModelKey,
   ParkingBayKind,
   RoadSignKind,
+  Vec2,
 } from "../sim/types";
 import { VEHICLE_DIMS } from "../sim/vehicle";
 import { Chip, downloadJson, Icon } from "./Icons";
@@ -140,6 +145,7 @@ function TextField({
 const TOOL_BUTTONS: Array<{ id: EditorTool; label: string; badge: string }> = [
   { id: "select", label: "Выбор / Перенос", badge: "↖" },
   { id: "pan", label: "Панорама", badge: "✥" },
+  { id: "boundary", label: "Форма площадки", badge: "⬠" },
   { id: "sign", label: "Дорожный знак", badge: "⊘" },
   { id: "signal", label: "Светофор", badge: "🚦" },
   { id: "crosswalk", label: "Переход", badge: "≡" },
@@ -198,6 +204,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const [snapStep, setSnapStep] = useState<number>(0.5);
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [fitSignal, setFitSignal] = useState<number>(0);
+  const [draftBoundary, setDraftBoundary] = useState<Vec2[]>([]);
 
   // Параметры добавляемого объекта в палитре
   const [signKind, setSignKind] = useState<RoadSignKind>("speed_limit");
@@ -344,6 +351,27 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     setSelection({ kind: "start" });
     onNotify(`Построен маршрут (${res.count} КТ)${res.roadName ? ` по «${res.roadName}»` : ""}`);
   };
+
+  const handleFinishBoundary = useCallback((points: Vec2[]) => {
+    const result = setCustomBoundaryPolygon(def, points);
+    if (!result.ok) { onNotify(result.error ?? "Не удалось применить контур"); return; }
+    commitChange(result.def, def);
+    setDraftBoundary([]); setTool("select"); setSelection({ kind: "boundary_point", index: 0 });
+    setFitSignal((n) => n + 1);
+    onNotify(`Задан контур площадки: ${result.def.boundaryPolygon?.length ?? 0} вершин, ${Math.round(polygonArea(result.def.boundaryPolygon ?? []))} м²`);
+  }, [commitChange, def, onNotify]);
+
+  const handlePresetBoundary = (preset: BoundaryShapePreset) => {
+    const result = applyPresetBoundaryShape(def, preset);
+    commitChange(result.def, def); setTool("boundary"); setSelection({ kind: "boundary_point", index: 0 });
+    setDraftBoundary([]); setFitSignal((n) => n + 1);
+    onNotify(`Форма площадки применена: ${result.vertices} вершин. Перетаскивай вершины для настройки.`);
+  };
+  const handleResetBoundary = () => {
+    commitChange(clearBoundaryPolygon(def), def); setSelection({ kind: "start" }); setDraftBoundary([]);
+    setFitSignal((n) => n + 1); onNotify("Произвольный контур сброшен");
+  };
+  const handleCancelBoundary = () => { setDraftBoundary([]); setTool("select"); };
 
   const handleFitBounds = () => {
     const fitted = fitBoundsToContent(def, 12);
@@ -859,6 +887,10 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           onSelect={setSelection}
           onLiveChange={onChange}
           onCommitChange={commitChange}
+          draftBoundary={draftBoundary}
+          onDraftBoundaryChange={setDraftBoundary}
+          onFinishBoundary={handleFinishBoundary}
+          onCancelBoundary={handleCancelBoundary}
         />
 
         {/* === [SEC:custom-forms] Инспектор выбранного объекта, реестр и параметры карты === */}
