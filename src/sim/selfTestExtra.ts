@@ -949,7 +949,7 @@ export const extraCases: SelfTestCase[] = [
         points: [{ x: 0, z: 0 }, { x: 0, z: 100 }],
         width: 8, lanes: 2, highway: "secondary", oneway: true,
       }], { x: 0, z: 60 }, { x: 0, z: 58 }, 10);
-      assert(!shortReverse.connected && shortReverse.wrongWay,
+      assert(!shortReverse.connected && Boolean(shortReverse.wrongWay),
         "Даже короткий путь против one-way на одном длинном сегменте должен блокироваться");
       assert(record.checkpoints.length >= 2 && record.checkpoints[record.checkpoints.length - 1]?.requireStop === true,
         "Нужны промежуточные КТ и финальная КТ с остановкой");
