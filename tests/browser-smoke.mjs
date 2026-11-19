@@ -1155,27 +1155,47 @@ try {
         await page.getByTestId("route-edit-button").first().click();
         await page.getByTestId("route-edit-title").fill("Маршрут P · редакция");
         await page.getByTestId("route-edit-checkpoint-0").fill("Проверить перекрёсток и выполнить задание инструктора.");
+        const marker = page.getByTestId("route-checkpoint-marker-0");
+        const initialPosition = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
+        const markerBox = await marker.boundingBox();
+        if (!markerBox) throw new Error("Маркер контрольной точки не имеет экранных координат");
+        await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(markerBox.x + markerBox.width / 2 + 5, markerBox.y + markerBox.height / 2 + 2, { steps: 3 });
+        await page.mouse.up();
+        const movedPosition = await until(async () => {
+          const position = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
+          return position.x !== initialPosition.x || position.y !== initialPosition.y ? position : null;
+        }, 3000, 100);
+        check("P5 маркер контрольной точки можно переместить мышью по карте", Boolean(movedPosition),
+          movedPosition ? JSON.stringify(movedPosition) : "координаты не изменились");
         await page.getByRole("button", { name: /Сохранить изменения/ }).click();
         const edited = await until(async () => (await low(page)).includes("маршрут p · редакция"), 5000, 100);
-        check("P5 редактор сохраняет название и задания контрольных точек", edited);
+        check("P6 редактор сохраняет название и задания контрольных точек", edited);
         await page.getByRole("button", { name: /Открыть/ }).first().click();
         const opened = await until(async () => {
           const body = await low(page);
           return body.includes("маршрут p · редакция") && body.includes("osm ·");
         }, 5000, 100);
-        check("P6 сохранённый маршрут открывается в 3D-тренажёре", opened);
+        check("P7 сохранённый маршрут открывается в 3D-тренажёре", opened);
         await tab(page, "Каталог маршрутов");
         await page.reload();
         await tab(page, "Каталог маршрутов");
         const restored = await until(async () => (await low(page)).includes("улица каталожная"), 5000, 100);
-        check("P7 маршрут сохраняется после перезагрузки", restored);
+        check("P8 маршрут сохраняется после перезагрузки", restored);
         await page.getByTestId("route-edit-button").first().click();
         const savedInstruction = await page.getByTestId("route-edit-checkpoint-0").inputValue();
-        check("P8 изменения контрольных точек переживают перезагрузку",
+        check("P9 изменения контрольных точек переживают перезагрузку",
           savedInstruction === "Проверить перекрёсток и выполнить задание инструктора.", savedInstruction);
+        const restoredPosition = await page.getByTestId("route-checkpoint-marker-0").evaluate((el) => ({
+          x: el.getAttribute("cx"), y: el.getAttribute("cy"),
+        }));
+        check("P10 новое положение контрольной точки переживает перезагрузку",
+          Boolean(movedPosition) && restoredPosition.x === movedPosition.x && restoredPosition.y === movedPosition.y,
+          JSON.stringify(restoredPosition));
       }
     }
-    check("P9 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    check("P11 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
   } catch (e) {
     check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));

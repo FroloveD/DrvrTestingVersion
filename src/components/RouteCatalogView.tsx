@@ -5,7 +5,7 @@
  * @tests T32–T33 (ядро маршрутизации), Browser Smoke P.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import {
   buildExamRouteRecord,
@@ -60,6 +60,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const [spacing, setSpacing] = useState(90);
   const [preview, setPreview] = useState<ReturnType<typeof buildExamRouteRecord> | null>(null);
   const [editing, setEditing] = useState<{ id: string; title: string; checkpoints: RouteCheckpoint[] } | null>(null);
+  const dragCheckpointRef = useRef<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const bounds = useMemo(() => mapBounds(sourceDef), [sourceDef]);
@@ -153,6 +154,37 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
         point.id === checkpointId ? { ...point, ...patch } : point
       ),
     } : current);
+  };
+
+  const handleCheckpointPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const marker = (event.target as Element).closest("[data-checkpoint-id]");
+    const checkpointId = marker?.getAttribute("data-checkpoint-id");
+    if (!checkpointId || !editing) return;
+    dragCheckpointRef.current = checkpointId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const handleCheckpointPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const checkpointId = dragCheckpointRef.current;
+    if (!checkpointId || !editing) return;
+    const matrix = event.currentTarget.getScreenCTM();
+    if (!matrix) return;
+    const point = event.currentTarget.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const local = point.matrixTransform(matrix.inverse());
+    patchEditingCheckpoint(checkpointId, {
+      x: Number(local.x.toFixed(2)),
+      z: Number((-local.y).toFixed(2)),
+    });
+  };
+
+  const handleCheckpointPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    dragCheckpointRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   const handleSaveEdit = async (route: ExamRouteRecord) => {
@@ -340,6 +372,42 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                       onChange={(event) => setEditing((current) => current ? { ...current, title: event.target.value } : current)}
                       className="field mt-1 w-full" />
                   </label>
+                  <div className="text-xs font-bold text-white">Положение контрольных точек на карте</div>
+                  <div className="rounded-xl overflow-hidden border border-white/10 bg-[#09131b]">
+                    <svg
+                      data-testid="route-checkpoint-map"
+                      viewBox={`${route.scenarioSnapshot.bounds.minX} ${-route.scenarioSnapshot.bounds.maxZ} ${route.scenarioSnapshot.bounds.maxX - route.scenarioSnapshot.bounds.minX} ${route.scenarioSnapshot.bounds.maxZ - route.scenarioSnapshot.bounds.minZ}`}
+                      preserveAspectRatio="xMidYMid meet"
+                      className="w-full h-[280px] touch-none"
+                      role="img"
+                      aria-label="Карта маршрута. Перетаскивайте маркеры контрольных точек."
+                      onPointerDown={handleCheckpointPointerDown}
+                      onPointerMove={handleCheckpointPointerMove}
+                      onPointerUp={handleCheckpointPointerUp}
+                      onPointerCancel={handleCheckpointPointerUp}
+                    >
+                      <rect x={route.scenarioSnapshot.bounds.minX} y={-route.scenarioSnapshot.bounds.maxZ}
+                        width={route.scenarioSnapshot.bounds.maxX - route.scenarioSnapshot.bounds.minX}
+                        height={route.scenarioSnapshot.bounds.maxZ - route.scenarioSnapshot.bounds.minZ} fill="#09131b" />
+                      {(route.scenarioSnapshot.roads ?? []).map((road) => (
+                        <polyline key={road.id} points={road.points.map((point) => `${point.x},${-point.z}`).join(" ")}
+                          fill="none" stroke="#355365" strokeWidth={Math.max(1.5, road.width)} strokeLinecap="round" strokeLinejoin="round" />
+                      ))}
+                      <polyline points={route.path.map((point) => `${point.x},${-point.z}`).join(" ")}
+                        fill="none" stroke="#f5b942" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                      {editing.checkpoints.map((checkpoint, index) => (
+                        <g key={checkpoint.id}>
+                          <circle data-checkpoint-id={checkpoint.id} data-testid={`route-checkpoint-marker-${index}`}
+                            cx={checkpoint.x} cy={-checkpoint.z} r={Math.max(5, checkpoint.radius)}
+                            fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
+                            stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }} />
+                          <text x={checkpoint.x + Math.max(7, checkpoint.radius)} y={-checkpoint.z - Math.max(7, checkpoint.radius)}
+                            fill="#ffffff" fontSize="12" fontWeight="bold" pointerEvents="none">{index + 1}</text>
+                        </g>
+                      ))}
+                    </svg>
+                  </div>
+                  <p className="text-[10px] text-[#8fa2ae]">Перетащите маркер КТ вдоль маршрута. При сохранении положение проверяется относительно границ карты и линии маршрута.</p>
                   <div className="text-xs font-bold text-white">Контрольные точки и задания</div>
                   {editing.checkpoints.map((checkpoint, index) => {
                     const isFinish = index === editing.checkpoints.length - 1;
