@@ -206,6 +206,9 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const [parkedModel, setParkedModel] = useState<ParkedModelKey>("rio");
   const [bayKind, setBayKind] = useState<ParkingBayKind>("perpendicular");
   const [placeHeadingDeg, setPlaceHeadingDeg] = useState<number>(0);
+  const [roadWidth, setRoadWidth] = useState<number>(7.5);
+  const [roundRoadCorners, setRoundRoadCorners] = useState<boolean>(false);
+  const [roadCornerRadius, setRoadCornerRadius] = useState<number>(8);
 
   // История отмен и фильтр реестра объектов
   const [history, setHistory] = useState(() => createEditorHistory<CustomScenarioDef>());
@@ -384,8 +387,10 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
       calibration,
       headingRad: degToRad(placeHeadingDeg),
       snapStep,
+      roadWidth,
+      cornerRadiusM: roundRoadCorners ? roadCornerRadius : 0,
     }),
-    [bayKind, calibration, obstacleKind, parkedModel, placeHeadingDeg, signKind, signSpeedLimit, snapStep]
+    [bayKind, calibration, obstacleKind, parkedModel, placeHeadingDeg, roadWidth, roundRoadCorners, roadCornerRadius, signKind, signSpeedLimit, snapStep]
   );
 
   return (
@@ -548,6 +553,20 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 </button>
               );
             })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-[#091017] border hairline px-3 py-2">
+            <label className="flex items-center gap-2 text-[11px] text-[#c3d2dc]">
+              <span>Ширина новой дороги, м</span>
+              <input aria-label="Ширина новой дороги" type="number" min="1.5" max="60" step="0.25" value={roadWidth} onChange={(e) => setRoadWidth(Math.max(1.5, Math.min(60, Number(e.target.value) || 1.5)))} className="w-20 rounded bg-[#111c26] border hairline px-2 py-1 text-white" />
+            </label>
+            <label className="flex items-center gap-2 text-[11px] text-[#c3d2dc]">
+              <input type="checkbox" checked={roundRoadCorners} onChange={(e) => setRoundRoadCorners(e.target.checked)} className="accent-[#f5b942]" />
+              Скруглять углы
+            </label>
+            {roundRoadCorners && <label className="flex items-center gap-2 text-[11px] text-[#c3d2dc]">
+              <span>Радиус, м</span><input aria-label="Радиус скругления дороги" type="number" min="1" max="40" step="0.5" value={roadCornerRadius} onChange={(e) => setRoadCornerRadius(Math.max(1, Math.min(40, Number(e.target.value) || 1)))} className="w-16 rounded bg-[#111c26] border hairline px-2 py-1 text-white" />
+            </label>}
+            <span className="text-[10px] text-[#7c909d]">Для инструмента «Дорога» · ширина 1,5–60 м</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
@@ -1295,9 +1314,9 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                   <NumField
                     label="ШИРИНА, М"
                     value={selectedRoad.width}
-                    step={0.5}
-                    min={2.5}
-                    max={30}
+                    step={0.25}
+                    min={1.5}
+                    max={60}
                     onChange={(v) =>
                       patchDef({ roads: roads.map((r) => (r.id === selectedRoad.id ? { ...r, width: v } : r)) })
                     }
@@ -1329,6 +1348,15 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                     }
                   />
                 </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <input type="checkbox" checked={(selectedRoad.cornerRadiusM ?? 0) > 0}
+                      onChange={(e) => patchDef({ roads: roads.map((r) => r.id === selectedRoad.id ? { ...r, cornerRadiusM: e.target.checked ? 8 : 0 } : r) })} className="accent-[#f5b942]" />
+                    <span>Скруглять углы</span>
+                  </label>
+                  {(selectedRoad.cornerRadiusM ?? 0) > 0 && <NumField label="РАДИУС, М" value={selectedRoad.cornerRadiusM ?? 8} min={1} max={40} step={0.5}
+                    onChange={(v) => patchDef({ roads: roads.map((r) => r.id === selectedRoad.id ? { ...r, cornerRadiusM: v } : r) })} />}
+                </div>
                 <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
                   <input
                     type="checkbox"
@@ -1346,7 +1374,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 </label>
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="mono text-[10px] text-[#7c909d]">
-                    УЗЛОВ: {selectedRoad.points.length} (перетаскивайте кружки на карте)
+                    УЗЛОВ: {selectedRoad.points.length} · радиус {selectedRoad.cornerRadiusM ?? 0} м (перетаскивайте кружки)
                   </span>
                   <button
                     type="button"
