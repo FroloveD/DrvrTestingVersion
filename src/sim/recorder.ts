@@ -89,6 +89,7 @@ export const MAX_RECORDED_TICKS = 36_000;
 export function quantizeInput(input: InputState): InputState {
   input.steerWheelDeg = Math.round(input.steerWheelDeg * 10) / 10 + 0;
   input.throttle = Math.round(input.throttle * 1000) / 1000;
+  if (input.throttleMultiplier !== undefined) input.throttleMultiplier = Math.round(input.throttleMultiplier * 1000) / 1000;
   input.brake = Math.round(input.brake * 1000) / 1000;
   return input;
 }
@@ -97,6 +98,7 @@ export function quantizeInput(input: InputState): InputState {
 function inputsEqual(a: InputState, b: InputState): boolean {
   return (
     a.throttle === b.throttle &&
+    (a.throttleMultiplier ?? 1) === (b.throttleMultiplier ?? 1) &&
     a.brake === b.brake &&
     a.steerWheelDeg === b.steerWheelDeg &&
     a.gear === b.gear &&
