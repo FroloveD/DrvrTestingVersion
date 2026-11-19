@@ -101,6 +101,8 @@ function inputsEqual(a: InputState, b: InputState): boolean {
     a.steerWheelDeg === b.steerWheelDeg &&
     a.gear === b.gear &&
     a.engineOn === b.engineOn &&
+    (a.shiftBoost === true) === (b.shiftBoost === true) &&
+    (a.horn === true) === (b.horn === true) &&
     a.handbrake === b.handbrake &&
     a.belt === b.belt &&
     a.lights === b.lights &&

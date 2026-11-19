@@ -73,7 +73,8 @@ export type CockpitControlId =
   | "headlight"
   | "hazard"
   | "start"
-  | "handbrake";
+  | "handbrake"
+  | "horn";
 
 /** Геометрия кулисы 6АКПП Shiftronic в локальных координатах кузова (`+X` к водителю, `+Z` вперёд). */
 export const SHIFTER_LAYOUT = {
@@ -864,6 +865,9 @@ export function buildDetailedCar(
       addPick("headlight", W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.19, 0.062, 0.062, 0.032),
       addPick("stalk-left", W * 0.23 + 0.112, 0.9, centerShiftZ + 0.55, 0.15, 0.07, 0.07),
       addPick("handbrake", -0.052, gateY + 0.055, centerShiftZ + 0.19, 0.07, 0.085, 0.24),
+      // Сигнал: центральная накладка руля. Зона неподвижна (обод крутится визуально), поэтому
+      // клик по ступице ловится в любом положении руля — как нажатие подушки водителем.
+      addPick("horn", W * 0.23, 0.905, centerShiftZ + 0.44, 0.115, 0.115, 0.075),
     ];
     chassis.add(pickGroup);
 
@@ -1076,6 +1080,16 @@ export function buildDetailedCar(
       btnPad.position.set(sgn * 0.108, -0.01, -0.004);
       steerWheelMesh.add(btnPad);
     }
+    // Кнопка сигнала в центре ступицы: чёрная накладка с эмблемой-гудком, отличается от накладок спиц
+    const hornPad = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.046, 0.05, 0.014, 18),
+      new THREE.MeshStandardMaterial({ color: 0x0b1118, roughness: 0.6, metalness: 0.18 })
+    );
+    hornPad.rotation.x = Math.PI / 2;
+    hornPad.position.z = -0.026;
+    const hornGlyph = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.017, 14), chromeMat);
+    hornGlyph.position.z = -0.036;
+    hornGlyph.scale.set(1.3, 0.85, 1);
     const barV = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.135, 0.022), satinSilverMat);
     barV.position.y = -0.092;
     const marker = new THREE.Mesh(
@@ -1083,7 +1097,7 @@ export function buildDetailedCar(
       new THREE.MeshBasicMaterial({ color: 0xf5b942 })
     );
     marker.position.set(0, 0.172, 0);
-    steerWheelMesh.add(rim, hub, badgeRing, barH, barV, marker);
+    steerWheelMesh.add(rim, hub, badgeRing, barH, barV, marker, hornPad, hornGlyph);
 
     // Кожух рулевой колонки и подрулевые переключатели (левый — поворотники Q/E, правый — стеклоочистители)
     const colShroud = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.095, 0.16), darkTrimMat);

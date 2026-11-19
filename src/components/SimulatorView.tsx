@@ -1048,6 +1048,40 @@ export function SimulatorView({
     }
   });
   const soundEnabledRef = useRef(soundEnabled);
+  /** Отдельные слои звука: ДВС с шинами, клаксон, реле поворотника. */
+  const [soundLayers, setSoundLayers] = useState<{ engine: boolean; horn: boolean; indicator: boolean }>(() => {
+    try {
+      const raw = localStorage.getItem("cdt.soundLayers.v1");
+      if (raw) {
+        const p = JSON.parse(raw) as Partial<{ engine: boolean; horn: boolean; indicator: boolean }>;
+        return { engine: p.engine !== false, horn: p.horn !== false, indicator: p.indicator !== false };
+      }
+    } catch {
+      // storage blocked
+    }
+    return { engine: true, horn: true, indicator: true };
+  });
+  const soundLayersRef = useRef(soundLayers);
+  soundLayersRef.current = soundLayers;
+
+  /** Выключатель слоя звука (ДВС / сигнал / реле) с сохранением выбора в localStorage. */
+  const toggleSoundLayer = useCallback(
+    (layer: "engine" | "horn" | "indicator") => {
+      setSoundLayers((prev) => {
+        const next = { ...prev, [layer]: !prev[layer] };
+        try {
+          localStorage.setItem("cdt.soundLayers.v1", JSON.stringify(next));
+        } catch {
+          // storage blocked
+        }
+        engineSoundRef.current?.setLayers(next);
+        const name = layer === "engine" ? "ДВС и шины" : layer === "horn" ? "Сигнал" : "Реле поворотника";
+        onNotify(next[layer] ? `${name}: звук включён` : `${name}: звук выключен`);
+        return next;
+      });
+    },
+    [onNotify]
+  );
 
   // Аудиограф создаётся по первому пользовательскому жесту: до него браузер всё равно не даст звук
   useEffect(() => {
@@ -1058,6 +1092,7 @@ export function SimulatorView({
       // storage blocked
     }
     engineSoundRef.current?.setEnabled(soundEnabled);
+    engineSoundRef.current?.setLayers(soundLayersRef.current);
     const kick = () => {
       if (soundEnabledRef.current) engineSoundRef.current?.ensureStarted();
     };
@@ -1088,6 +1123,7 @@ export function SimulatorView({
       engine = new EngineSound();
       engine.setVolume(0.5);
       engine.setEnabled(true);
+      engine.setLayers(soundLayersRef.current);
       engineSoundRef.current = engine;
     }
     engine.update({
@@ -1095,7 +1131,21 @@ export function SimulatorView({
       rpm: s.rpm,
       throttle,
       speedKmh: Math.abs(s.v) * 3.6,
+      horn: s.horn === true,
     });
+  }, []);
+
+  // Щелчок реле поворотника на переднем фронте фазы мигания (~1,5 Гц, как настоящий прерыватель)
+  const indicatorPhaseRef = useRef<number | null>(null);
+  const pushIndicatorClick = useCallback(() => {
+    const inp = inputRef.current;
+    if (!inp.signal || !soundEnabledRef.current) {
+      indicatorPhaseRef.current = null;
+      return;
+    }
+    const phase = Math.floor((stateRef.current.time * 1000) / 667) % 2;
+    if (phase === 0 && indicatorPhaseRef.current !== 0) engineSoundRef.current?.clickIndicator();
+    indicatorPhaseRef.current = phase;
   }, []);
 
   // Сохранение настроек ШГУ и передача состояния в 3D-сцену (экран, шайбы, подсветка)
@@ -1137,6 +1187,15 @@ export function SimulatorView({
           inp.handbrake = !inp.handbrake;
           onNotify(inp.handbrake ? "Стояночный тормоз затянут" : "Стояночный тормоз снят");
           break;
+        case "horn": {
+          // Клик по накладке руля — короткий сигнал (0,6 с), как «би-бип» в городе
+          inp.horn = true;
+          window.setTimeout(() => {
+            inp.horn = false;
+          }, 600);
+          onNotify("Сигнал: би-бип!");
+          break;
+        }
       }
     },
     [cycleHeadUnitMode, onNotify, setTurnSignal, stepRadioStation, toggleEngine, toggleRadioPlay]
@@ -1317,6 +1376,8 @@ export function SimulatorView({
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
         // Shift вместе с тормозом = энергичное нажатие: быстрый набор давления и +18 % замедления
         inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.05);
+        // Сигнал: клавиша H, кнопка на руле в кабине или кнопка геймпада (удержание)
+        inp.horn = Boolean(keys.KeyH || pad.buttons.horn);
 
         // Руль: отклонённое USB-устройство перехватывает управление у клавиатуры
         // A/D — руль; ←/→ — переключение точек внимания (зеркало/дорога), они не крутят руль
@@ -1413,6 +1474,8 @@ export function SimulatorView({
       if (wheelGroupRef.current) {
         wheelGroupRef.current.setAttribute("transform", `rotate(${-stateRef.current.swDeg} 50 50)`);
       }
+
+      pushIndicatorClick();
 
       // Процедурный звук ДВС и шин из живого состояния (не чаще ~18 Гц, без работы при выключенном звуке)
       pushEngineSound(stateRef.current, inp.throttle);
@@ -1563,13 +1626,18 @@ export function SimulatorView({
           shiftGear(-1);
           break;
         case "KeyH":
+          // H — сигнал (клаксон): удерживаем, как настоящий подрулевой штурвал
+          inp.horn = true;
+          break;
+        case "KeyU":
+          // U — скрыть/показать интерфейс (раньше жил на H, теперь H — сигнал)
           setShowHelp(false);
           setShowControls(false);
           setUiHidden((v) => {
             const next = !v;
             onNotify(
               next
-                ? "HUD скрыт — остались только зеркала. Нажмите H, чтобы вернуть интерфейс."
+                ? "HUD скрыт — остались только зеркала. Нажмите U, чтобы вернуть интерфейс."
                 : "HUD показан"
             );
             return next;
@@ -3012,6 +3080,36 @@ export function SimulatorView({
                 </button>
                 <button
                   type="button"
+                  data-testid="sound-engine-toggle"
+                  aria-pressed={soundLayers.engine}
+                  onClick={() => toggleSoundLayer("engine")}
+                  className={`btn btn-mini ${soundLayers.engine ? "border-[#52d6bd]/60 text-[#52d6bd] bg-[#52d6bd]/10" : ""}`}
+                  title="ДВС и шум шин"
+                >
+                  ДВС {soundLayers.engine ? "ВКЛ" : "ВЫКЛ"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="sound-horn-toggle"
+                  aria-pressed={soundLayers.horn}
+                  onClick={() => toggleSoundLayer("horn")}
+                  className={`btn btn-mini ${soundLayers.horn ? "border-[#52d6bd]/60 text-[#52d6bd] bg-[#52d6bd]/10" : ""}`}
+                  title="Сигнал (клаксон) на руле — клавиша H"
+                >
+                  Сигнал {soundLayers.horn ? "ВКЛ" : "ВЫКЛ"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="sound-indicator-toggle"
+                  aria-pressed={soundLayers.indicator}
+                  onClick={() => toggleSoundLayer("indicator")}
+                  className={`btn btn-mini ${soundLayers.indicator ? "border-[#52d6bd]/60 text-[#52d6bd] bg-[#52d6bd]/10" : ""}`}
+                  title="Щелчок реле поворотника и аварийки"
+                >
+                  Реле {soundLayers.indicator ? "ВКЛ" : "ВЫКЛ"}
+                </button>
+                <button
+                  type="button"
                   data-testid="headunit-save-track"
                   className="btn btn-mini border-[#f5b942]/60 text-[#f5b942]"
                   onClick={() => void saveCurrentTrack()}
@@ -3804,6 +3902,11 @@ export function SimulatorView({
               title: "Рычаг стояночного тормоза",
               action: "Клик — затянуть/снять ручник (Space)",
               hint: "",
+            },
+            horn: {
+              title: "Сигнал · накладка руля",
+              action: "Клик — короткий «би-бип»; удержание H — длинный клаксон",
+              hint: soundLayers.horn ? "Двухтональный 415/500 Гц" : "Слой «Сигнал» выключен в настройках звука",
             },
           };
           const item = info[cockpitControlUi.id];

@@ -98,6 +98,7 @@ import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMet
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
 import { HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
+import { DEFAULT_PLAYER_CAR_ID, PLAYER_CARS, getPlayerCar, playerCarPhysics } from "./playerCar";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { Gear, SimEvent } from "./types";
 import {
@@ -1824,6 +1825,78 @@ export const extraCases: SelfTestCase[] = [
       assert(HEAD_TURN.SHIFTER_RAD > 0.4 && HEAD_TURN.SHIFTER_PITCH_RAD > 0.3, "Взгляд на консоль: вниз-вправо");
 
       return `3 точки (${mirrorDeg.toFixed(0)}° зеркала) · довод ${travelSec.toFixed(2)} с · свободный обзор ±${HEAD_TURN.maxDeg}° без возврата`;
+    },
+  },
+  {
+    id: "T38",
+    suite: "vehicle",
+    name: "Парк автомобилей игрока: реальные пропорции, ограничитель скорости, тормоза и самоход по паспорту",
+    fn: () => {
+      assert(PLAYER_CARS.length === 5, "В парке должно быть ровно пять машин: Picanto, Rio, Ceed, XCeed, Sorento");
+      assert(
+        PLAYER_CARS.map((c) => c.id).join(",") === "picanto,rio,ceed,xceed,sorento",
+        "Порядок машин в парке: от городского хэтчбека к SUV"
+      );
+      assert(getPlayerCar("ceed").id === "ceed", "Машина по умолчанию — учебный Ceed JD");
+      assert(getPlayerCar(undefined).id === "ceed" && getPlayerCar("unknown").id === "ceed", "Неизвестный id → Ceed");
+      assert(DEFAULT_PLAYER_CAR_ID === "ceed", "Идентификатор по умолчанию — ceed");
+
+      for (const c of PLAYER_CARS) {
+        // Пропорции: база + свесы = длина, колея меньше ширины, база в разумных пределах
+        assert(
+          Math.abs(c.frontOverhang + c.wheelbase + c.rearOverhang - c.length) < 0.02,
+          `${c.name}: база и свесы не сходятся с длиной кузова`
+        );
+        assert(c.track < c.width && c.track > c.width - 0.35, `${c.name}: колея должна быть чуть уже кузова`);
+        assert(c.wheelbase > 2.3 && c.wheelbase < 2.9, `${c.name}: база вне реального диапазона`);
+        assert(c.wheelRadius > 0.25 && c.wheelRadius < 0.37, `${c.name}: радиус колеса вне реального диапазона`);
+        assert(c.maxInnerDeg >= 30 && c.maxInnerDeg <= 42, `${c.name}: предел внутреннего колеса вне 30–42°`);
+        // Скоростные режимы и динамика монотонно растут с классом
+        assert(c.vmaxKmh >= 150 && c.vmaxKmh <= 215, `${c.name}: максимальная скорость вне 150–215 км/ч`);
+        assert(c.peakAccel > 2.5 && c.peakAccel < 5.2, `${c.name}: тяговое ускорение вне реального диапазона`);
+        assert(c.creepKmh >= 4 && c.creepKmh <= 6, `${c.name}: самоход D1 вне 4–6 км/ч`);
+        assert(c.accel0to100 > 4 && c.accel0to100 < 18, `${c.name}: 0–100 вне реального диапазона`);
+      }
+      // Иерархия парка: Picanto медленнее и компактнее, Sorento — самый большой и быстрый по Vmax
+      const pic = getPlayerCar("picanto");
+      const ceed = getPlayerCar("ceed");
+      const sor = getPlayerCar("sorento");
+      assert(pic.length < ceed.length && ceed.length < sor.length, "Длина кузова должна расти от Picanto к Sorento");
+      assert(pic.vmaxKmh < ceed.vmaxKmh && ceed.vmaxKmh < sor.vmaxKmh, "Максимальная скорость растёт с классом");
+      assert(pic.accel0to100 > ceed.accel0to100, "Picanto 1.2 медленнее Ceed 1.6 в разгоне до 100");
+      assert(sor.brakeScale > ceed.brakeScale, "Sorento тормозит сильнее Ceed (масса учтена в тормозах)");
+
+      // Физика Ceed обязана остаться побитно прежней: коэффициенты ровно 1
+      const base = playerCarPhysics("ceed");
+      assert(
+        base.accelScale === 1 && base.brakeScale === 1 && base.vmaxKmh === 180 && base.creepKmh === 5,
+        "Ceed — эталон: коэффициенты физики обязаны быть ровно 1 (совместимость с T01–T37)"
+      );
+      // И маленькая машина на ровном газу реально упирается в свой ограничитель, а не в общий 180
+      // Прямой участок 400 м без препятствий: разгон в пол до ограничителя занимает < 60 с
+      const world = {
+        ...buildScenarioWorld("bay_90", DEFAULT_CALIBRATION),
+        start: { x: 0, z: 0, h: 0 },
+        bays: [],
+        obstacles: [],
+        bounds: { minX: -20, maxX: 1200, minZ: -40, maxZ: 40 },
+        playerCarId: "picanto" as const,
+      };
+      const grid = new SpatialGrid([], 10);
+      let st = createInitialState(world, true);
+      const inp = createReadyInput();
+      inp.gear = "D";
+      inp.throttle = 1;
+      for (let i = 0; i < 60 * 55; i++) st = stepSimulation(st, inp, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET).state;
+      const kmh = st.v * 3.6;
+      assert(
+        kmh > 150 && kmh <= 161,
+        `Picanto обязан упираться в свой ограничитель ~160 км/ч, получено ${kmh.toFixed(1)} км/ч`
+      );
+      assert(st.carId === "picanto", "Состояние должно запомнить машину заезда");
+
+      const p = playerCarPhysics("sorento");
+      return `5 машин · Ceed эталон 1:1 · Picanto ${kmh.toFixed(0)} км/ч · Sorento ${p.length.toFixed(2)} м / тормоза ×${p.brakeScale}`;
     },
   },
 ];

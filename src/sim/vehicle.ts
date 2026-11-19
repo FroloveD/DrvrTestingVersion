@@ -245,7 +245,8 @@ export function computeRoadDragDecel(
   throttlePos = 0,
   activeForwardGear = 0,
   gear: Gear = "D",
-  engineOn = true
+  engineOn = true,
+  carAccelScale = 1
 ): number {
   const aeroAndRoll = 0.148 + 0.000331 * absV * absV + 0.0029 * absV;
   const coast = Math.pow(clamp(1 - throttlePos, 0, 1), 1.3);
@@ -268,7 +269,8 @@ export function computeRoadDragDecel(
     // где ЭБУ возобновляет подачу топлива и гидротрансформатор поддерживает плавный самоход D1.
     // Компрессия по передаче: 0,16 базово + до 1,06 на 1-й. На 60 км/ч машина на M1 гасит
     // скорость до самохода за ~11 с (в N — за минуту), как настоящий мотор на низшей ступени.
-    const gearLoss = 0.16 + 0.19 * ENGINE_BRAKE_GEAR_RATIO[activeForwardGear];
+    // Компрессия масштабируется моментом машины: у 1.2 MPI компрессия слабее, у 2.5 GDI — сильнее
+    const gearLoss = (0.16 + 0.19 * ENGINE_BRAKE_GEAR_RATIO[activeForwardGear]) * clamp(carAccelScale, 0.7, 1.35);
     const rpmFactor = 0.58 + 0.82 * clamp((wheelRpm - 1050) / 3600, 0, 1);
     const dfcoFade =
       activeForwardGear === 1
@@ -287,7 +289,7 @@ export function computeRoadDragDecel(
  * Учитывает нелинейную модуляцию педали, лёгкое тепловое снижение на высоких скоростях и мягкий
  * довод колодок в последние ~2 км/ч для реалистичной плавной остановки без рывка.
  */
-export function computeServiceBrakeDecel(brakePos: number, absV: number, shiftBoost = 0): number {
+export function computeServiceBrakeDecel(brakePos: number, absV: number, shiftBoost = 0, brakeScale = 1): number {
   const b = clamp(brakePos, 0, 1);
   if (b <= 0.001) return 0;
   const kmh = absV * 3.6;
@@ -298,7 +300,7 @@ export function computeServiceBrakeDecel(brakePos: number, absV: number, shiftBo
   const finalStopSettle = 0.58 + 0.42 * clamp(absV / 0.6, 0, 1);
   // Shift (энергичный ход педали) даёт до +18 % к замедлению
   const boost = 1 + 0.18 * clamp(shiftBoost, 0, 1);
-  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle * boost;
+  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle * boost * clamp(brakeScale, 0.75, 1.4);
 }
 
 /**
@@ -314,7 +316,8 @@ export function computeIdleCreepAccel(
   throttlePos: number,
   brakePos: number,
   engineOn: boolean,
-  handbrake: boolean
+  handbrake: boolean,
+  creepKmh = IDLE_CREEP_MAX_KMH
 ): number {
   if (!engineOn || handbrake) return 0;
   const isFirstGear = (gear === "D" && autoSubGear === 1) || gear === "1";
@@ -324,14 +327,17 @@ export function computeIdleCreepAccel(
   const throttleHandoff = 1 - clamp(throttlePos * 2.6, 0, 1);
   if (throttleHandoff <= 0) return 0;
   const fwdKmh = Math.max(0, v * 3.6);
-  if (fwdKmh >= IDLE_CREEP_MAX_KMH) return 0;
-  // Резерв тяги затухает плавно: к равновесным 5 км/ч подходим без обрыва, но неохотно
-  const speedReserve = Math.pow(1 - fwdKmh / IDLE_CREEP_MAX_KMH, 0.62);
-  // 0.155 м/с² уравновешивает сопротивление качения на ~6,4 км/ч; +0.46 м/с² даёт мягкий старт с места
-  // Самоход намеренно ленивый: тяга всего на 0,005 м/с² превышает сопротивление качения,
+  const creepTarget = clamp(creepKmh, 3.5, 7);
+  if (fwdKmh >= creepTarget) return 0;
+  // Резерв тяги затухает плавно: к равновесной скорости подходим без обрыва, но неохотно
+  const speedReserve = Math.pow(1 - fwdKmh / creepTarget, 0.62);
+  // Самоход намеренно ленивый: тяга лишь на сотые м/с² превышает сопротивление качения,
   // поэтому с места машина ползёт ~1,5 км/ч за первые 6 с и подходит к 5 км/ч за ~30 с:
   // отпустил газ на ровном — машина почти не едет, как настоящий автомат на холостых.
-  return brakeRelease * throttleHandoff * (0.153 + 0.09 * speedReserve);
+  // Базовая тяга задана для Ceed (5 км/ч); более крупным машинам нужен чуть больший момент,
+  // чтобы удержать свою равновесную скорость.
+  const base = 0.153 + (creepTarget - 5) * 0.022;
+  return brakeRelease * throttleHandoff * (base + 0.09 * speedReserve);
 }
 
 /** Экспоненциальный фильтр с ограничением скорости нарастания/спада (инерция маховика ДВС без скачков). */

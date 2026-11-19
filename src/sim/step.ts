@@ -7,6 +7,7 @@
  */
 import { clampCarToWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import type { RuleSet } from "../scoring/rules";
+import { playerCarPhysics } from "./playerCar";
 import { findBayLineCross, findBayUnderCarCenter, findCompletedBay, SpatialGrid } from "./spatialGrid";
 import type {
   CalibrationConfig,
@@ -179,6 +180,8 @@ export function stepSimulation(
 ): StepOutput {
   const s: SimState = {
     ...prev,
+    // Машина берётся из мира сценария; в старых записях поля нет — остаётся переданный carId (по умолчанию Ceed)
+    carId: world.playerCarId ?? prev.carId,
     redLightPassedIds: prev.redLightPassedIds,
     completedCheckpointIds: prev.completedCheckpointIds,
   };
@@ -219,6 +222,7 @@ export function stepSimulation(
   s.belt = input.belt;
   s.lights = input.lights;
   s.signal = input.signal;
+  s.horn = input.horn === true;
 
   // Парковочная блокировка P: удерживает автомобиль даже при нажатом газе
   if (s.gear === "P") {
@@ -319,6 +323,7 @@ export function stepSimulation(
   }
 
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
+  const carPhysics = playerCarPhysics(s.carId);
   const isForwardGear = s.gear === "D" || isManualGear(s.gear);
   const activeForwardGear = isForwardGear ? s.autoSubGear : 0;
   const creepAccel = computeIdleCreepAccel(
@@ -328,7 +333,8 @@ export function stepSimulation(
     s.throttlePos,
     s.brakePos,
     s.engineOn,
-    s.handbrake
+    s.handbrake,
+    carPhysics.creepKmh
   );
   let accel =
     computeEngineAccel(
@@ -341,7 +347,14 @@ export function stepSimulation(
       s.shiftTimer
     ) + creepAccel;
 
-  const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear, s.engineOn);
+  const drag = computeRoadDragDecel(
+    Math.abs(s.v),
+    s.throttlePos,
+    activeForwardGear,
+    s.gear,
+    s.engineOn,
+    carPhysics.accelScale
+  );
   if (s.v !== 0) {
     accel -= Math.sign(s.v) * drag;
   } else if (accel !== 0) {
@@ -361,12 +374,13 @@ export function stepSimulation(
       s.v = 0;
     }
   }
-  // Жёсткий потолок скорости: ровно 180 км/ч (50.0 м/с) вперёд и 14 км/ч назад
-  s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, MAX_SPEED_MS);
+  // Жёсткий потолок скорости: электронный ограничитель машины (у Ceed — ровно 180 км/ч) и 14 км/ч назад
+  s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, Math.min(MAX_SPEED_MS, carPhysics.vmaxKmh / 3.6));
 
   // Рабочий дисковый тормоз S (прогрессивный гидропривод + плавный довод к 0 км/ч без отката назад)
   if (s.brakePos > 0) {
-    const dv = computeServiceBrakeDecel(s.brakePos, Math.abs(s.v), input.shiftBoost ? 1 : 0) * dt;
+    const dv =
+      computeServiceBrakeDecel(s.brakePos, Math.abs(s.v), input.shiftBoost ? 1 : 0, carPhysics.brakeScale) * dt;
     if (Math.abs(s.v) <= dv) s.v = 0;
     else s.v -= Math.sign(s.v) * dv;
   }
