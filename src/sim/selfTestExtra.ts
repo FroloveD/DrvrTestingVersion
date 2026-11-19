@@ -17,6 +17,7 @@ import {
   type GamepadSnapshot,
 } from "../input/gamepad";
 import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
+import { isInsideWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import { roadGeometryPoints } from "../maps/route";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
@@ -30,6 +31,9 @@ import {
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  applyPresetBoundaryShape,
+  clearBoundaryPolygon,
+  setCustomBoundaryPolygon,
   attachCheckpointToSign,
   createEditorHistory,
   deleteSelected,
@@ -794,6 +798,28 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(r1) && r1!.state.signs?.[0].x === 6.0, "Redo не вернул перенесённое состояние");
 
       return "Сетка 0,5 м · перенос/поворот · КТ от знака 4.1.2 · стоп-линия · узлы дороги · дубль/удаление · Undo/Redo OK";
+    },
+  },
+  {
+    id: "T30",
+    suite: "scenarios",
+    name: "Произвольная форма площадки и полигональные границы мира",
+    fn: () => {
+      const base = emptyCustomScenario();
+      const points = [
+        { x: -40, z: -30 }, { x: 40, z: -30 }, { x: 40, z: 30 }, { x: -40, z: 30 },
+      ];
+      const applied = setCustomBoundaryPolygon(base, points);
+      assert(applied.ok && isValidBoundaryPolygon(applied.def.boundaryPolygon), "Валидный контур должен применяться");
+      const world = buildCustomWorld(applied.def);
+      assert(world.boundaryPolygon?.length === 4 && world.lotPolygon?.length === 4, "Полигон должен попасть в мир и геометрию асфальта");
+      assert(isInsideWorldBoundary(0, 0, world.bounds, world.boundaryPolygon), "Центр должен находиться внутри границы");
+      assert(!isInsideWorldBoundary(60, 0, world.bounds, world.boundaryPolygon), "Точка за контуром должна считаться внешней");
+      const preset = applyPresetBoundaryShape(base, "l_shape");
+      assert(preset.vertices >= 6 && isValidBoundaryPolygon(preset.def.boundaryPolygon), "Готовая Г-образная форма должна быть валидна");
+      const cleared = clearBoundaryPolygon(applied.def);
+      assert(!cleared.boundaryPolygon && cleared.bounds.minX < cleared.bounds.maxX, "Сброс контура должен вернуть прямоугольные границы");
+      return "Ручной полигон · асфальт по форме · принадлежность области · Г-образный шаблон · сброс контура OK";
     },
   },
 ];
