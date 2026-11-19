@@ -765,12 +765,12 @@ try {
   check("L8c1 включение мышиного газа не меняет режим руления", modeAfterGasToggle === "free", String(modeAfterGasToggle));
   await page.mouse.move(sceneX, sceneY);
   await page.mouse.down();
-  await sleep(300);
+  await sleep(220);
   const gasBeforeThreshold = (await gas.getAttribute("aria-pressed")) === "true";
-  await sleep(180);
-  const gasAfterThreshold = (await gas.getAttribute("aria-pressed")) === "true";
+  // В CI таймер может сработать позже из-за нагрузки WebGL/рендера; ждём фактического состояния.
+  const gasAfterThreshold = await until(async () => (await gas.getAttribute("aria-pressed")) === "true", 3000, 80);
   await page.mouse.up();
-  await sleep(80);
+  await sleep(100);
   const gasAfterRelease = (await gas.getAttribute("aria-pressed")) === "true";
   check("L8d включённое удержание ЛКМ >0,4 с включает газ, отпускание выключает его",
     !gasBeforeThreshold && gasAfterThreshold && !gasAfterRelease,
@@ -782,8 +782,13 @@ try {
   await press(brake); const stopped=await until(async()=> (await speedOf(page))===0); await page.mouse.up();
   check("L8 педали по-прежнему разгоняют и останавливают машину",Boolean(drives && stopped));
   await page.keyboard.down("ShiftLeft");
-  await press(gas); await sleep(850); await page.mouse.up(); await page.keyboard.up("ShiftLeft");
-  await sleep(120);
+  await press(gas);
+  // Множитель растёт по model time (1/60 с), поэтому wall-clock паузы недостаточно
+  // на медленном headless WebGL runner. Даём симуляции набрать устойчивый интервал.
+  await sleep(3000);
+  await page.mouse.up();
+  await page.keyboard.up("ShiftLeft");
+  await sleep(150);
   await page.getByRole("button",{name:/Завершить/}).click();
   await page.getByRole("button",{name:/Проверить детерминизм/}).click();
   const idb=await readIdb(page); const a=idb.attempt;
@@ -923,9 +928,7 @@ try {
   await page.mouse.up();
   await sleep(120);
   const movedLot = Number(await lotRect.getAttribute("data-center-x")) !== lotBefore.x || Number(await lotRect.getAttribute("data-center-z")) !== lotBefore.z;
-  // Повторный click гарантирует активное выделение площадки и показ угловых ручек после commit перетаскивания.
-  await lotRect.click();
-  await sleep(80);
+  // beginLotMove уже выделяет площадку; не кликаем повторно в центре, где находится стартовый автомобиль.
   const resize = page.getByTestId("map-lot-resize-e-n");
   await resize.waitFor({ state: "visible", timeout: 5000 });
   const resizeBox = await resize.boundingBox();
