@@ -723,11 +723,15 @@ try {
   await mouseSteerToggle.check();
   await page.mouse.move(sceneX, sceneY);
   const wheelEnabledBefore = await wheelReadout.innerText();
-  await page.mouse.move(sceneX + 260, sceneY);
-  await sleep(120);
-  const wheelEnabledAfter = await wheelReadout.innerText();
-  check("L8b свободное руление мышью работает без удержания ЛКМ", wheelEnabledBefore !== wheelEnabledAfter,
-    `${wheelEnabledBefore} -> ${wheelEnabledAfter}`);
+  // Несколько промежуточных pointermove исключают зависимость проверки от единичного события
+  // на границе перекрывающих HUD-панелей в headless Chromium.
+  await page.mouse.move(sceneX + 55, sceneY, { steps: 5 });
+  const wheelEnabledAfter = await until(async () => {
+    const value = await wheelReadout.innerText();
+    return value !== wheelEnabledBefore ? value : false;
+  }, 2000, 50);
+  check("L8b свободное руление мышью работает без удержания ЛКМ", Boolean(wheelEnabledAfter),
+    `${wheelEnabledBefore} -> ${wheelEnabledAfter || "без изменения"}`);
 
   const mouseSteerMode = page.getByTestId("mouse-steer-mode");
   await mouseSteerMode.selectOption("hold");
