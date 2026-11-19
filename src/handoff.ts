@@ -126,7 +126,7 @@ L.push("| `src/maps/route.ts`, `src/maps/routeCheck.ts` | сшивка улиц 
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |");
-L.push("| `src/render/sceneController.ts`, `src/render/roadSignTextures.ts` | весь Three.js: сцена, машина, процедурные текстуры 12 знаков, зеркала, dispose (`[SEC:...]`) |");
+L.push("| `src/render/sceneController.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts` | весь Three.js: сцена, машина, ГОСТ-дороги/тротуары/бордюры/разметка/светофоры/знаки/мачты/ограждения, зеркала, dispose (`[SEC:...]`) |");
 L.push("| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |");
 L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |");
 L.push("| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |");

@@ -15,16 +15,25 @@
  */
 import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
-import { makeRoadSignTexture } from "./roadSignTextures";
+import {
+  buildGostCrosswalk,
+  buildGostRoadSign,
+  buildGostSpeedSign,
+  buildGostStreetProp,
+  buildGostTrafficSignal,
+  buildWorldRoadsAndSidewalks,
+  createRoadMaterialPack,
+  type GostSignalVisualHandle,
+  type RoadMaterialPack,
+} from "./roadInfra";
+import { makeGostBayStencilTexture, makeUrbanGrassTexture } from "./roadTextures";
 import type {
   CameraMode,
   ObstacleBox,
   ParkedModelKey,
   ParkingBay,
   QualityPreset,
-  RoadSignDef,
   SimState,
-  TrafficSignalDef,
   WorldData,
 } from "../sim/types";
 import {
@@ -58,12 +67,7 @@ type CarRig = {
   learnerSign?: THREE.Mesh;
 };
 
-type SignalVisual = {
-  def: TrafficSignalDef;
-  redMat: THREE.MeshBasicMaterial;
-  yellowMat: THREE.MeshBasicMaterial;
-  greenMat: THREE.MeshBasicMaterial;
-};
+type SignalVisual = GostSignalVisualHandle;
 
 type PedestrianVisual = {
   crosswalkId: string;
@@ -108,32 +112,6 @@ function makeSkyTexture(): THREE.CanvasTexture {
   g.fillStyle = grad;
   g.fillRect(0, 0, 4, 256);
   const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeAsphaltTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#2f363f";
-  g.fillRect(0, 0, 128, 128);
-  // Детерминированное зерно асфальта
-  let seed = 1337;
-  const rand = () => {
-    seed = (seed * 16807) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-  for (let i = 0; i < 1400; i++) {
-    const shade = 38 + Math.floor(rand() * 26);
-    g.fillStyle = `rgb(${shade},${shade + 3},${shade + 7})`;
-    g.fillRect(Math.floor(rand() * 128), Math.floor(rand() * 128), 2, 2);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 3);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
@@ -192,45 +170,6 @@ function makeLearnerSignTexture(): THREE.CanvasTexture {
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillText("У", 64, 68);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeSpeedSignTexture(limit: number): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.clearRect(0, 0, 128, 128);
-  g.beginPath();
-  g.arc(64, 64, 58, 0, Math.PI * 2);
-  g.fillStyle = "#ffffff";
-  g.fill();
-  g.lineWidth = 14;
-  g.strokeStyle = "#dc2626";
-  g.stroke();
-  g.fillStyle = "#0f172a";
-  g.font = "800 54px sans-serif";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText(String(limit), 64, 67);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeBayNumberTexture(num: number, occupied: boolean): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.clearRect(0, 0, 128, 128);
-  g.fillStyle = occupied ? "rgba(148,163,184,0.45)" : "rgba(245,185,66,0.92)";
-  g.font = "800 68px monospace";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText(String(num), 64, 68);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -641,10 +580,13 @@ export class SceneController {
     this.sun.shadow.camera.bottom = -d;
     this.scene.add(this.sun, this.sun.target);
 
-    // Травяная подложка (масштабируется в loadWorld под реальные неквадратные размеры OSM-маршрута)
+    // Травяная подложка с фактурой городского газона (масштабируется в loadWorld под реальные размеры карты)
+    const grassTex = makeUrbanGrassTexture();
+    grassTex.repeat.set(160, 160);
+    this.sharedTextures.push(grassTex);
     this.groundMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x3f5743, roughness: 0.96 })
+      new THREE.MeshStandardMaterial({ map: grassTex, roughness: 0.95 })
     );
     this.groundMesh.scale.set(1400, 1400, 1);
     this.groundMesh.rotation.x = -Math.PI / 2;
@@ -764,13 +706,20 @@ export class SceneController {
       this.scene.fog.far = maxSpan > 340 ? Math.min(560, Math.max(280, maxSpan * 0.55)) : 220;
     }
 
-    const asphaltTex = makeAsphaltTexture();
+    const roadMats = createRoadMaterialPack();
     const winTex = makeBuildingWindowTexture();
     const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
     const learnerTex = this.sharedTextures[2] as THREE.CanvasTexture;
-    const asphaltMat = new THREE.MeshStandardMaterial({ map: asphaltTex, roughness: 0.92 });
-    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.9 });
-    const whiteMarkMat = new THREE.MeshBasicMaterial({ color: 0xf1f5f9 });
+    const { asphaltMat, whiteMarkMat } = roadMats;
+
+    // Масштабируем повтор текстуры газона пропорционально размеру мира (1 тайл ≈ 9 м)
+    const grassTex = this.sharedTextures[3] as THREE.CanvasTexture | undefined;
+    if (grassTex) {
+      grassTex.repeat.set(
+        Math.round(this.groundMesh.scale.x / 9),
+        Math.round(this.groundMesh.scale.y / 9)
+      );
+    }
 
     // Асфальтовая площадка произвольной (неквадратной/вогнутой) формы и 3D-кромка границы мира
     const makeWorldPolygonGeo = (pts: readonly { x: number; z: number }[]): THREE.ShapeGeometry => {
@@ -786,7 +735,7 @@ export class SceneController {
       const uv = geo.attributes.uv;
       if (pos && uv) {
         for (let i = 0; i < pos.count; i++) {
-          uv.setXY(i, pos.getX(i) * 0.16, pos.getZ(i) * 0.16);
+          uv.setXY(i, pos.getX(i) / 4.5, pos.getZ(i) / 4.5);
         }
         uv.needsUpdate = true;
       }
@@ -859,181 +808,8 @@ export class SceneController {
       }
     }
 
-    // Дороги и разметка (с круглыми стыками на изгибах, без z-fighting и с разрывом сплошной на перекрёстках)
-    const surfaceStreetRoads = world.roads.filter(
-      (r) =>
-        (world.scenarioId === "city_osm" || (world.scenarioId === "custom" && r.id !== "custom-lot")) &&
-        (r.layer ?? 0) === 0
-    );
-    const streetJunctionProbe = (px: number, pz: number, ownRoadId: string): boolean => {
-      if (surfaceStreetRoads.length < 2) return false;
-      for (const other of surfaceStreetRoads) {
-        if (other.id === ownRoadId) continue;
-        const limit = other.width * 0.5 + 1.4;
-        const limSq = limit * limit;
-        for (let j = 0; j < other.points.length - 1; j++) {
-          const a = other.points[j];
-          const b = other.points[j + 1];
-          const abx = b.x - a.x;
-          const abz = b.z - a.z;
-          const lenSq = abx * abx + abz * abz;
-          const t = lenSq > 1e-6 ? Math.max(0, Math.min(1, ((px - a.x) * abx + (pz - a.z) * abz) / lenSq)) : 0;
-          const cx = a.x + abx * t;
-          const cz = a.z + abz * t;
-          if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= limSq) return true;
-        }
-      }
-      return false;
-    };
-
-    let segSerial = 0;
-    for (const road of world.roads) {
-      const isStreetRoad =
-        world.scenarioId === "city_osm" ||
-        (world.scenarioId === "custom" && road.id !== "custom-lot");
-      const layerVal = road.layer ?? 0;
-      const layerLift = isStreetRoad && layerVal > 0 ? Math.min(0.18, layerVal * 0.06) : 0;
-
-      // Плавные круглые стыки асфальта и тротуара в вершинах реальных ломаных улиц и колец OSM
-      if (isStreetRoad && road.points.length >= 2) {
-        const capGeo = new THREE.CircleGeometry(road.width * 0.5, 16);
-        const swCapGeo = new THREE.CircleGeometry(road.width * 0.5 + 1.6, 14);
-        for (let vi = 0; vi < road.points.length; vi++) {
-          const vp = road.points[vi];
-          const swCap = new THREE.Mesh(swCapGeo, sidewalkMat);
-          swCap.rotation.x = -Math.PI / 2;
-          swCap.position.set(vp.x, 0.0045 + layerLift, vp.z);
-          swCap.receiveShadow = true;
-          this.worldGroup.add(swCap);
-
-          const cap = new THREE.Mesh(capGeo, asphaltMat);
-          cap.rotation.x = -Math.PI / 2;
-          cap.position.set(vp.x, 0.0118 + layerLift, vp.z);
-          cap.receiveShadow = true;
-          this.worldGroup.add(cap);
-        }
-      }
-
-      for (let i = 0; i < road.points.length - 1; i++) {
-        const p0 = road.points[i];
-        const p1 = road.points[i + 1];
-        const dx = p1.x - p0.x;
-        const dz = p1.z - p0.z;
-        const len = Math.hypot(dx, dz);
-        if (len < 0.5) continue;
-        const angle = Math.atan2(dx, dz);
-        const mx = (p0.x + p1.x) / 2;
-        const mz = (p0.z + p1.z) / 2;
-        const microY = isStreetRoad ? (segSerial++ % 11) * 0.0001 : 0;
-
-        // Тротуар-подложка для городских и пользовательских улиц (кроме базовой площадки автодрома)
-        if (isStreetRoad) {
-          const sw = new THREE.Mesh(
-            new THREE.PlaneGeometry(road.width + 3.2, len),
-            sidewalkMat
-          );
-          sw.rotation.order = "YXZ";
-          sw.rotation.y = angle;
-          sw.rotation.x = -Math.PI / 2;
-          sw.position.set(mx, 0.005 + layerLift + microY, mz);
-          sw.receiveShadow = true;
-          this.worldGroup.add(sw);
-        }
-
-        const seg = new THREE.Mesh(
-          new THREE.PlaneGeometry(road.width, len),
-          asphaltMat
-        );
-        seg.rotation.order = "YXZ";
-        seg.rotation.y = angle;
-        seg.rotation.x = -Math.PI / 2;
-        seg.position.set(mx, 0.012 + layerLift + microY, mz);
-        seg.receiveShadow = true;
-        this.worldGroup.add(seg);
-
-        // Осевая разметка (1.1 сплошная с разрывом на перекрёстках или 1.5 прерывистая)
-        const markY = 0.022 + layerLift + microY;
-        if (road.lanes >= 2 && len > 8) {
-          if (road.hasSolidCenter && !road.oneway) {
-            if (!isStreetRoad || surfaceStreetRoads.length < 2) {
-              const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, len - 8), whiteMarkMat);
-              line.rotation.order = "YXZ";
-              line.rotation.y = angle;
-              line.rotation.x = -Math.PI / 2;
-              line.position.set(mx, markY, mz);
-              this.worldGroup.add(line);
-            } else {
-              // Разбиваем сплошную осевую вокруг реальных перекрёстков и примыканий
-              const endPad = Math.min(4, len * 0.2);
-              const samples = Math.max(4, Math.min(64, Math.ceil((len - endPad * 2) / 3)));
-              let runStart: number | null = null;
-              const emitSolidRun = (d0: number, d1: number) => {
-                const rLen = d1 - d0;
-                if (rLen < 2.2) return;
-                const midT = ((d0 + d1) * 0.5) / len;
-                const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, rLen), whiteMarkMat);
-                line.rotation.order = "YXZ";
-                line.rotation.y = angle;
-                line.rotation.x = -Math.PI / 2;
-                line.position.set(p0.x + dx * midT, markY, p0.z + dz * midT);
-                this.worldGroup.add(line);
-              };
-              for (let s = 0; s <= samples; s++) {
-                const d = endPad + ((len - endPad * 2) * s) / samples;
-                const t = d / len;
-                const inJunc = layerVal === 0 && streetJunctionProbe(p0.x + dx * t, p0.z + dz * t, road.id);
-                if (!inJunc && runStart === null) {
-                  runStart = d;
-                } else if (inJunc && runStart !== null) {
-                  emitSolidRun(runStart, d);
-                  runStart = null;
-                }
-              }
-              if (runStart !== null) emitSolidRun(runStart, len - endPad);
-            }
-          } else {
-            const dashCount = Math.floor(len / 5);
-            for (let k = 0; k < dashCount; k++) {
-              const t = (k + 0.5) / dashCount;
-              const px = p0.x + dx * t;
-              const pz = p0.z + dz * t;
-              if (isStreetRoad && layerVal === 0 && streetJunctionProbe(px, pz, road.id)) continue;
-              const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 2.2), whiteMarkMat);
-              dash.rotation.order = "YXZ";
-              dash.rotation.y = angle;
-              dash.rotation.x = -Math.PI / 2;
-              dash.position.set(px, markY, pz);
-              this.worldGroup.add(dash);
-            }
-          }
-        }
-
-        // Разметка направления 1.18 на односторонних улицах и кольцах реальной карты OSM
-        if (isStreetRoad && road.oneway && len >= 16) {
-          const arrowCount = Math.min(8, Math.max(1, Math.floor(len / 28)));
-          for (let aIdx = 0; aIdx < arrowCount; aIdx++) {
-            const t = (aIdx + 0.5) / arrowCount;
-            const ax = p0.x + dx * t;
-            const az = p0.z + dz * t;
-            if (layerVal === 0 && streetJunctionProbe(ax, az, road.id)) continue;
-            const arrowGrp = new THREE.Group();
-            arrowGrp.position.set(ax, markY + 0.0005, az);
-            arrowGrp.rotation.y = angle;
-            const shaft = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 1.5), whiteMarkMat);
-            shaft.rotation.x = -Math.PI / 2;
-            shaft.position.z = -0.35;
-            const head = new THREE.Mesh(new THREE.CircleGeometry(0.46, 3), whiteMarkMat);
-            head.rotation.order = "YXZ";
-            head.rotation.x = -Math.PI / 2;
-            // Вершина треугольника смотрит вперёд вдоль +Z (по ходу одностороннего потока)
-            head.rotation.z = -Math.PI / 2;
-            head.position.z = 0.55;
-            arrowGrp.add(shaft, head);
-            this.worldGroup.add(arrowGrp);
-          }
-        }
-      }
-    }
+    // Дороги, следы наката, объёмные тротуары с плиткой, ГОСТ-бордюры БР 100.30.15, эстакады 11ДО, люки и разметка ГОСТ Р 51256
+    buildWorldRoadsAndSidewalks(this.worldGroup, world, roadMats);
 
     // Парковочные боксы (перпендикулярные и параллельные)
     for (const bay of world.bays) {
@@ -1079,10 +855,10 @@ export class SceneController {
         }
       }
 
-      // Номер бокса на асфальте
-      const numTex = makeBayNumberTexture(bay.id, bay.occupied);
+      // Трафаретный номер парковочного места по ГОСТ Р 51256
+      const numTex = makeGostBayStencilTexture(bay.id, bay.occupied);
       const numPlane = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.15, 1.15),
+        new THREE.PlaneGeometry(1.18, 1.18),
         new THREE.MeshBasicMaterial({ map: numTex, transparent: true, depthWrite: false })
       );
       numPlane.rotation.x = -Math.PI / 2;
@@ -1095,42 +871,19 @@ export class SceneController {
       }
     }
 
-    // Препятствия: припаркованные машины, бордюры, конусы, здания
+    // Препятствия: припаркованные машины, здания, деревья и дорожная инфраструктура ГОСТ (бордюры, конусы, мачты, ограждения, островки)
     for (const obs of world.obstacles) {
-      this.addObstacleMesh(obs, winTex, shadowTex, learnerTex);
+      this.addObstacleMesh(obs, world, roadMats, winTex, shadowTex, learnerTex);
     }
 
-    // Светофоры и стоп-линии 1.12
+    // Светофоры ГОСТ Р 52282 (Т.1 + Г-консоль + П.1 + табличка 6.16 «СТОП») и стоп-линии 1.12
     for (const sig of world.signals) {
-      this.addTrafficSignal(sig, whiteMarkMat);
+      this.signalVisuals.push(buildGostTrafficSignal(this.worldGroup, sig, roadMats));
     }
 
-    // Пешеходные переходы «зебра» и пешеходы
+    // Пешеходные переходы ГОСТ 1.14.1 (бело-жёлтая «зебра», тактильная плитка, знаки 5.19.1/5.19.2) и пешеходы
     for (const cw of world.crosswalks) {
-      const cwGroup = new THREE.Group();
-      cwGroup.position.set(cw.cx, 0.026, cw.cz);
-      cwGroup.rotation.y = cw.h;
-      const stripes = Math.floor(cw.width / 0.95);
-      for (let i = 0; i < stripes; i++) {
-        const sx = ((i + 0.5) / stripes - 0.5) * (cw.width - 0.8);
-        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.46, cw.length), whiteMarkMat);
-        stripe.rotation.x = -Math.PI / 2;
-        stripe.position.set(sx, 0, 0);
-        cwGroup.add(stripe);
-      }
-      // Знак 5.19 «Пешеходный переход» справа от дороги
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, 2.5, 8),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8 })
-      );
-      pole.position.set(-cw.width / 2 - 0.9, 1.25, -cw.length / 2 - 0.5);
-      const board = new THREE.Mesh(
-        new THREE.BoxGeometry(0.55, 0.55, 0.05),
-        new THREE.MeshBasicMaterial({ color: 0x2563eb })
-      );
-      board.position.set(-cw.width / 2 - 0.9, 2.45, -cw.length / 2 - 0.5);
-      cwGroup.add(pole, board);
-      this.worldGroup.add(cwGroup);
+      buildGostCrosswalk(this.worldGroup, cw, roadMats);
 
       // Фигура пешехода
       const ped = new THREE.Group();
@@ -1156,43 +909,48 @@ export class SceneController {
       this.pedVisuals.push({ crosswalkId: cw.id, group: ped, legL, legR });
     }
 
-    // Дорожные знаки редактора и импорта OSM (все 12 классов, с ориентацией по потоку sign.h)
+    // Дорожные знаки ГОСТ Р 52290-2004 (все 12 классов, фигурная подложка, хомуты и ориентация по потоку sign.h)
     const renderedSignIds = new Set<string>();
     for (const sign of world.signs ?? []) {
       renderedSignIds.add(`${SIGN_SPEED_ZONE_PREFIX}${sign.id}`);
-      this.addRoadSignMesh(sign);
+      buildGostRoadSign(this.worldGroup, sign, roadMats);
     }
 
     // Знаки ограничения скорости 3.24 (для встроенных сценариев без дублирования world.signs)
     for (const sz of world.speedZones) {
       if (renderedSignIds.has(sz.id)) continue;
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, 2.6, 8),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8 })
-      );
-      pole.position.set(sz.signX, 1.3, sz.signZ);
-      const signTex = makeSpeedSignTexture(sz.limitKmh);
-      const disc = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.68, 0.68),
-        new THREE.MeshBasicMaterial({ map: signTex, transparent: true, side: THREE.DoubleSide })
-      );
-      disc.position.set(sz.signX, 2.55, sz.signZ);
-      this.worldGroup.add(pole, disc);
+      const aimH = Math.atan2(sz.x - sz.signX, sz.z - sz.signZ);
+      // Поток движется от знака к центру зоны скорости (вдоль оси улицы)
+      const snappedH = Math.abs(Math.cos(aimH)) >= Math.abs(Math.sin(aimH))
+        ? (Math.cos(aimH) >= 0 ? 0 : Math.PI)
+        : (Math.sin(aimH) >= 0 ? Math.PI / 2 : -Math.PI / 2);
+      buildGostSpeedSign(this.worldGroup, sz.limitKmh, sz.signX, sz.signZ, snappedH, roadMats);
     }
 
-    // Контрольные точки маршрута (янтарные маркеры на дороге)
+    // Контрольные точки маршрута (двойной дорожный маркер с красным контуром для STOP и бирюзовым для финиша)
     for (const cp of world.checkpoints) {
+      const mainHex = cp.isFinalPark ? 0x52d6bd : cp.requireStop ? 0xf87171 : 0xf5b942;
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(1.4, 1.85, 28),
+        new THREE.RingGeometry(1.38, 1.86, 32),
         new THREE.MeshBasicMaterial({
-          color: cp.isFinalPark ? 0x52d6bd : 0xf5b942,
+          color: mainHex,
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.78,
+          opacity: 0.82,
         })
       );
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(cp.x, 0.04, cp.z);
+      const inner = new THREE.Mesh(
+        new THREE.RingGeometry(0.62, 0.82, 28),
+        new THREE.MeshBasicMaterial({
+          color: 0xf8fafc,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.65,
+        })
+      );
+      ring.add(inner);
       this.worldGroup.add(ring);
       this.checkpointMeshes.push({ id: cp.id, mesh: ring });
     }
@@ -1228,6 +986,8 @@ export class SceneController {
 
   private addObstacleMesh(
     obs: ObstacleBox,
+    world: WorldData,
+    roadMats: RoadMaterialPack,
     winTex: THREE.CanvasTexture,
     shadowTex: THREE.CanvasTexture,
     learnerTex: THREE.CanvasTexture
@@ -1240,26 +1000,8 @@ export class SceneController {
       return;
     }
 
-    if (obs.kind === "cone") {
-      const g = new THREE.Group();
-      g.position.set(obs.cx, 0, obs.cz);
-      const base = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.05, 0.32),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b })
-      );
-      base.position.y = 0.025;
-      const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(0.13, obs.height, 10),
-        new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.5 })
-      );
-      cone.position.y = obs.height / 2 + 0.03;
-      const band = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.065, 0.088, 0.11, 10),
-        new THREE.MeshBasicMaterial({ color: 0xf8fafc })
-      );
-      band.position.y = obs.height * 0.62;
-      g.add(base, cone, band);
-      this.worldGroup.add(g);
+    // Дорожная инфраструктура ГОСТ РФ/СНГ (конусы КС-2.2, мачты ОГК / столбики, ограждения ПО-2, островки, бордюры БР 100.30.15)
+    if (buildGostStreetProp(this.worldGroup, obs, world, roadMats)) {
       return;
     }
 
@@ -1302,164 +1044,7 @@ export class SceneController {
       crown.castShadow = true;
       tg.add(trunk, crown);
       this.worldGroup.add(tg);
-      return;
     }
-
-    if (obs.kind === "fence") {
-      const fg = new THREE.Group();
-      fg.position.set(obs.cx, 0, obs.cz);
-      fg.rotation.y = obs.h;
-      const alongX = obs.halfX >= obs.halfZ;
-      const span = (alongX ? obs.halfX : obs.halfZ) * 2;
-      const thick = Math.max(0.08, (alongX ? obs.halfZ : obs.halfX) * 2);
-      const h = Math.max(0.5, obs.height);
-      const metalMat = new THREE.MeshStandardMaterial({
-        color: obs.color ?? 0x64748b,
-        metalness: 0.35,
-        roughness: 0.6,
-      });
-      // Верхняя и средняя перекладины + вертикальные стойки каждые ~2 м
-      for (const ry of [h * 0.88, h * 0.48]) {
-        const rail = new THREE.Mesh(
-          new THREE.BoxGeometry(alongX ? span : thick, 0.08, alongX ? thick : span),
-          metalMat
-        );
-        rail.position.y = ry;
-        rail.castShadow = true;
-        fg.add(rail);
-      }
-      const posts = Math.max(2, Math.min(24, Math.round(span / 2) + 1));
-      for (let i = 0; i < posts; i++) {
-        const pos = posts === 1 ? 0 : (i / (posts - 1) - 0.5) * Math.max(0.2, span - 0.12);
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, h, 0.09), metalMat);
-        post.position.set(alongX ? pos : 0, h / 2, alongX ? 0 : pos);
-        post.castShadow = true;
-        fg.add(post);
-      }
-      this.worldGroup.add(fg);
-      return;
-    }
-
-    if (obs.kind === "island") {
-      const ig = new THREE.Group();
-      ig.position.set(obs.cx, 0, obs.cz);
-      ig.rotation.y = obs.h;
-      const h = Math.max(0.14, obs.height);
-      const curb = new THREE.Mesh(
-        new THREE.BoxGeometry(obs.halfX * 2, h, obs.halfZ * 2),
-        new THREE.MeshStandardMaterial({ color: 0x9aa6b2, roughness: 0.85 })
-      );
-      curb.position.y = h / 2;
-      curb.receiveShadow = true;
-      ig.add(curb);
-      if (obs.halfX > 0.25 && obs.halfZ > 0.25) {
-        const lawn = new THREE.Mesh(
-          new THREE.BoxGeometry(obs.halfX * 2 - 0.28, 0.04, obs.halfZ * 2 - 0.28),
-          new THREE.MeshStandardMaterial({ color: obs.color ?? 0x3b6e4c, roughness: 0.92 })
-        );
-        lawn.position.y = h + 0.015;
-        lawn.receiveShadow = true;
-        ig.add(lawn);
-      }
-      this.worldGroup.add(ig);
-      return;
-    }
-
-    if (obs.kind === "pole") {
-      const r = Math.max(0.08, Math.min(obs.halfX, obs.halfZ));
-      const mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(r * 0.85, r, obs.height, 10),
-        new THREE.MeshStandardMaterial({ color: obs.color ?? 0x94a3b8, metalness: 0.35, roughness: 0.55 })
-      );
-      mesh.position.set(obs.cx, obs.height / 2, obs.cz);
-      mesh.castShadow = true;
-      this.worldGroup.add(mesh);
-      return;
-    }
-
-    // Бордюр
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(obs.halfX * 2, obs.height, obs.halfZ * 2),
-      new THREE.MeshStandardMaterial({ color: obs.color ?? 0x9aa6b2, roughness: 0.85 })
-    );
-    mesh.position.set(obs.cx, obs.height / 2, obs.cz);
-    mesh.rotation.y = obs.h;
-    mesh.receiveShadow = true;
-    this.worldGroup.add(mesh);
-  }
-
-  /** Строит стойку и ориентированный щит дорожного знака (лицевая сторона обращена к потоку sign.h). */
-  private addRoadSignMesh(sign: RoadSignDef): void {
-    const g = new THREE.Group();
-    g.position.set(sign.x, 0, sign.z);
-    g.rotation.y = sign.h;
-
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.045, 0.05, 2.55, 8),
-      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.35, roughness: 0.55 })
-    );
-    pole.position.y = 1.275;
-    pole.castShadow = true;
-
-    const tex = makeRoadSignTexture(sign);
-    const front = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.72, 0.72),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true })
-    );
-    // Смотрит к локальному -Z — навстречу водителю, движущемуся вдоль +Z в системе знака
-    front.position.set(0, 2.52, -0.055);
-    front.rotation.y = Math.PI;
-
-    // Оборотная металлическая сторона щита (чтобы сзади знак не зеркалился)
-    const back = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.66, 0.66),
-      new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 })
-    );
-    back.position.set(0, 2.52, -0.045);
-
-    g.add(pole, front, back);
-    this.worldGroup.add(g);
-  }
-
-  private addTrafficSignal(sig: TrafficSignalDef, whiteMat: THREE.MeshBasicMaterial): void {
-    // Стоп-линия 1.12
-    const stopLine = new THREE.Mesh(new THREE.PlaneGeometry(sig.stopLineWidth, 0.42), whiteMat);
-    stopLine.rotation.order = "YXZ";
-    stopLine.rotation.y = sig.h;
-    stopLine.rotation.x = -Math.PI / 2;
-    stopLine.position.set(sig.stopLineX, 0.028, sig.stopLineZ);
-    this.worldGroup.add(stopLine);
-
-    // Опора и головка светофора (обращена к подъезжающему водителю)
-    const g = new THREE.Group();
-    g.position.set(sig.x, 0, sig.z);
-    g.rotation.y = sig.h;
-
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.065, 0.075, 3.6, 8),
-      new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.4 })
-    );
-    pole.position.y = 1.8;
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(0.38, 1.08, 0.24),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.6 })
-    );
-    box.position.y = 3.55;
-
-    const redMat = new THREE.MeshBasicMaterial({ color: 0x3b0d0d });
-    const yellowMat = new THREE.MeshBasicMaterial({ color: 0x3b2f08 });
-    const greenMat = new THREE.MeshBasicMaterial({ color: 0x09381f });
-
-    const lensGeo = new THREE.CircleGeometry(0.125, 14);
-    const makeLens = (mat: THREE.MeshBasicMaterial, y: number) => {
-      const m = new THREE.Mesh(lensGeo, mat);
-      m.position.set(0, y, -0.126); // смотрит к -Z (навстречу потоку +Z)
-      m.rotation.y = Math.PI;
-      return m;
-    };
-    g.add(pole, box, makeLens(redMat, 3.88), makeLens(yellowMat, 3.55), makeLens(greenMat, 3.22));
-    this.worldGroup.add(g);
-    this.signalVisuals.push({ def: sig, redMat, yellowMat, greenMat });
   }
 
   // === [SEC:render-frame] Отрисовка кадра, зеркал (320×96 и 320×160 с троттлингом TD-06) и камер ===
@@ -1543,15 +1128,22 @@ export class SceneController {
       }
     }
 
-    // 4. Светофоры, пешеходы и контрольные точки
+    // 4. Светофоры (Т.1 + Г-консоль + ореол + пешеходная секция П.1), пешеходы и контрольные точки
     for (const sv of this.signalVisuals) {
       const { phase } = getTrafficLightPhase(sv.def, state.time);
       const redOn = phase === "red" || phase === "red_yellow";
       const yelOn = phase === "yellow" || phase === "red_yellow";
       const grnOn = phase === "green" || (phase === "green_blink" && blinkOn);
-      sv.redMat.color.setHex(redOn ? 0xff3b3b : 0x3b0d0d);
-      sv.yellowMat.color.setHex(yelOn ? 0xffcc29 : 0x3b2f08);
-      sv.greenMat.color.setHex(grnOn ? 0x22e584 : 0x09381f);
+      sv.redMat.color.setHex(redOn ? 0xff3b3b : 0x380c0c);
+      sv.yellowMat.color.setHex(yelOn ? 0xffcc29 : 0x382b08);
+      sv.greenMat.color.setHex(grnOn ? 0x22e584 : 0x08351d);
+      sv.redHaloMat.opacity = redOn ? 0.65 : 0;
+      sv.yellowHaloMat.opacity = yelOn ? 0.58 : 0;
+      sv.greenHaloMat.opacity = grnOn ? 0.62 : 0;
+      // Пешеходная секция П.1: зелёный горит строго при красном транспортном сигнале
+      const pedGo = phase === "red";
+      sv.pedRedMat.color.setHex(pedGo ? 0x380c0c : 0xff3b3b);
+      sv.pedGreenMat.color.setHex(pedGo ? 0x22e584 : 0x08351d);
     }
 
     for (let i = 0; i < this.pedVisuals.length; i++) {
@@ -1768,7 +1360,9 @@ export class SceneController {
         for (const m of list) {
           materials.add(m);
           const std = m as THREE.MeshStandardMaterial;
-          if (std.map && !this.sharedTextures.includes(std.map)) textures.add(std.map);
+          for (const tex of [std.map, std.bumpMap, std.roughnessMap, std.emissiveMap, std.alphaMap]) {
+            if (tex && !this.sharedTextures.includes(tex)) textures.add(tex);
+          }
         }
       }
     });
