@@ -157,7 +157,7 @@ export function getActiveSpeedLimit(x: number, z: number, world: WorldData): num
     const dx = x - zone.x, dz = z - zone.z;
     const along = dx * Math.sin(heading) + dz * Math.cos(heading);
     const lateral = dx * Math.cos(heading) - dz * Math.sin(heading);
-    const end = firstSpeedZoneIntersection(zone, heading, length, world);
+    const end = zone.endDistance ?? firstSpeedZoneIntersection(zone, heading, length, world);
     if (along >= -1 && along <= end && Math.abs(lateral) <= (zone.halfWidth ?? 4.5)) {
       limit = Math.min(limit, zone.limitKmh);
     }
