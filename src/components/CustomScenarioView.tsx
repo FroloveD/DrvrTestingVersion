@@ -1999,12 +1999,17 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
                 <input
                   type="checkbox"
+                  data-testid="editor-lot-surface-toggle"
+                  aria-label="Стартовая асфальтовая площадка"
                   checked={def.useLotSurface !== false}
                   onChange={(e) => patchDef({ useLotSurface: e.target.checked })}
                   className="accent-[#f5b942]"
                 />
-                <span>Асфальтовая площадка автодрома</span>
+                <span>Стартовая асфальтовая площадка</span>
               </label>
+              <div className="w-full text-[10px] text-[#7c909d]">
+                Снимите флажок, чтобы убрать прямоугольное асфальтовое покрытие старта. Дороги, боксы и остальные объекты останутся.
+              </div>
               <div className="w-28">
                 <NumField
                   label="БАЗОВЫЙ КМ/Ч"
