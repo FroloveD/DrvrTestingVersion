@@ -778,7 +778,7 @@ export class SceneController {
             vertices.push(point.x - nx * width / 2, y, point.z - nz * width / 2);
             if (i < pts.length - 1) {
               const k = i * 2;
-              indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+              indices.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
             }
           }
           const geometry = new THREE.BufferGeometry();
