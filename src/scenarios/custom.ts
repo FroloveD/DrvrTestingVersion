@@ -596,8 +596,11 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
     if (!Array.isArray(r.points) || r.points.length < 2) {
       errors.push(`Дорога «${r.name || r.id}»: нужно минимум 2 узла.`);
     }
-    if (!(r.width >= 2.5 && r.width <= 30)) {
-      errors.push(`Дорога «${r.name || r.id}»: ширина должна быть от 2.5 до 30 м.`);
+    if (!(r.width >= 1.5 && r.width <= 60)) {
+      errors.push(`Дорога «${r.name || r.id}»: ширина должна быть от 1.5 до 60 м.`);
+    }
+    if (r.cornerRadiusM !== undefined && !(r.cornerRadiusM >= 0 && r.cornerRadiusM <= 40)) {
+      errors.push(`Дорога «${r.name || r.id}»: радиус скругления должен быть 0–40 м.`);
     }
   }
 
