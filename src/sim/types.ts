@@ -24,6 +24,8 @@ export type QualityPreset = "low" | "medium" | "high";
 
 export type InputState = {
   throttle: number; // 0..1
+  /** Множитель тяги 1..2; отсутствует в старых реплеях и трактуется как 1. */
+  throttleMultiplier?: number;
   brake: number; // 0..1
   steerWheelDeg: number; // -540..+540 (+ влево, - вправо)
   gear: Gear;
