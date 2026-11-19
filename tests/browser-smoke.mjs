@@ -692,7 +692,11 @@ try {
   await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
   check("L7 предел 42° применяется без сброса заезда или руля",Boolean(at42) && await page.getByRole('button',{name:'Быстрый старт'}).count()===0);
 
-  // Движение мыши рулит без зажатой кнопки; ЛКМ включает газ только после 400 мс.
+  // Управление мышью выключено по умолчанию; газ и руление включаются независимо.
+  const mouseSteerToggle = page.getByTestId("mouse-steer-toggle");
+  const mouseGasToggle = page.getByTestId("mouse-gas-toggle");
+  check("L8 настройки газа и руля мышью изначально выключены",
+    !(await mouseSteerToggle.isChecked()) && !(await mouseGasToggle.isChecked()));
   const scene = page.getByTestId("sim-canvas");
   const sceneBox = await scene.boundingBox();
   const sceneX = sceneBox.x + sceneBox.width / 2;
@@ -702,10 +706,24 @@ try {
   const wheelBeforeMouse = await wheelReadout.innerText();
   await page.mouse.move(sceneX + 55, sceneY);
   await sleep(120);
-  const wheelAfterMouse = await wheelReadout.innerText();
-  check("L8a мышь рулит горизонтальным движением без удержания ЛКМ", wheelBeforeMouse !== wheelAfterMouse,
-    `${wheelBeforeMouse} -> ${wheelAfterMouse}`);
+  const wheelStill = await wheelReadout.innerText();
+  check("L8a выключенное руление мышью не меняет руль", wheelBeforeMouse === wheelStill);
+  await mouseSteerToggle.check();
+  await page.mouse.move(sceneX, sceneY);
+  const wheelEnabledBefore = await wheelReadout.innerText();
+  await page.mouse.move(sceneX + 55, sceneY);
+  await sleep(120);
+  const wheelEnabledAfter = await wheelReadout.innerText();
+  check("L8b включённое руление мышью работает без удержания ЛКМ", wheelEnabledBefore !== wheelEnabledAfter,
+    `${wheelEnabledBefore} -> ${wheelEnabledAfter}`);
 
+  await page.mouse.move(sceneX, sceneY);
+  await page.mouse.down();
+  await sleep(520);
+  const gasStillOff = (await gas.getAttribute("aria-pressed")) === "true";
+  await page.mouse.up();
+  check("L8c выключенный газ мышью не реагирует на удержание ЛКМ", !gasStillOff);
+  await mouseGasToggle.check();
   await page.mouse.move(sceneX, sceneY);
   await page.mouse.down();
   await sleep(300);
@@ -715,7 +733,7 @@ try {
   await page.mouse.up();
   await sleep(80);
   const gasAfterRelease = (await gas.getAttribute("aria-pressed")) === "true";
-  check("L8b удержание ЛКМ >0,4 с включает газ, отпускание выключает его",
+  check("L8d включённое удержание ЛКМ >0,4 с включает газ, отпускание выключает его",
     !gasBeforeThreshold && gasAfterThreshold && !gasAfterRelease,
     `до порога=${gasBeforeThreshold}, после=${gasAfterThreshold}, после отпускания=${gasAfterRelease}`);
 
@@ -723,13 +741,21 @@ try {
   await press(gas); const drives=await until(async()=> (await speedOf(page))>=2); await page.mouse.up();
   await press(brake); const stopped=await until(async()=> (await speedOf(page))===0); await page.mouse.up();
   check("L8 педали по-прежнему разгоняют и останавливают машину",Boolean(drives && stopped));
+  await page.keyboard.down("ShiftLeft");
+  await press(gas); await sleep(850); await page.mouse.up(); await page.keyboard.up("ShiftLeft");
+  await sleep(120);
   await page.getByRole("button",{name:/Завершить/}).click();
   await page.getByRole("button",{name:/Проверить детерминизм/}).click();
   const idb=await readIdb(page); const a=idb.attempt;
-  check("L9 заезд с изменением настройки воспроизводится точно",(await low(page)).includes("детерминизм подтверждён") && a.calibration.maxInnerWheelDeg===42 && a.inputStream.some(f=>f.maxInnerWheelDeg===33) && a.inputStream.some(f=>f.maxInnerWheelDeg===42));
-  await page.reload();await controls.click();check("L10 предел сохранён после перезагрузки",await slider.inputValue()==="42");
-  await page.getByRole("button",{name:"Базовый · 35°"}).click();check("L11 сброс настройки возвращает 35°",await slider.inputValue()==="35");
-  check("L12 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
+  const boostValues = a.inputStream.map(f => f.input.throttleMultiplier ?? 1);
+  const boostMax = Math.max(...boostValues);
+  check("L9 Shift плавно повышает множитель тяги и записывается в реплей",
+    boostMax > 1.7 && boostMax <= 2 && boostValues.some((v,i) => i > 0 && v > boostValues[i-1]),
+    `max x${boostMax.toFixed(3)}`);
+  check("L10 заезд с изменением настройки воспроизводится точно",(await low(page)).includes("детерминизм подтверждён") && a.calibration.maxInnerWheelDeg===42 && a.inputStream.some(f=>f.maxInnerWheelDeg===33) && a.inputStream.some(f=>f.maxInnerWheelDeg===42));
+  await page.reload();await controls.click();check("L11 предел сохранён после перезагрузки",await slider.inputValue()==="42");
+  await page.getByRole("button",{name:"Базовый · 35°"}).click();check("L12 сброс настройки возвращает 35°",await slider.inputValue()==="35");
+  check("L13 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch(e) {
   check("L сценарий выполнен без исключений",false,String(e.message).slice(-460));
