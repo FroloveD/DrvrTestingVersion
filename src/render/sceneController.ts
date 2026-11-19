@@ -56,7 +56,7 @@ import {
   getPedestrianPose,
   getTrafficLightPhase,
   getTurnSignalFlash,
-  predictTrajectoryArc,
+  writeTrajectoryArcPositions,
 } from "../sim/vehicle";
 
 // Слои относятся только к геометрии машины игрока. Мир и припаркованные авто — слой 0.
@@ -149,6 +149,15 @@ export class SceneController {
   private readonly trajGroup = new THREE.Group();
   private readonly trajLineL: THREE.Line;
   private readonly trajLineR: THREE.Line;
+  private readonly trajPositionsL = new Float32Array(19 * 3);
+  private readonly trajPositionsR = new Float32Array(19 * 3);
+  private readonly trajAttributeL: THREE.BufferAttribute;
+  private readonly trajAttributeR: THREE.BufferAttribute;
+  private lastTrajectoryX = Number.NaN;
+  private lastTrajectoryZ = Number.NaN;
+  private lastTrajectoryH = Number.NaN;
+  private lastTrajectorySteer = Number.NaN;
+  private lastTrajectoryReverse: boolean | null = null;
 
   // Зеркала (центральное + левое + правое)
   // Заднее зеркало шире и ниже по пропорциям (3.33:1), боковые — выше (2:1), как в реальной машине
@@ -276,14 +285,25 @@ export class SceneController {
     this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
     this.scene.add(this.playerRig.root);
 
-    // Линии прогнозной траектории Аккермана
-    const makeTrajLine = () =>
-      new THREE.Line(
-        new THREE.BufferGeometry(),
+    // Линии прогнозной траектории: геометрия и динамические буферы создаются один раз.
+    const makeTrajLine = (positions: Float32Array) => {
+      const geometry = new THREE.BufferGeometry();
+      const attribute = new THREE.BufferAttribute(positions, 3);
+      attribute.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute("position", attribute);
+      const line = new THREE.Line(
+        geometry,
         new THREE.LineBasicMaterial({ color: 0x52d6bd, transparent: true, opacity: 0.9 })
       );
-    this.trajLineL = makeTrajLine();
-    this.trajLineR = makeTrajLine();
+      line.frustumCulled = false;
+      return { line, attribute };
+    };
+    const leftTrajectory = makeTrajLine(this.trajPositionsL);
+    const rightTrajectory = makeTrajLine(this.trajPositionsR);
+    this.trajLineL = leftTrajectory.line;
+    this.trajLineR = rightTrajectory.line;
+    this.trajAttributeL = leftTrajectory.attribute;
+    this.trajAttributeR = rightTrajectory.attribute;
     this.trajGroup.add(this.trajLineL, this.trajLineR);
     this.scene.add(this.trajGroup);
 
@@ -368,6 +388,11 @@ export class SceneController {
     this.lastBuildingCullX = Number.NaN;
     this.lastBuildingCullZ = Number.NaN;
     this.lastBuildingCullRadius = Number.NaN;
+    this.lastTrajectoryX = Number.NaN;
+    this.lastTrajectoryZ = Number.NaN;
+    this.lastTrajectoryH = Number.NaN;
+    this.lastTrajectorySteer = Number.NaN;
+    this.lastTrajectoryReverse = null;
     this.disposeGroup(this.worldGroup);
     this.buildingMeshes.length = 0;
     this.signalVisuals.length = 0;
@@ -816,24 +841,34 @@ export class SceneController {
       }
     }
 
-    // 5. Прогнозная дуга траектории Аккермана
+    // 5. Прогнозная дуга Аккермана: обновляем только при изменении входных параметров.
     this.trajGroup.visible = opts.showTrajectory;
     if (opts.showTrajectory) {
       const isRev = state.gear === "R";
-      const { leftTrack, rightTrack } = predictTrajectoryArc(state.x, state.z, state.h, state.steer, isRev, 6.2, 18);
-      const setPts = (line: THREE.Line, pts: Array<{ x: number; z: number }>, colorHex: number) => {
-        const arr = new Float32Array(pts.length * 3);
-        pts.forEach((p, idx) => {
-          arr[idx * 3] = p.x;
-          arr[idx * 3 + 1] = 0.06;
-          arr[idx * 3 + 2] = p.z;
-        });
-        line.geometry.setAttribute("position", new THREE.BufferAttribute(arr, 3));
-        (line.material as THREE.LineBasicMaterial).color.setHex(colorHex);
-      };
-      const col = isRev ? 0xf5b942 : 0x52d6bd;
-      setPts(this.trajLineL, leftTrack, col);
-      setPts(this.trajLineR, rightTrack, col);
+      const changed =
+        !Object.is(state.x, this.lastTrajectoryX) ||
+        !Object.is(state.z, this.lastTrajectoryZ) ||
+        !Object.is(state.h, this.lastTrajectoryH) ||
+        !Object.is(state.steer, this.lastTrajectorySteer) ||
+        isRev !== this.lastTrajectoryReverse;
+      if (changed) {
+        writeTrajectoryArcPositions(
+          state.x, state.z, state.h, state.steer, isRev,
+          this.trajPositionsL, this.trajPositionsR, 6.2, 18, 0.06
+        );
+        this.trajAttributeL.needsUpdate = true;
+        this.trajAttributeR.needsUpdate = true;
+        this.lastTrajectoryX = state.x;
+        this.lastTrajectoryZ = state.z;
+        this.lastTrajectoryH = state.h;
+        this.lastTrajectorySteer = state.steer;
+        this.lastTrajectoryReverse = isRev;
+      }
+      if (this.lastTrajectoryReverse !== null && changed) {
+        const color = isRev ? 0xf5b942 : 0x52d6bd;
+        (this.trajLineL.material as THREE.LineBasicMaterial).color.setHex(color);
+        (this.trajLineR.material as THREE.LineBasicMaterial).color.setHex(color);
+      }
     }
 
     // 6. Камера (обновляем матрицу кузова заранее, чтобы салон и физические зеркала не дрожали относительно головы)
