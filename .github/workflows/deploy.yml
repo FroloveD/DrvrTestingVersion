@@ -48,6 +48,10 @@ jobs:
               DIR="v1"
               URL="${BASE_URL}/v1/"
               ;;
+            refs/heads/arena/exam-routes)
+              DIR="exam-routes"
+              URL="${BASE_URL}/exam-routes/"
+              ;;
             refs/heads/arena/*)
               DIR="arena"
               URL="${BASE_URL}/arena/"

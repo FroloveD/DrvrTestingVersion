@@ -50,7 +50,8 @@ node tools/build-map-pack.mjs <raw-overpass.json> <out-pack.json> [допуск�
 Однофайловый `dist/index.html` автоматически выкладывается в ветку `gh-pages` с разделением по веткам:
 - `main` → корень сайта (`https://froloved.github.io/DrvrTestingVersion/`, с сохранением подпапок);
 - `Arena_v1` → промежуточная сборка v1 (`https://froloved.github.io/DrvrTestingVersion/v1/`);
-- `arena/**` → тестовая сборка Arena (`https://froloved.github.io/DrvrTestingVersion/arena/`);
+- `arena/exam-routes` → отдельный канал редактора экзаменационных маршрутов (`https://froloved.github.io/DrvrTestingVersion/exam-routes/`);
+- остальные `arena/**` → тестовая сборка Arena (`https://froloved.github.io/DrvrTestingVersion/arena/`);
 - `GemCommits` → превью-канал (`https://froloved.github.io/DrvrTestingVersion/preview/`).
 
 ---
