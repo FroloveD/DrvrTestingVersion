@@ -19,7 +19,12 @@ const [, , httpUrl, fileUrl, shotDir] = process.argv;
 fs.mkdirSync(shotDir, { recursive: true });
 let failed = 0;
 const check = (name, ok, extra = "") => {
-  if (!ok) failed++;
+  if (!ok) {
+    failed++;
+    if (process.env.GITHUB_ACTIONS) {
+      console.log(`::error title=SMOKE::${name}${extra ? " — " + extra.replace(/\r?\n/g, " ") : ""}`);
+    }
+  }
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -29,7 +34,14 @@ async function open(ctx, url) {
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
-  page.on("console", (m) => { if (m.type() === "error") errors.push("console.error: " + m.text().slice(0, 200)); });
+  page.on("console", (m) => {
+    if (m.type() !== "error") return;
+    const text = m.text();
+    // Сетевые ошибки живого интернет-эфира ШГУ в закрытом окружении CI — не дефект приложения:
+    // плеер обязан честно показать «эфир недоступен» и не ронять тренажёр.
+    if (/Failed to load resource|MEDIA_ELEMENT_ERROR|net::ERR/i.test(text)) return;
+    errors.push("console.error: " + text.slice(0, 200));
+  });
   await page.goto(url);
   await page.waitForSelector("canvas");
   await sleep(1200);
@@ -142,6 +154,19 @@ try {
   const stopped = await until(async () => (await speedOf(page)) === 0);
   await page.keyboard.up("KeyS");
   check("A4  тормоз S останавливает машину", Boolean(stopped));
+
+  await page.keyboard.press("ShiftLeft");
+  await page.keyboard.press("ShiftLeft");
+  await page.keyboard.press("ShiftLeft");
+  await sleep(160);
+  const m2Shown = /\bM2\b/.test(await page.evaluate(() => document.body.innerText));
+  await page.keyboard.press("ShiftRight");
+  await sleep(160);
+  const m1Shown = /\bM1\b/.test(await page.evaluate(() => document.body.innerText));
+  await page.keyboard.press("KeyF");
+  await sleep(160);
+  const d1Shown = /\bD1\b/.test(await page.evaluate(() => document.body.innerText));
+  check("A4b клавиши Shift / Right Shift переключают КПП (R→N→M1→M2→M1), F возвращает D1", m2Shown && m1Shown && d1Shown, `M2=${m2Shown} M1=${m1Shown} D1=${d1Shown}`);
 
   await page.keyboard.press("KeyH");
   await sleep(500);
@@ -561,14 +586,52 @@ try {
   check("K2 долгое нажатие переносит панель", moved,
     `было ${before.x},${before.y} → стало ${after ? after.x + "," + after.y : "н/д"}`);
 
-  // Раскладка сохраняется после перезагрузки
+  // Длительное нажатие выводит панель на передний план/слой поверх всех остальных HUD-панелей (даже без переноса)
+  const frontAfterDrag = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll("[data-hud-panel]")];
+    const zOf = (id) => Number(document.querySelector(`[data-hud-panel="${id}"]`)?.style.zIndex || 0);
+    const maxZ = Math.max(...panels.map((el) => Number(el.style.zIndex || 0)));
+    return { statusZ: zOf("statusBar"), maxZ, front: document.querySelector('[data-hud-panel="statusBar"]')?.getAttribute("data-front") };
+  });
+  check("K2b длительное нажатие помещает панель на самый верхний слой",
+    frontAfterDrag.statusZ === frontAfterDrag.maxZ && frontAfterDrag.statusZ >= 28 && frontAfterDrag.front === "true",
+    JSON.stringify(frontAfterDrag));
+
+  // Раскладка и передний слой сохраняются после перезагрузки
   await page.reload();
   await page.waitForSelector("canvas");
   await sleep(1300);
   const restored = await statusBox();
-  check("K3 раскладка панели сохраняется после перезагрузки",
-    Boolean(restored && after) && Math.abs(restored.x - after.x) < 4 && Math.abs(restored.y - after.y) < 4,
-    `после перезагрузки ${restored ? restored.x + "," + restored.y : "н/д"}`);
+  const frontRestored = await page.evaluate(() => {
+    const el = document.querySelector('[data-hud-panel="statusBar"]');
+    return { z: Number(el?.style.zIndex || 0), front: el?.getAttribute("data-front") };
+  });
+  check("K3 раскладка и передний слой панели сохраняются после перезагрузки",
+    Boolean(restored && after) && Math.abs(restored.x - after.x) < 4 && Math.abs(restored.y - after.y) < 4
+      && frontRestored.z >= 28 && frontRestored.front === "true",
+    `после перезагрузки ${restored ? restored.x + "," + restored.y : "н/д"} z=${frontRestored.z}`);
+
+  // Длительный тап/клик без сдвига на scorePanel (baseZ=20) выводит её поверх statusBar
+  const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
+  await scorePanel.scrollIntoViewIfNeeded();
+  const scoreRect = await scorePanel.boundingBox();
+  await page.mouse.move(scoreRect.x + 28, scoreRect.y + Math.min(22, scoreRect.height / 2));
+  await page.mouse.down();
+  await until(async () => (await scorePanel.getAttribute("data-front")) === "true", 3000);
+  await page.mouse.up();
+  await sleep(350);
+  const scoreAfter = await scorePanel.boundingBox();
+  const scoreFront = await page.evaluate(() => ({
+    scoreZ: Number(document.querySelector('[data-hud-panel="scorePanel"]')?.style.zIndex || 0),
+    statusZ: Number(document.querySelector('[data-hud-panel="statusBar"]')?.style.zIndex || 0),
+    front: document.querySelector('[data-hud-panel="scorePanel"]')?.getAttribute("data-front"),
+  }));
+  const stayedInPlace = Boolean(scoreAfter)
+    && Math.abs(scoreAfter.x - scoreRect.x) < 2
+    && Math.abs(scoreAfter.y - scoreRect.y) < 2;
+  check("K3b длительный клик без переноса выводит scorePanel поверх ранее поднятой панели",
+    scoreFront.scoreZ > scoreFront.statusZ && scoreFront.front === "true" && stayedInPlace,
+    JSON.stringify({ ...scoreFront, stayedInPlace }));
 
   // Обычный клик внутри той же панели не сломан длительным нажатием
   await page.getByRole("button", { name: "Быстрый старт" }).click({ timeout: 8000 });
@@ -630,6 +693,219 @@ try {
   }));
   check("K7 заднее зеркало 10:3, оба боковых 2:1", Math.abs(aspects[0] - 10 / 3) < 1e-6 && aspects[1] === 2 && aspects[2] === 2);
 
+  // Сворачивание (−), разворачивание (+), закрытие (×) и восстановление через док «Окна»
+  const scoreFull = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  await page.getByRole("button", { name: "Свернуть: Оценка", exact: true }).click();
+  await sleep(120);
+  const scoreMin = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  const isMin = (await page.locator('[data-hud-panel="scorePanel"]').getAttribute("data-collapsed")) === "true";
+  await page.getByRole("button", { name: "Развернуть: Оценка", exact: true }).click();
+  await sleep(120);
+  const scoreBack = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  await page.getByRole("button", { name: "Закрыть: Оценка", exact: true }).click();
+  await sleep(120);
+  const closedGone = (await page.locator('[data-hud-panel="scorePanel"]').count()) === 0;
+  await page.getByTestId("hud-restore-dock").click();
+  await page.getByTestId("hud-panels-menu").getByRole("button", { name: "Показать все", exact: true }).click();
+  await sleep(120);
+  const reopened = (await page.locator('[data-hud-panel="scorePanel"]').count()) === 1;
+  check("K7b элементы HUD сворачиваются (−/+), закрываются (×) и возвращаются через «Окна»",
+    Boolean(isMin && scoreMin && scoreFull && scoreMin.height < scoreFull.height - 10 && scoreBack && scoreBack.height >= scoreFull.height - 2 && closedGone && reopened),
+    JSON.stringify({ isMin, fullH: scoreFull?.height, minH: scoreMin?.height, closedGone, reopened }));
+
+  // Подсказка КПП при наведении на HUD и живое переключение передач 3D-рычагом АКПП в салоне
+  // (возвращаем statusBar с центра холста после K2 на штатное место, чтобы не перекрывал центр 3D-салона)
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByRole("button", { name: "Сбросить раскладку" }).click();
+  await page.getByRole("button", { name: "Закрыть настройки управления" }).click();
+  await sleep(120);
+  const canvasEl = page.locator("canvas").first();
+  await canvasEl.scrollIntoViewIfNeeded();
+  const hudDriveBtn = page.locator('[data-gear-slot="D"]');
+  await hudDriveBtn.hover();
+  await sleep(120);
+  const hudHintText = (await page.locator('[data-testid="hud-gearbox-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
+  const hudHintOk = hudHintText.includes("6АКПП") && hudHintText.includes("Shift") && hudHintText.includes("M1–M6") && hudHintText.includes("3D-рычаг");
+  // Переходим к 3D-рычагу АКПП в салоне (G) и заводим ДВС (I)
+  await page.keyboard.press("KeyG");
+  await page.locator('[data-testid="cockpit-look-shifter"]').waitFor({ timeout: 5000 });
+  await page.keyboard.press("KeyI");
+  // Дожидаемся двух полных кадров rAF после переключения камеры в салон под SwiftShader
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await sleep(160);
+  const cvBox = await canvasEl.boundingBox();
+  const knobPx = { x: cvBox.x + cvBox.width * 0.486, y: cvBox.y + cvBox.height * 0.486 };
+  const slotDPx = { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
+  const topTag = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName || "NONE", knobPx);
+  await page.mouse.move(knobPx.x, knobPx.y);
+  await sleep(140);
+  const cabinHintText = (await page.locator('[data-testid="cockpit-shifter-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
+  const cabinHintOk = cabinHintText.includes("3D-РЫЧАГ") && cabinHintText.includes("M1–M6") && cabinHintText.includes("D1–D6");
+  // BTSI: без нажатого тормоза селектор не выходит из P (блокировка brake-transmission shift interlock)
+  await page.mouse.down();
+  await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 6 });
+  await sleep(80);
+  const gearNoBrake = (await page.evaluate(() => window.__cdtCockpit?.gear?.() ?? "")).trim();
+  const interlockNotice = (await page.locator('[data-testid="notification"]').innerText().catch(() => "")) ||
+    (await page.evaluate(() => document.body.innerText)).slice(0, 4000);
+  // Удерживаем тормоз (S) и повторяем перетаскивание в D — теперь блокировка снимается
+  await page.keyboard.down("KeyS");
+  await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 3 });
+  await sleep(80);
+  const afterDragD = (await hudDriveBtn.innerText()).trim();
+  // Тормоз нужен только чтобы снять селектор с P; отпускаем S (удержание педали без газа
+  // включает антизаглохание и возвращает M2→M1 на стоящем автомобиле), зато D1 разгоняется
+  // самоходом на ХХ, поэтому шаг M1→M2 идёт на реально движущейся машине.
+  await page.keyboard.up("KeyS");
+  await sleep(900);
+  // Тянем рычаг влево (к водителю) в ручной паз M, затем качаем вверх к + (M2)
+  const slotMPx = { x: slotDPx.x - 28, y: slotDPx.y };
+  await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 5 });
+  await sleep(80);
+  const afterDragM1 = (await hudDriveBtn.innerText()).trim();
+  await page.mouse.move(slotMPx.x, slotMPx.y - 26, { steps: 5 });
+  await sleep(80);
+  let afterDragM2 = (await hudDriveBtn.innerText()).trim();
+  if (afterDragM2 === "M1") {
+    // Под SwiftShader курсор мог не дойти до зоны качания «+» с первого раза: повторяем шаг
+    await page.mouse.move(slotMPx.x, slotMPx.y - 4, { steps: 3 });
+    await sleep(60);
+    await page.mouse.move(slotMPx.x, slotMPx.y - 34, { steps: 5 });
+    await sleep(90);
+    afterDragM2 = (await hudDriveBtn.innerText()).trim();
+  }
+  // Возвращаем рычаг в центр M и толкаем вправо обратно в автомат D
+  await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
+  await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
+  await page.mouse.up();
+  await sleep(100);
+  const afterBackD = (await hudDriveBtn.innerText()).trim();
+  // Возвращаем вид сзади (1)
+  await page.keyboard.press("Digit1");
+  await sleep(120);
+  check("K7c подсказки КПП, BTSI-блокировка P без тормоза и рычаг в салоне P→D1→M1→M2→D",
+    hudHintOk && cabinHintOk && gearNoBrake === "P" && /тормоз/i.test(interlockNotice) &&
+      afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && /^D[12]$/.test(afterBackD),
+    JSON.stringify({ topTag, hudHintOk, cabinHintOk, gearNoBrake, afterDragD, afterDragM1, afterDragM2, afterBackD }));
+
+  // 3D-органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, свет и ENGINE START/STOP доступны кликом
+  // (координаты берём из отладочного моста __cdtCockpit — реальный raycast по 3D-мешам).
+  // Возвращаемся в салон (после K7c вид сзади) и направляем взгляд на центральную консоль с 7" ШГУ
+  await page.keyboard.press("Digit2");
+  await sleep(260);
+  await page.getByTestId("cockpit-look-headunit").click();
+  await sleep(320);
+  const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
+  const controlPx = async (id) => {
+    const p = await page.evaluate((cid) => window.__cdtCockpit?.controlPoint?.(cid) ?? null, id);
+    return p ? toPx(p) : null;
+  };
+  const headPx = await controlPx("headunit");
+  const volPx = await controlPx("vol");
+  const tunePx = await controlPx("tune");
+  const lightPx = await controlPx("headlight");
+  const hazardPx = await controlPx("hazard");
+  const controlsFound = Boolean(headPx && volPx && tunePx && lightPx && hazardPx);
+  const headMode0 = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode);
+  let headHintOk = false;
+  if (headPx) {
+    await page.mouse.move(headPx.x, headPx.y);
+    await sleep(160);
+    const hint = await page.locator('[data-testid="cockpit-control-hint"]');
+    headHintOk = (await hint.count()) === 1 &&
+      (await hint.getAttribute("data-control")) === "headunit" &&
+      /ШГУ/.test(await hint.innerText());
+    await page.mouse.click(headPx.x, headPx.y);
+    await sleep(200);
+  }
+  const headMode1 = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode);
+  if (tunePx) { await page.mouse.click(tunePx.x, tunePx.y); await sleep(180); }
+  const radioState = await page.evaluate(() => window.__cdtCockpit?.headUnit?.() ?? null);
+  if (volPx) { await page.mouse.click(volPx.x, volPx.y); await sleep(180); }
+  const radioPaused = await page.evaluate(() => window.__cdtCockpit?.headUnit?.()?.radioPlaying === false);
+  if (hazardPx) { await page.mouse.click(hazardPx.x, hazardPx.y); await sleep(200); }
+  const hazardOn = (await page.evaluate(() => window.__cdtCockpit?.signal?.() ?? "")) === "hazard";
+  if (hazardPx) { await page.mouse.click(hazardPx.x, hazardPx.y); await sleep(200); }
+  const lightsBefore = await page.evaluate(() => window.__cdtCockpit?.vehicle?.().lights === true);
+  if (lightPx) { await page.mouse.click(lightPx.x, lightPx.y); await sleep(200); }
+  const lightsAfter = await page.evaluate(() => window.__cdtCockpit?.vehicle?.().lights === true);
+  const huStored = await page.evaluate(() => localStorage.getItem("cdt.headunit.v1"));
+  // Звук ШГУ: сохранение трека «во время поездки» в кэш и воспроизведение из кэша.
+  // В CI IndexedDB может быть ограничена, поэтому хранилище подменяется in-memory дублёром —
+  // интерфейс `saveTrack/listTracks/loadTrack/deleteTrack/trackBackend` при этом тот же.
+  await page.evaluate(() => {
+    const db = new Map();
+    const api = {
+      async saveTrack(t) {
+        db.set(t.key, { ...t, savedAt: new Date().toISOString(), size: t.blob.size });
+        return true;
+      },
+      async listTracks() {
+        return [...db.values()].map(({ blob, ...rest }) => rest);
+      },
+      async loadTrack(key) {
+        return db.get(key) ?? null;
+      },
+      async deleteTrack(key) {
+        db.delete(key);
+      },
+      async clearTracks() {
+        db.clear();
+      },
+      trackBackend: () => "indexeddb",
+    };
+    window.__cdtAudioStore = api;
+    window.__cdtAudioDb = db;
+  });
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByRole("button", { name: "Сбросить раскладку" }).click();
+  await page.getByTestId("controls-headunit").scrollIntoViewIfNeeded();
+  const soundBtn = page.getByTestId("sound-toggle");
+  const soundOnAtStart = (await soundBtn.getAttribute("aria-pressed")) === "true";
+  await soundBtn.click();
+  await sleep(120);
+  const soundOff = (await soundBtn.getAttribute("aria-pressed")) === "false";
+  await soundBtn.click();
+  await sleep(120);
+  const soundOn = (await soundBtn.getAttribute("aria-pressed")) === "true";
+  const audioBridgeOn = await page.evaluate(() => Boolean(window.__cdtCockpit?.audio));
+  // Режим РАДИО: живой интернет-эфир реальной станции (в CI сети нет — плеер обязан не падать)
+  await page.locator('[data-headunit-mode="radio"]').click();
+  await sleep(300);
+  const headRadio = await page.evaluate(() => window.__cdtCockpit?.headUnit?.() ?? null);
+  const audioEl = await page.evaluate(() => window.__cdtCockpit?.audio?.()?.context ?? null);
+  const streamRequested = Boolean(audioEl && /^https:\/\//.test(audioEl.src));
+  // Сохраняем 32-секундный трек текущей станции в кэш прямо «в поездке»
+  await page.getByTestId("headunit-save-track").click();
+  await sleep(900);
+  const savedAfterClick = await page.evaluate(() => window.__cdtAudioDb ? [...window.__cdtAudioDb.keys()] : []);
+  const trackListText = (await page.getByTestId("headunit-tracklist").innerText().catch(() => "")).replace(/\s+/g, " ");
+  const savedCountText = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().savedCount ?? -1);
+  // Слушаем трек из кэша: источник переключается на сохранённый трек
+  await page.getByRole("button", { name: "Слушать кэш", exact: true }).click();
+  await sleep(600);
+  const savedSource = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().source ?? "");
+  const cachedAudio = await page.evaluate(() => window.__cdtCockpit?.audio?.()?.context?.src ?? "");
+  const cachedIsBlob = cachedAudio.startsWith("blob:");
+  check("K7e звук ШГУ: переключатель звука, живой интернет-эфир, сохранение трека в поездке и воспроизведение из кэша",
+    soundOnAtStart && soundOff && soundOn && audioBridgeOn && headRadio?.mode === "radio" &&
+      streamRequested && savedAfterClick.length === 1 && savedCountText === 1 &&
+      /32 с/.test(trackListText) && savedSource === "saved" && cachedIsBlob,
+    JSON.stringify({ soundOnAtStart, soundOff, soundOn, audioBridgeOn, radioMode: headRadio?.mode, streamRequested, savedAfterClick, savedCountText, trackListText, savedSource, cachedIsBlob }));
+  // Возвращаем ШГУ в исходный режим «ассистент», чтобы K7d проверял цикл assist → radio с чистого состояния
+  await page.locator('[data-headunit-mode="assist"]').click();
+  await sleep(160);
+  const modeReset = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode === "assist");
+  check("K7e2 ШГУ возвращается в исходный режим после проверки звука", modeReset);
+  await page.getByRole("button", { name: "Закрыть настройки управления" }).click();
+  await sleep(150);
+
+  check("K7d 3D-органы салона: ШГУ переключает режимы, TUNE/VOL — станция и пауза, аварийка и свет работают",
+    controlsFound && headHintOk && headMode0 === "assist" && headMode1 === "radio" &&
+      radioState?.mode === "radio" && radioState?.radioPlaying === true && radioPaused &&
+      hazardOn && lightsAfter !== lightsBefore && /"mode":"radio"/.test(huStored || ""),
+    JSON.stringify({ controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
+
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
@@ -679,6 +955,9 @@ try {
   await page.getByRole("button", { name: "Быстрый старт" }).click();
   const controls=page.getByRole("button", { name:"Управление", exact:true });
   const slider=page.getByRole("slider", { name:"Максимальный угол поворота внутреннего колеса", exact:true });
+  // Панель приборов может перекрывать панель «Управление» — закрываем её на время настройки выворота
+  const clusterClose = page.getByRole("button", { name: "Закрыть: Приборы и КПП", exact: true });
+  if (await clusterClose.count()) { await clusterClose.click(); await sleep(160); }
   await controls.click();
   check("L5 диапазон выворота 33–42°, по умолчанию 35°",await slider.inputValue()==="35" && await slider.getAttribute("min")==="33" && await slider.getAttribute("max")==="42");
   await slider.press("Home");
@@ -691,6 +970,10 @@ try {
   const at42=await until(async()=> /Л 42.0°/.test(await page.locator('.wheel-readout').innerText()));
   await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
   check("L7 предел 42° применяется без сброса заезда или руля",Boolean(at42) && await page.getByRole('button',{name:'Быстрый старт'}).count()===0);
+  // Возвращаем панель приборов: её показания скорости читает speedOf в L8
+  await page.getByTestId("hud-restore-dock").click();
+  await page.getByTestId("hud-panels-menu").getByRole("button", { name: "Показать все", exact: true }).click();
+  await sleep(220);
 
   const press = async (button) => {const r=await button.boundingBox();await page.mouse.move(r.x+r.width/2, r.y+r.height/2);await page.mouse.down();};
   await press(gas); const drives=await until(async()=> (await speedOf(page))>=2); await page.mouse.up();
@@ -886,6 +1169,226 @@ try {
   await ctx.close();
 } catch (e) {
   check("O сценарий выполнен без исключений", false, String(e.message).slice(-460));
+}
+
+// ───────── P. Проверка маршрута OSM, неквадратные и произвольные границы, обрезка и фиксы редактора ─────────
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+
+  // Вытянутый неквадратный участок OSM (сшивка 2 сегментов главной улицы + далёкая побочная улица + здание)
+  const routeOsmXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="OpenStreetMap server">
+  <bounds minlat="55.7495" minlon="37.6060" maxlat="55.7518" maxlon="37.6145"/>
+  <node id="1" lat="55.7500" lon="37.6065"/>
+  <node id="2" lat="55.7500" lon="37.6105"><tag k="highway" v="traffic_signals"/></node>
+  <node id="3" lat="55.7500" lon="37.6142"><tag k="highway" v="crossing"/></node>
+  <node id="4" lat="55.7516" lon="37.6070"/>
+  <node id="5" lat="55.7516" lon="37.6095"/>
+  <node id="10" lat="55.7514" lon="37.6120"/>
+  <node id="11" lat="55.7514" lon="37.6124"/>
+  <node id="12" lat="55.7517" lon="37.6124"/>
+  <node id="13" lat="55.7517" lon="37.6120"/>
+  <way id="101">
+    <nd ref="1"/><nd ref="2"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Экзаменационный"/>
+    <tag k="maxspeed" v="50"/>
+  </way>
+  <way id="102">
+    <nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Экзаменационный"/>
+    <tag k="maxspeed" v="40"/>
+  </way>
+  <way id="103">
+    <nd ref="4"/><nd ref="5"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="ул. Внешняя"/>
+  </way>
+  <way id="104">
+    <nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="10"/>
+    <tag k="building" v="yes"/>
+  </way>
+</osm>`;
+
+  // 1. Загрузка OSM прямо в 3D-тренажёре -> видна панель проверки маршрута -> переход в редактор
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "exam-corridor.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(routeOsmXml),
+  });
+  await sleep(600);
+  const simBar = (await page.getByTestId("sim-osm-route-bar").innerText()).toLowerCase();
+  check("P1 после загрузки OSM в 3D-тренажёре активна панель проверки маршрута и неквадратный размер",
+    simBar.includes("маршрут:") && simBar.includes("кт") && !simBar.includes("240×240"),
+    simBar.slice(0, 140));
+
+  await page.getByTestId("sim-osm-open-editor").click();
+  await sleep(500);
+
+  // 2. В редакторе автоматически открыта панель «Проверка маршрута» + отрисованы сегменты по улице + размер неквадратный
+  const checkSummary = await page.getByTestId("route-check-summary").innerText();
+  const legsCount = await page.locator('[data-testid^="map-route-leg-"]').count();
+  const dimText = await page.getByTestId("map-dimensions-badge").innerText();
+  const dimMatch = dimText.match(/(\d+)×(\d+)\s*м/);
+  const isNonSquare = Boolean(dimMatch && Number(dimMatch[1]) > Number(dimMatch[2]) * 1.6);
+  check("P2 панель проверки маршрута в редакторе подтверждает маршрут и строит нитку по улицам",
+    checkSummary.includes("Маршрут исправен") && legsCount >= 4 && isNonSquare,
+    `${checkSummary} | legs=${legsCount} | ${dimText}`);
+
+  // 3. Реверс направления маршрута перестраивает КТ и сохраняет валидность
+  await page.getByTestId("editor-route-reverse-toggle").check();
+  await page.getByTestId("editor-build-route-btn").click();
+  await sleep(300);
+  const revStatus = (await page.getByTestId("route-check-status").innerText()).toLowerCase();
+  check("P3 реверс и перестроение маршрута по улице OSM проходят проверку",
+    revStatus.includes("маршрут проверен"), revStatus);
+
+  // 4. Построение неквадратного коридора маршрута и обрезка внешней улицы/здания
+  await page.getByTestId("editor-tool-boundary").click();
+  await sleep(150);
+  await page.getByTestId("editor-corridor-btn").click();
+  await sleep(250);
+  const polyExists = (await page.locator('[data-testid="map-boundary-polygon"]').count()) === 1;
+  await page.getByTestId("editor-crop-btn").click();
+  await sleep(300);
+  const croppedBody = await page.evaluate(() => document.body.innerText);
+  check("P4 коридор маршрута создаёт полигон и обрезает внешнюю улицу и здание",
+    polyExists && croppedBody.includes("Дороги (2)") && !croppedBody.includes("ул. Внешняя"),
+    `poly=${polyExists}`);
+
+  // 5. Восстановление всей выгрузки OSM и рисование произвольного 4-угольного контура от руки на холсте
+  await page.getByTestId("editor-restore-osm-btn").click();
+  await sleep(300);
+  const restoredOk = (await page.evaluate(() => document.body.innerText)).includes("ул. Внешняя");
+  await page.getByTestId("editor-tool-boundary").click();
+  const canvas = page.getByTestId("map-editor-canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  await sleep(150);
+  const box = await canvas.boundingBox();
+  for (const [rx, ry] of [[0.14, 0.56], [0.86, 0.56], [0.82, 0.86], [0.18, 0.86]]) {
+    await canvas.click({ position: { x: Math.round(box.width * rx), y: Math.round(box.height * ry) } });
+    await sleep(80);
+  }
+  const finishBtn = page.getByTestId("boundary-finish-btn");
+  await finishBtn.scrollIntoViewIfNeeded();
+  await finishBtn.click();
+  await sleep(250);
+  const vtxCount = await page.locator('[data-testid^="map-boundary-vertex-"]').count();
+  check("P5 восстановление выгрузки OSM и рисование произвольного контура от руки (4 вершины)",
+    restoredOk && vtxCount === 4, `restored=${restoredOk}, vertices=${vtxCount}`);
+
+  // 6. Сброс к прямоугольнику + ввод отрицательной координаты в NumField + автопочинка маршрута
+  await page.getByTestId("editor-tool-boundary").click();
+  await sleep(150);
+  const resetPolyBtn = page.getByTestId("editor-reset-boundary-btn");
+  await resetPolyBtn.scrollIntoViewIfNeeded();
+  await resetPolyBtn.click();
+  await sleep(150);
+  await page.getByTestId("editor-tool-select").click();
+  const startMarker = page.getByTestId("map-start");
+  await startMarker.scrollIntoViewIfNeeded();
+  await startMarker.click({ force: true });
+  await sleep(150);
+  const startXInput = page.getByTestId("editor-inspector").locator('input[type="number"]').first();
+  await startXInput.scrollIntoViewIfNeeded();
+  await startXInput.fill("-999");
+  await startXInput.press("Enter");
+  await sleep(200);
+  const brokenStatus = (await page.getByTestId("route-check-status").innerText()).toLowerCase();
+  const fixBtn = page.getByTestId("editor-autofix-route-btn");
+  await fixBtn.scrollIntoViewIfNeeded();
+  await fixBtn.click();
+  await sleep(250);
+  const repairedStatus = (await page.getByTestId("route-check-status").innerText()).toLowerCase();
+  check("P6 ввод отрицательного числа фиксирует выход старта, а «Исправить маршрут» чинит его",
+    brokenStatus.includes("ошибок") && !repairedStatus.includes("ошибок"),
+    `${brokenStatus} -> ${repairedStatus}`);
+
+  // 7. Проверка сетки редактора (Выкл / 0,5 м / 2 м / 5 м) и Г-образной площадки с 3D-бордюром в тренажёре
+  const lotTplBtn = page.getByRole("button", { name: "Площадка", exact: true });
+  await lotTplBtn.scrollIntoViewIfNeeded();
+  await lotTplBtn.click();
+  await sleep(250);
+  await page.getByTestId("editor-grid-0").click();
+  await sleep(100);
+  const gridOff = (await page.locator('[data-testid="map-grid"]').count()) === 0
+    && (await page.getByTestId("map-dimensions-badge").innerText()).includes("сетка выкл");
+  await page.getByTestId("editor-grid-2").click();
+  await sleep(100);
+  const step2 = await page.getByTestId("map-grid").getAttribute("data-grid-step");
+  const lines2 = await page.locator('[data-testid="map-grid"] line').count();
+  await page.getByTestId("editor-grid-0.5").click();
+  await sleep(100);
+  const step05 = await page.getByTestId("map-grid").getAttribute("data-grid-step");
+  const lines05 = await page.locator('[data-testid="map-grid"] line').count();
+  check("P7 сетка редактора реально отключается и меняет шаг линий (Выкл / 2 м / 0,5 м)",
+    gridOff && step2 === "2" && step05 === "0.5" && lines05 > lines2 * 2,
+    `off=${gridOff}, step2=${step2}(${lines2}), step05=${step05}(${lines05})`);
+
+  await page.getByTestId("editor-tool-boundary").click();
+  await page.getByTestId("editor-shape-l_shape").click();
+  await page.getByTestId("editor-perimeter-curb-toggle").check();
+  await sleep(200);
+  const hasLPoly = (await page.locator('[data-testid="map-boundary-polygon"]').count()) === 1;
+  const noRectLot = (await page.locator('[data-testid="map-lot-rect"]').count()) === 0;
+  const lVtx = await page.locator('[data-testid^="map-boundary-vertex-"]').count();
+  await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
+  await sleep(900);
+  check("P8 Г-образная асфальтовая площадка (без квадратного rect) с 3D-бордюром открывается в 3D без ошибок",
+    hasLPoly && noRectLot && lVtx === 6 && errors.length === 0,
+    `poly=${hasLPoly}, noRect=${noRectLot}, vtx=${lVtx}, err=${errors.slice(0, 2).join(" | ")}`);
+
+  // 9. Бесконфликтный импорт реального .osm (oneway, забор с воротами поперёк улицы, дерево на оси, building=roof, слияние WGS84)
+  await tab(page, "Свой сценарий");
+  await sleep(300);
+  const realConflictOsm = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7492" minlon="37.6095" maxlat="55.7518" maxlon="37.6122"/>
+  <node id="1" lat="55.7494" lon="37.6105"/>
+  <node id="2" lat="55.7501" lon="37.6105"><tag k="natural" v="tree"/></node>
+  <node id="3" lat="55.7508" lon="37.6105"><tag k="barrier" v="gate"/></node>
+  <node id="4" lat="55.7516" lon="37.6105"/>
+  <node id="5" lat="55.7508" lon="37.6098"/>
+  <node id="6" lat="55.7508" lon="37.6112"/>
+  <node id="7" lat="55.7498" lon="37.6103"/><node id="8" lat="55.7498" lon="37.6107"/>
+  <node id="9" lat="55.7500" lon="37.6107"/><node id="10" lat="55.7500" lon="37.6103"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><tag k="highway" v="primary"/><tag k="name" v="ул. Односторонняя"/><tag k="oneway" v="yes"/><tag k="lanes" v="2"/><tag k="maxspeed" v="RU:urban"/></way>
+  <way id="11"><nd ref="5"/><nd ref="3"/><nd ref="6"/><tag k="barrier" v="fence"/></way>
+  <way id="12"><nd ref="7"/><nd ref="8"/><nd ref="9"/><nd ref="10"/><nd ref="7"/><tag k="building" v="roof"/></way>
+</osm>`;
+  await page.getByTestId("editor-import-input").setInputFiles({
+    name: "real-conflict.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(realConflictOsm),
+  });
+  await sleep(450);
+  const deconfNotes = (await page.getByTestId("editor-osm-deconflict-notes").innerText()).toLowerCase();
+  const deconfRouteOk = (await page.getByTestId("route-check-status").innerText()).toLowerCase().includes("маршрут проверен");
+  // Попытка реверса на односторонней улице OSM оставляет маршрут по разрешённому направлению и сбрасывает галку
+  await page.getByTestId("editor-route-reverse-toggle").check();
+  await page.getByTestId("editor-build-route-btn").click();
+  await sleep(200);
+  const revBlockedUnchecked = !(await page.getByTestId("editor-route-reverse-toggle").isChecked());
+  // Кнопка согласования + режим сохранения пользовательских объектов при повторном импорте расширенного bbox
+  await page.getByTestId("editor-deconflict-btn").click();
+  await page.getByTestId("editor-import-preserve-toggle").check();
+  await page.getByTestId("editor-import-input").setInputFiles({
+    name: "real-conflict-expanded.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(realConflictOsm.replace('maxlon="37.6122"', 'maxlon="37.6134"')),
+  });
+  await sleep(350);
+  await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
+  await sleep(800);
+  check("P9 бесконфликтный импорт .osm: отчёт WGS84/согласования, защита oneway от реверса и 3D без ошибок",
+    deconfNotes.includes("wgs84") && deconfNotes.includes("односторонних: 1") && deconfNotes.includes("согласовано:")
+      && deconfRouteOk && revBlockedUnchecked && errors.length === 0,
+    `notes=${deconfNotes.slice(0, 110)} | ok=${deconfRouteOk} | owBlock=${revBlockedUnchecked} | err=${errors.slice(0, 2).join(" | ")}`);
+  await ctx.close();
+} catch (e) {
+  check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
 }
 
 await browser.close();

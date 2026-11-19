@@ -17,7 +17,12 @@ import { SimulatorView } from "./components/SimulatorView";
 import { StrategyView } from "./components/StrategyView";
 import { TestsAndModulesView } from "./components/TestsAndModulesView";
 import type { NormalizedOsmPack } from "./maps/osmLoader";
-import { loadCustomScenario, saveCustomScenario, type CustomScenarioDef } from "./scenarios/custom";
+import {
+  customFromOsmPack,
+  loadCustomScenario,
+  saveCustomScenario,
+  type CustomScenarioDef,
+} from "./scenarios/custom";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET, type RuleSet } from "./scoring/rules";
 import {
   JOURNAL_LIMIT,
@@ -103,6 +108,9 @@ export default function App() {
   const [ruleSet, setRuleSet] = useState<RuleSet>(loadStoredRules);
   const [calibration, setCalibration] = useState<CalibrationConfig>(loadStoredCalibration);
   const [customOsm, setCustomOsm] = useState<NormalizedOsmPack | null>(null);
+  const [rawCustomOsm, setRawCustomOsm] = useState<NormalizedOsmPack | null>(null);
+  const [editorRawOsm, setEditorRawOsm] = useState<NormalizedOsmPack | null>(null);
+  const [autoOpenRouteCheck, setAutoOpenRouteCheck] = useState<boolean>(false);
   const [customDef, setCustomDef] = useState<CustomScenarioDef>(loadCustomScenario);
   const [activeStudent, setActiveStudent] = useState<string>(() => readText(STUDENT_STORAGE) ?? "Ученик 1");
   const [instructorName, setInstructorName] = useState<string>(() => readText(INSTRUCTOR_STORAGE) ?? "");
@@ -409,7 +417,18 @@ export default function App() {
             onWheelLockChange={(angle) => setCalibration((prev) => ({ ...prev, maxInnerWheelDeg: normalizeWheelLock(angle) }))}
             ruleSet={ruleSet}
             customOsm={customOsm}
-            onCustomOsmChange={setCustomOsm}
+            rawCustomOsm={rawCustomOsm}
+            onCustomOsmChange={(pack, rawPack) => {
+              setCustomOsm(pack);
+              if (rawPack !== undefined) setRawCustomOsm(rawPack);
+            }}
+            onEditOsmInEditor={(pack, rawPack) => {
+              setCustomDef(customFromOsmPack(pack));
+              setEditorRawOsm(rawPack ?? pack);
+              setAutoOpenRouteCheck(true);
+              setTab("custom");
+              notify("Карта OSM перенесена в редактор: задайте произвольные границы и проверьте маршрут");
+            }}
             customDef={customDef}
             onAttemptSaved={handleAttemptSaved}
             onNotify={notify}
@@ -420,6 +439,10 @@ export default function App() {
           <CustomScenarioView
             def={customDef}
             onChange={setCustomDef}
+            rawOsmPack={editorRawOsm}
+            onRawOsmPackChange={setEditorRawOsm}
+            autoOpenRouteCheck={autoOpenRouteCheck}
+            onConsumeAutoOpenRouteCheck={() => setAutoOpenRouteCheck(false)}
             calibration={calibration}
             onOpenInSimulator={() => {
               setScenarioId("custom");
@@ -525,7 +548,12 @@ export default function App() {
       </main>
 
       {toast && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 panel px-4 py-2.5 text-[12px] font-bold text-[#52d6bd] shadow-2xl fade-in max-w-[92vw] pointer-events-none">
+        <div
+          data-testid="notification"
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 panel px-4 py-2.5 text-[12px] font-bold text-[#52d6bd] shadow-2xl fade-in max-w-[92vw] pointer-events-none"
+        >
           {toast}
         </div>
       )}

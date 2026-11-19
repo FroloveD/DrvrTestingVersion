@@ -3,7 +3,7 @@
  * @layer ui
  * @role Редактор карт и сценариев: офлайн-импорт OSM (.osm XML / Overpass JSON / GeoJSON), палитра знаков и объектов, 2D drag-and-drop, инспектор и Undo/Redo.
  * @invariants #1 (координаты и курс h), #8–#9 (офлайн-импорт + атрибуция ODbL 1.0), #15 (снимок мира в попытке), #16 (без неподписанных штрафов).
- * @tests T16, T27, T28, T29; смоук A, G, O (`tests/browser-smoke.mjs`)
+ * @tests T16, T27–T32; смоук A, G, O, P (`tests/browser-smoke.mjs`)
  *
  * Оглавление секций (`grep -n "SEC:custom-"`):
  * - `[SEC:custom-fields]`  — числовые/текстовые поля ввода и справочники редактора (`NumField`, `TextField`).
@@ -11,12 +11,17 @@
  * - `[SEC:custom-forms]`   — инспектор выбранного объекта, реестр объектов, параметры карты и памятка импорта OSM.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BOUNDARY_SHAPE_PRESETS, polygonArea, type BoundaryShapePreset } from "../maps/boundary";
+import { cropOsmPackToPolygon, type NormalizedOsmPack } from "../maps/osmLoader";
+import { listRouteCandidates } from "../maps/route";
+import { checkScenarioRoute, type RouteCheckTarget } from "../maps/routeCheck";
 import {
   buildCityOsmScenario,
   buildParallelScenario,
   buildPerpendicularScenario,
 } from "../scenarios/catalog";
 import {
+  customFromOsmPack,
   customFromWorld,
   defaultCustomScenario,
   emptyCustomScenario,
@@ -26,17 +31,30 @@ import {
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  applyConvexHullBoundary,
+  applyPresetBoundaryShape,
+  applyRouteCorridorBoundary,
   attachCheckpointToSign,
+  autoFixScenarioRoute,
+  bringSelectionToFront,
+  clearBoundaryPolygon,
   createEditorHistory,
+  cropScenarioToBoundary,
+  deconflictScenarioWithRoads,
   deleteSelected,
   duplicateSelected,
   fitBoundsToContent,
   getSelectionAnchor,
+  insertBoundaryPoint,
+  mergeUserObjectsOntoOsmMap,
+  moveSelected,
   primarySelection,
   pushEditorHistory,
   rebuildRouteFromEditorRoads,
   redoEditorHistory,
+  reverseRoadDirection,
   rotateSelected,
+  setCustomBoundaryPolygon,
   setSelectedHeading,
   undoEditorHistory,
   type EditorSelection,
@@ -56,6 +74,7 @@ import type {
   ParkedModelKey,
   ParkingBayKind,
   RoadSignKind,
+  Vec2,
 } from "../sim/types";
 import { VEHICLE_DIMS } from "../sim/vehicle";
 import { Chip, downloadJson, Icon } from "./Icons";
@@ -64,6 +83,10 @@ import { DEFAULT_LAYERS, MapCanvasEditor, type LayerVisibility } from "./MapCanv
 type Props = {
   def: CustomScenarioDef;
   onChange: (next: CustomScenarioDef) => void;
+  rawOsmPack: NormalizedOsmPack | null;
+  onRawOsmPackChange: (pack: NormalizedOsmPack | null) => void;
+  autoOpenRouteCheck?: boolean;
+  onConsumeAutoOpenRouteCheck?: () => void;
   calibration: CalibrationConfig;
   onOpenInSimulator: () => void;
   onNotify: (msg: string) => void;
@@ -93,18 +116,71 @@ function NumField({
   min?: number;
   max?: number;
 }) {
+  const safeVal = Number.isFinite(value) ? value : 0;
+  const [text, setText] = useState<string>(() => String(safeVal));
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setText(String(safeVal));
+    }
+  }, [safeVal]);
+
+  const clampNum = (n: number): number => {
+    let v = n;
+    if (min !== undefined && v < min) v = min;
+    if (max !== undefined && v > max) v = max;
+    return v;
+  };
+
+  const commitText = (raw: string) => {
+    const normalized = raw.trim().replace(",", ".");
+    if (!normalized || normalized === "-" || normalized === "." || normalized === "-.") {
+      setText(String(safeVal));
+      return;
+    }
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed)) {
+      setText(String(safeVal));
+      return;
+    }
+    const clamped = clampNum(parsed);
+    setText(String(clamped));
+    if (clamped !== safeVal) onChange(clamped);
+  };
+
   return (
     <label className="block min-w-0">
       <span className="mono text-[10px] text-[#7c909d] block mb-1">{label}</span>
       <input
         type="number"
-        value={Number.isFinite(value) ? value : 0}
+        value={text}
         step={step}
         min={min}
         max={max}
+        onFocus={() => {
+          focusedRef.current = true;
+        }}
         onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n)) onChange(n);
+          const raw = e.target.value;
+          setText(raw);
+          // Промежуточный ввод («-», пустая строка, «12.») не сбрасываем до потери фокуса
+          const norm = raw.trim().replace(",", ".");
+          if (!norm || norm === "-" || norm.endsWith(".")) return;
+          const n = Number(norm);
+          if (!Number.isFinite(n)) return;
+          if ((min === undefined || n >= min) && (max === undefined || n <= max) && n !== safeVal) {
+            onChange(n);
+          }
+        }}
+        onBlur={(e) => {
+          focusedRef.current = false;
+          commitText(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commitText((e.target as HTMLInputElement).value);
+          }
         }}
         className="w-full rounded-lg bg-[#091017] border hairline px-2 py-1.5 mono text-xs text-white"
       />
@@ -140,6 +216,7 @@ function TextField({
 const TOOL_BUTTONS: Array<{ id: EditorTool; label: string; badge: string }> = [
   { id: "select", label: "Выбор / Перенос", badge: "↖" },
   { id: "pan", label: "Панорама", badge: "✥" },
+  { id: "boundary", label: "Форма площадки", badge: "⬠" },
   { id: "sign", label: "Дорожный знак", badge: "⊘" },
   { id: "signal", label: "Светофор", badge: "🚦" },
   { id: "crosswalk", label: "Переход", badge: "≡" },
@@ -166,14 +243,16 @@ const HIGHWAY_TYPES: Array<{ v: string; l: string }> = [
 
 const PARKED_MODELS: ParkedModelKey[] = ["picanto", "rio", "ceed", "xceed", "sorento"];
 const SPEED_PRESETS = [20, 30, 40, 50, 60, 70, 90] as const;
-const SNAP_OPTIONS: Array<{ v: number; l: string }> = [
-  { v: 0, l: "Выкл" },
-  { v: 0.5, l: "0,5 м" },
-  { v: 1, l: "1 м" },
-  { v: 2, l: "2 м" },
+const SNAP_OPTIONS: Array<{ v: number; l: string; hint: string }> = [
+  { v: 0, l: "Выкл", hint: "Скрыть сетку и отключить привязку — свободное перемещение объектов (0,1 м / 1°)" },
+  { v: 0.5, l: "0,5 м", hint: "Мелкая сетка и привязка 0,5 м — точная расстановка конусов, стоек и дорожных знаков" },
+  { v: 1, l: "1 м", hint: "Сетка и привязка 1 м — ровное выравнивание парковочных боксов, бордюров и стоп-линий" },
+  { v: 2, l: "2 м", hint: "Сетка и привязка 2 м — разметка полос, переходов и углов площадки" },
+  { v: 5, l: "5 м", hint: "Крупная сетка и привязка 5 м — улицы, здания и произвольный контур мира" },
 ];
 
 const LAYER_LABELS: Array<{ k: keyof LayerVisibility; l: string }> = [
+  { k: "boundary", l: "Граница" },
   { k: "roads", l: "Дороги" },
   { k: "bays", l: "Боксы" },
   { k: "obstacles", l: "Препятствия" },
@@ -190,13 +269,34 @@ function isEditableElement(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
-export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulator, onNotify }: Props) {
+export function CustomScenarioView({
+  def,
+  onChange,
+  rawOsmPack,
+  onRawOsmPackChange,
+  autoOpenRouteCheck,
+  onConsumeAutoOpenRouteCheck,
+  calibration,
+  onOpenInSimulator,
+  onNotify,
+}: Props) {
   const importRef = useRef<HTMLInputElement | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
   const [selection, setSelection] = useState<EditorSelection | null>({ kind: "start" });
   const [snapStep, setSnapStep] = useState<number>(0.5);
+  const [preserveOnImport, setPreserveOnImport] = useState<boolean>(false);
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [fitSignal, setFitSignal] = useState<number>(0);
+  const [focusSignal, setFocusSignal] = useState<number>(0);
+
+  // Произвольная граница (рисование многоугольника от руки и ширина коридора маршрута)
+  const [draftBoundary, setDraftBoundary] = useState<Vec2[]>([]);
+  const [corridorBufferM, setCorridorBufferM] = useState<number>(28);
+
+  // Интерактивная проверка и настройка маршрута OSM / редактора
+  const [showRouteCheck, setShowRouteCheck] = useState<boolean>(() => Boolean(def.mapMeta));
+  const [routeCandidateId, setRouteCandidateId] = useState<string>("");
+  const [routeReverse, setRouteReverse] = useState<boolean>(false);
 
   // Параметры добавляемого объекта в палитре
   const [signKind, setSignKind] = useState<RoadSignKind>("speed_limit");
@@ -211,8 +311,34 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const [listFilter, setListFilter] = useState<ListFilter>("all");
   const [showOsmHelp, setShowOsmHelp] = useState(false);
 
+  // Сворачивание (−) и закрытие (×) панелей интерфейса 2D-редактора
+  const [editorCollapsed, setEditorCollapsed] = useState<Record<string, boolean>>({});
+  const [editorClosed, setEditorClosed] = useState<Record<string, boolean>>({});
+  const toggleEditorCollapse = (key: string) =>
+    setEditorCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  const closeEditorCard = (key: string) =>
+    setEditorClosed((prev) => ({ ...prev, [key]: true }));
+  const reopenEditorCard = (key: string) => {
+    setEditorClosed((prev) => ({ ...prev, [key]: false }));
+    setEditorCollapsed((prev) => ({ ...prev, [key]: false }));
+  };
+  const anySidebarOpen = !editorClosed.inspector || !editorClosed.objects || !editorClosed.bounds;
+
   const validation = useMemo(() => validateCustomScenario(def), [def]);
+  const routeCheck = useMemo(() => checkScenarioRoute(def), [def]);
+  const routeCandidates = useMemo(
+    () => listRouteCandidates(def.roads ?? [], def.boundaryPolygon),
+    [def.roads, def.boundaryPolygon]
+  );
   const blocked = validation.errors.length > 0;
+
+  useEffect(() => {
+    if (autoOpenRouteCheck) {
+      setShowRouteCheck(true);
+      setFitSignal((n) => n + 1);
+      onConsumeAutoOpenRouteCheck?.();
+    }
+  }, [autoOpenRouteCheck, onConsumeAutoOpenRouteCheck]);
 
   const commitChange = useCallback(
     (next: CustomScenarioDef, before: CustomScenarioDef = def) => {
@@ -275,11 +401,72 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     [commitChange, def, selection]
   );
 
+  // Завершение рисования произвольного полигона границы (опционально — сразу с обрезкой дорог/зданий)
+  const handleFinishBoundary = useCallback(
+    (pts: Vec2[], alsoCrop: boolean) => {
+      const res = setCustomBoundaryPolygon(def, pts);
+      if (!res.ok) {
+        onNotify(res.error ?? "Не удалось применить контур границы");
+        return;
+      }
+      let next = res.def;
+      if (alsoCrop) {
+        const cropped = cropScenarioToBoundary(next);
+        next = cropped.def;
+        commitChange(next, def);
+        setDraftBoundary([]);
+        setTool("select");
+        setSelection({ kind: "start" });
+        setFitSignal((n) => n + 1);
+        setShowRouteCheck(true);
+        onNotify(
+          `Контур применён (${next.boundaryPolygon?.length ?? 0} т.) и карта обрезана: убрано дорог ${cropped.removedRoads}, объектов ${cropped.removedObjects}, КТ ${cropped.keptCheckpoints}`
+        );
+        return;
+      }
+      commitChange(next, def);
+      setDraftBoundary([]);
+      setTool("select");
+      setSelection({ kind: "boundary_point", index: 0 });
+      setFitSignal((n) => n + 1);
+      onNotify(
+        `Задана произвольная граница (${next.boundaryPolygon?.length ?? 0} вершин). Нажмите «Обрезать по границе», чтобы убрать внешние улицы.`
+      );
+    },
+    [commitChange, def, onNotify]
+  );
+
+  const handleCancelBoundary = useCallback(() => {
+    if (draftBoundary.length > 0) {
+      setDraftBoundary([]);
+      onNotify("Черновик контура очищен");
+    } else {
+      setTool("select");
+    }
+  }, [draftBoundary.length, onNotify]);
+
   // Горячие клавиши редактора (не перехватываются при вводе текста в поля)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEditableElement(e.target)) return;
       const mod = e.ctrlKey || e.metaKey;
+      if (tool === "boundary" && draftBoundary.length > 0) {
+        if (e.code === "Enter" && draftBoundary.length >= 3) {
+          e.preventDefault();
+          handleFinishBoundary(draftBoundary, false);
+          return;
+        }
+        if (e.code === "Backspace") {
+          e.preventDefault();
+          setDraftBoundary((prev) => prev.slice(0, -1));
+          return;
+        }
+        if (e.code === "Escape") {
+          e.preventDefault();
+          setDraftBoundary([]);
+          return;
+        }
+      }
       if (mod && e.code === "KeyZ" && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
@@ -289,21 +476,44 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
       } else if (mod && e.code === "KeyD") {
         e.preventDefault();
         handleDuplicate();
+      } else if (e.code === "KeyR" && !mod && selection) {
+        e.preventDefault();
+        handleQuickRotate(e.shiftKey ? 15 : -15);
       } else if (e.code === "Delete" || e.code === "Backspace") {
         if (selection && selection.kind !== "start") {
           e.preventDefault();
           handleDelete();
         }
       } else if (e.code === "Escape") {
+        setDraftBoundary([]);
         setTool("select");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleDelete, handleDuplicate, handleRedo, handleUndo, selection]);
+  }, [
+    draftBoundary,
+    handleDelete,
+    handleDuplicate,
+    handleFinishBoundary,
+    handleQuickRotate,
+    handleRedo,
+    handleUndo,
+    selection,
+    tool,
+  ]);
 
-  const applyImportedScenario = (next: CustomScenarioDef, message: string) => {
+  const applyImportedScenario = (
+    next: CustomScenarioDef,
+    message: string,
+    opts?: { rawPack?: NormalizedOsmPack | null; openCheck?: boolean }
+  ) => {
     commitChange(next, def);
+    setDraftBoundary([]);
+    setRouteCandidateId("");
+    setRouteReverse(false);
+    if (opts?.rawPack !== undefined) onRawOsmPackChange(opts.rawPack);
+    if (opts?.openCheck !== undefined) setShowRouteCheck(opts.openCheck);
     setSelection({ kind: "start" });
     setTool("select");
     setFitSignal((n) => n + 1);
@@ -317,8 +527,25 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     }
     try {
       const text = await file.text();
-      const { def: imported, summary } = importEditorFileText(text, file.name);
-      applyImportedScenario(imported, summary);
+      const { def: imported, kind, summary, rawPack } = importEditorFileText(text, file.name);
+      const isOsmMap = kind === "osm_xml" || kind === "osm_json" || kind === "geojson";
+      if (isOsmMap && preserveOnImport) {
+        const merged = mergeUserObjectsOntoOsmMap(def, imported);
+        const keptObjects = merged.keptBays + merged.keptSigns;
+        const mergeNote =
+          keptObjects > 0 || merged.keptCheckpoints > 0
+            ? ` · перенесено объектов: ${keptObjects}, КТ: ${merged.keptCheckpoints}${merged.reprojected ? " (WGS84)" : ""}`
+            : "";
+        applyImportedScenario(merged.def, `${summary}${mergeNote}`, {
+          rawPack: rawPack ?? null,
+          openCheck: true,
+        });
+        return;
+      }
+      applyImportedScenario(imported, summary, {
+        rawPack: rawPack ?? null,
+        openCheck: isOsmMap || imported.checkpoints.length > 0,
+      });
     } catch (err) {
       onNotify(err instanceof Error ? err.message : "Не удалось импортировать файл карты");
     }
@@ -330,22 +557,191 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     if (file) await readAndImportFile(file);
   };
 
-  const handleAutoRoute = () => {
-    const res = rebuildRouteFromEditorRoads(def);
+  const handleAutoRoute = (customCandId = routeCandidateId, reverse = routeReverse) => {
+    const res = rebuildRouteFromEditorRoads(def, {
+      candidateId: customCandId || undefined,
+      reverse,
+    });
     if (res.count === 0) {
-      onNotify("Для автомаршрута нужна дорога длиной не менее ~30 м");
+      onNotify("Внутри текущей границы не найдено дороги длиной ≥ 12 м для построения маршрута");
       return;
     }
     commitChange(res.def, def);
     setSelection({ kind: "start" });
-    onNotify(`Построен маршрут (${res.count} КТ)${res.roadName ? ` по «${res.roadName}»` : ""}`);
+    setShowRouteCheck(true);
+    if (res.reverseBlocked) {
+      setRouteReverse(false);
+      onNotify(
+        `«${res.roadName ?? "Улица"}» — односторонняя по данным OSM: маршрут построен по разрешённому направлению (${res.count} КТ)`
+      );
+      return;
+    }
+    onNotify(
+      `Построен маршрут (${res.count} КТ, ${Math.round(res.lengthM)} м)${res.roadName ? ` по «${res.roadName}»` : ""}${reverse ? " · реверс" : ""}`
+    );
+  };
+
+  const handleDeconflictWithRoads = () => {
+    const res = deconflictScenarioWithRoads(def);
+    if (res.changedCount === 0) {
+      onNotify("Конфликтов с дорожной сетью не обнаружено: здания, знаки, стойки и маршрут согласованы");
+      return;
+    }
+    commitChange(res.def, def);
+    setShowRouteCheck(true);
+    onNotify(`Согласовано с дорогами (${res.changedCount}): ${res.fixes[0] ?? "коллизии устранены"}`);
+  };
+
+  const handleAutoFixRoute = () => {
+    const { def: fixed, fixes } = autoFixScenarioRoute(def);
+    if (fixes.length === 0) {
+      onNotify("Проверка пройдена: автоматические исправления не требуются");
+      return;
+    }
+    commitChange(fixed, def);
+    setShowRouteCheck(true);
+    setFitSignal((n) => n + 1);
+    onNotify(`Исправлено (${fixes.length}): ${fixes[0]}`);
+  };
+
+  const handleCorridorBoundary = (alsoCrop = false) => {
+    const res = applyRouteCorridorBoundary(def, corridorBufferM);
+    if (!res.ok) {
+      onNotify("Нужна хотя бы одна дорога или 2 контрольные точки для коридора маршрута");
+      return;
+    }
+    let next = res.def;
+    if (alsoCrop) {
+      const cropped = cropScenarioToBoundary(next);
+      next = cropped.def;
+      commitChange(next, def);
+      setDraftBoundary([]);
+      setFitSignal((n) => n + 1);
+      setShowRouteCheck(true);
+      onNotify(
+        `Коридор маршрута ±${corridorBufferM} м (${res.vertices} т.) применён с обрезкой: убрано дорог ${cropped.removedRoads}, объектов ${cropped.removedObjects}`
+      );
+      return;
+    }
+    commitChange(next, def);
+    setDraftBoundary([]);
+    setFitSignal((n) => n + 1);
+    onNotify(
+      `Построен коридор маршрута ±${corridorBufferM} м (${res.vertices} вершин). Вершины можно двигать или обрезать карту.`
+    );
+  };
+
+  const handleHullBoundary = () => {
+    const res = applyConvexHullBoundary(def, 14);
+    if (!res.ok) {
+      onNotify("Недостаточно объектов для построения оболочки");
+      return;
+    }
+    commitChange(res.def, def);
+    setDraftBoundary([]);
+    setFitSignal((n) => n + 1);
+    onNotify(`Построена многоугольная оболочка площадки (${res.vertices} вершин)`);
+  };
+
+  const handlePresetBoundary = (preset: BoundaryShapePreset) => {
+    const meta = BOUNDARY_SHAPE_PRESETS.find((p) => p.id === preset);
+    const res = applyPresetBoundaryShape(def, preset);
+    commitChange(res.def, def);
+    setDraftBoundary([]);
+    setTool("boundary");
+    setSelection({ kind: "boundary_point", index: 0 });
+    setFitSignal((n) => n + 1);
+    onNotify(
+      `Форма площадки: «${meta?.label ?? preset}» (${res.vertices} вершин). Тяните янтарные углы или кликайте бирюзовые точки на сторонах.`
+    );
+  };
+
+  const handleBringSelectedToFront = () => {
+    const res = bringSelectionToFront(def, selection);
+    if (!res.moved) {
+      onNotify("Объект уже находится на переднем слое");
+      return;
+    }
+    commitChange(res.def, def);
+    onNotify("Объект помещён на передний план");
+  };
+
+  const handleCropToBoundary = () => {
+    // Если есть исходная выгрузка OSM и задан полигон, можно также обрезать текущую сцену с сохранением ручных правок
+    const cropped = cropScenarioToBoundary(def);
+    commitChange(cropped.def, def);
+    setSelection({ kind: "start" });
+    setFitSignal((n) => n + 1);
+    setShowRouteCheck(true);
+    onNotify(
+      `Карта обрезана по границе: убрано дорог ${cropped.removedRoads}, объектов ${cropped.removedObjects}, КТ в маршруте: ${cropped.keptCheckpoints}`
+    );
+  };
+
+  const handleRecropFromRawOsm = () => {
+    if (!rawOsmPack) return;
+    if (def.boundaryPolygon && def.boundaryPolygon.length >= 3) {
+      const recropped = cropOsmPackToPolygon(rawOsmPack, def.boundaryPolygon);
+      const next = customFromOsmPack(recropped, def.title);
+      commitChange(next, def);
+      setFitSignal((n) => n + 1);
+      setShowRouteCheck(true);
+      onNotify(
+        `Пересобрано из полной выгрузки OSM по новому контуру: дорог ${next.roads?.length ?? 0}, КТ ${next.checkpoints.length}`
+      );
+    } else {
+      const restored = customFromOsmPack(rawOsmPack, def.title);
+      commitChange(restored, def);
+      setFitSignal((n) => n + 1);
+      setShowRouteCheck(true);
+      onNotify(`Восстановлена полная выгрузка OSM (${restored.roads?.length ?? 0} дорог)`);
+    }
+  };
+
+  const handleRestoreFullOsm = () => {
+    if (!rawOsmPack) return;
+    const restored = customFromOsmPack(rawOsmPack);
+    commitChange(restored, def);
+    setDraftBoundary([]);
+    setSelection({ kind: "start" });
+    setFitSignal((n) => n + 1);
+    setShowRouteCheck(true);
+    onNotify(`Восстановлена вся выгрузка OSM до обрезки (дорог: ${restored.roads?.length ?? 0})`);
+  };
+
+  const handleResetBoundaryToRect = () => {
+    const fitted = clearBoundaryPolygon(def, 12);
+    commitChange(fitted, def);
+    setDraftBoundary([]);
+    if (selection?.kind === "boundary_point") setSelection({ kind: "start" });
+    setFitSignal((n) => n + 1);
+    const sx = Math.round(fitted.bounds.maxX - fitted.bounds.minX);
+    const sz = Math.round(fitted.bounds.maxZ - fitted.bounds.minZ);
+    onNotify(`Граница сброшена в пропорциональный прямоугольник ${sx}×${sz} м`);
   };
 
   const handleFitBounds = () => {
     const fitted = fitBoundsToContent(def, 12);
     commitChange(fitted, def);
     setFitSignal((n) => n + 1);
-    onNotify("Границы мира подогнаны по объектам карты");
+    const sx = Math.round(fitted.bounds.maxX - fitted.bounds.minX);
+    const sz = Math.round(fitted.bounds.maxZ - fitted.bounds.minZ);
+    onNotify(`Границы карты подогнаны по содержимому (${sx}×${sz} м)`);
+  };
+
+  const focusIssueTarget = (target?: RouteCheckTarget) => {
+    if (!target) return;
+    if (target.kind === "boundary") {
+      setTool("boundary");
+      if (def.boundaryPolygon && def.boundaryPolygon.length > 0) {
+        setSelection({ kind: "boundary_point", index: 0 });
+        setFocusSignal((n) => n + 1);
+      }
+      return;
+    }
+    setTool("select");
+    setSelection(target);
+    setFocusSignal((n) => n + 1);
   };
 
   const roads = def.roads ?? [];
@@ -426,11 +822,44 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           >
             <Icon name="upload" size={13} /> Импорт OSM / GeoJSON / JSON
           </button>
-          <button
-            type="button"
-            className="btn btn-mini"
-            onClick={() => downloadJson("custom-scenario.json", def, onNotify)}
+          <label
+            className="inline-flex items-center gap-1.5 rounded-lg border hairline bg-[#0b131a] px-2 py-1 text-[11px] text-[#c5d4de] cursor-pointer select-none"
+            title="При повторном импорте карты OSM / GeoJSON перенести ваши боксы, ручные знаки и маршрут (с точным пересчётом координат WGS84 и очисткой проезжей части)"
           >
+            <input
+              type="checkbox"
+              data-testid="editor-import-preserve-toggle"
+              checked={preserveOnImport}
+              onChange={(e) => setPreserveOnImport(e.target.checked)}
+              className="accent-[#52d6bd]"
+            />
+            <span>Сохранить мои объекты</span>
+          </label>
+            <button
+              type="button"
+              data-testid="editor-route-check-btn"
+              className="btn btn-mini"
+              onClick={() => setShowRouteCheck((v) => !v)}
+              title="Открыть детальную диагностику маршрута, связности дорог и препятствий"
+            >
+              <Icon name="route" size={13} /> Проверка маршрута
+              <span
+                className={`mono ml-1 ${
+                  routeCheck.status === "valid"
+                    ? "text-[#52d6bd]"
+                    : routeCheck.status === "warnings" || routeCheck.status === "empty"
+                      ? "text-[#f5b942]"
+                      : "text-[#ff8080]"
+                }`}
+              >
+                {routeCheck.status === "valid" ? "✓" : routeCheck.status === "errors" ? "✕" : "!"}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() => downloadJson("custom-scenario.json", def, onNotify)}
+            >
             <Icon name="download" size={13} /> Скачать JSON
           </button>
           <button
@@ -493,37 +922,338 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             <strong className="text-[#52d6bd]">{def.mapMeta.attribution}</strong> ({def.mapMeta.license})
           </span>
           <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className="btn btn-mini text-[#f5b942]"
+              onClick={() => setTool("boundary")}
+              title="Нарисовать произвольный контур границы или задать коридор маршрута"
+            >
+              ⬠ Границы маршрута
+            </button>
             {roads.length > 0 && (
-              <button type="button" className="btn btn-mini" onClick={handleAutoRoute}>
+              <button type="button" className="btn btn-mini" onClick={() => handleAutoRoute()}>
                 <Icon name="route" size={12} /> Автомаршрут
               </button>
             )}
-            <button type="button" className="btn btn-mini" onClick={handleFitBounds}>
-              Подогнать границы
+            <button type="button" className="btn btn-mini" onClick={() => setShowRouteCheck((v) => !v)}>
+              {showRouteCheck ? "Скрыть проверку" : "Проверка маршрута"}
             </button>
+            {rawOsmPack && (
+              <button
+                type="button"
+                data-testid="editor-restore-osm-btn"
+                className="btn btn-mini"
+                onClick={handleRestoreFullOsm}
+                title="Вернуть полную исходную выгрузку OSM до обрезки"
+              >
+                Вся выгрузка OSM
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* Ошибки и предупреждения проверки геометрии */}
-      {(blocked || validation.warnings.length > 0) && (
+      {/* Интерактивная панель «Проверка и настройка маршрута» (открывается автоматически после загрузки OSM) */}
+      {showRouteCheck && (
+        <div data-testid="route-check-panel" className="panel p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip
+                tone={
+                  routeCheck.status === "valid"
+                    ? "mint"
+                    : routeCheck.status === "warnings" || routeCheck.status === "empty"
+                      ? "amber"
+                      : "red"
+                }
+              >
+                <span data-testid="route-check-status">
+                  {routeCheck.status === "valid"
+                    ? "✓ Маршрут проверен"
+                    : routeCheck.status === "errors"
+                      ? `✕ Ошибок: ${routeCheck.issues.filter((i) => i.severity === "error").length}`
+                      : `⚠ Замечаний: ${routeCheck.issues.length}`}
+                </span>
+              </Chip>
+              <span className="text-xs font-bold text-white" data-testid="route-check-summary">
+                {routeCheck.summary}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {routeCheck.canAutoFix && (
+                <button
+                  type="button"
+                  data-testid="editor-autofix-route-btn"
+                  className="btn btn-primary btn-mini"
+                  onClick={handleAutoFixRoute}
+                >
+                  Исправить маршрут
+                </button>
+              )}
+              {roads.length > 0 && (
+                <button
+                  type="button"
+                  data-testid="editor-deconflict-btn"
+                  className="btn btn-mini text-[#52d6bd]"
+                  onClick={handleDeconflictWithRoads}
+                  title="Убрать с проезжей части конфликтующие здания, заборы, деревья, стойки знаков и выровнять маршрут по односторонним улицам"
+                >
+                  ✓ Согласовать с дорогами
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-mini"
+                onClick={() => handleCorridorBoundary(true)}
+                disabled={roads.length === 0 && def.checkpoints.length < 2}
+                title="Обрезать карту по неквадратному коридору вдоль текущего маршрута"
+              >
+                ⬠ Коридор ±{corridorBufferM} м
+              </button>
+              <button
+                type="button"
+                aria-label={editorCollapsed.routeCheck ? "Развернуть проверку маршрута" : "Свернуть проверку маршрута"}
+                title={editorCollapsed.routeCheck ? "Развернуть подробности проверки" : "Свернуть подробности проверки"}
+                onClick={() => toggleEditorCollapse("routeCheck")}
+                className="mono h-7 w-7 rounded-lg border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+              >
+                {editorCollapsed.routeCheck ? "+" : "−"}
+              </button>
+              <button
+                type="button"
+                aria-label="Закрыть проверку маршрута"
+                title="Закрыть панель проверки маршрута"
+                className="btn btn-mini"
+                onClick={() => setShowRouteCheck(false)}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {!editorCollapsed.routeCheck && (
+          <>
+          {/* Выбор улицы OSM и пересборка маршрута */}
+          {roads.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-[#091017] border hairline px-3 py-2 text-[11px]">
+              <span className="mono text-[10px] text-[#7c909d]">УЛИЦА МАРШРУТА:</span>
+              <select
+                data-testid="editor-route-candidate-select"
+                value={routeCandidateId}
+                onChange={(e) => setRouteCandidateId(e.target.value)}
+                className="rounded-lg bg-[#0d1620] border hairline px-2 py-1 text-xs text-white max-w-[290px]"
+              >
+                <option value="">Автоматически (лучшая улица внутри границы)</option>
+                {routeCandidates.slice(0, 20).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.oneway ? "→ " : ""}
+                    {c.name} · {c.lengthM} м ({c.highway}, {c.speedLimitKmh} км/ч
+                    {c.oneway ? ", 1-стор." : ""})
+                  </option>
+                ))}
+              </select>
+              <label className="inline-flex items-center gap-1.5 cursor-pointer text-[#c5d4df]">
+                <input
+                  type="checkbox"
+                  data-testid="editor-route-reverse-toggle"
+                  checked={routeReverse}
+                  onChange={(e) => setRouteReverse(e.target.checked)}
+                  className="accent-[#f5b942]"
+                />
+                <span>В обратную сторону</span>
+              </label>
+              <button
+                type="button"
+                data-testid="editor-build-route-btn"
+                className="btn btn-mini text-[#52d6bd]"
+                onClick={() => handleAutoRoute(routeCandidateId, routeReverse)}
+              >
+                <Icon name="route" size={12} /> Построить маршрут
+              </button>
+              <span className="mono text-[10px] text-[#7c909d] ml-auto">
+                КТ: {routeCheck.checkpointsCount} · длина: {routeCheck.totalLengthM} м · светофоров:{" "}
+                {routeCheck.signalsOnRoute} · переходов: {routeCheck.crosswalksOnRoute} · знаков:{" "}
+                {routeCheck.signsOnRoute}
+              </span>
+            </div>
+          )}
+
+          {/* Отчёт автоматического согласования с реальной картой OSM / GeoJSON */}
+          {def.mapMeta &&
+            ((def.mapMeta.conflictNotes && def.mapMeta.conflictNotes.length > 0) ||
+              (def.mapMeta.onewayRoadsCount ?? 0) > 0 ||
+              def.mapMeta.origin) && (
+              <div
+                data-testid="editor-osm-deconflict-notes"
+                className="rounded-lg bg-[#081519] border border-[#52d6bd]/25 px-3 py-1.5 text-[11px] text-[#b7d4dc] flex flex-wrap items-center gap-x-2 gap-y-1"
+              >
+                <span className="mono text-[10px] text-[#52d6bd] font-semibold">РЕАЛЬНАЯ КАРТА OSM:</span>
+                {def.mapMeta.origin && (
+                  <span className="mono text-[10px] text-[#8ab2bf]">
+                    WGS84 {def.mapMeta.origin.lat.toFixed(5)}, {def.mapMeta.origin.lon.toFixed(5)}
+                  </span>
+                )}
+                {(def.mapMeta.onewayRoadsCount ?? 0) > 0 && (
+                  <span>· односторонних: {def.mapMeta.onewayRoadsCount}</span>
+                )}
+                {def.mapMeta.conflictNotes && def.mapMeta.conflictNotes.length > 0 && (
+                  <span>· согласовано: {def.mapMeta.conflictNotes.join("; ")}</span>
+                )}
+              </div>
+            )}
+
+          {/* Замечания и ошибки с кнопкой перехода к объекту на 2D-карте */}
+          {routeCheck.issues.length > 0 && (
+            <div className="space-y-1.5" data-testid="route-check-issues">
+              {routeCheck.issues.map((iss, issIdx) => (
+                <div
+                  key={issIdx}
+                  className={`flex flex-wrap items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-[11px] border ${
+                    iss.severity === "error"
+                      ? "bg-[#3a1216]/45 border-[#ff6b6b]/35 text-[#ffb4b4]"
+                      : iss.severity === "warning"
+                        ? "bg-[#33260d]/40 border-[#f5b942]/30 text-[#f5d78a]"
+                        : "bg-[#0d1c26]/60 border-white/10 text-[#b7c7d2]"
+                  }`}
+                >
+                  <span>
+                    <strong className="mono mr-1.5">
+                      {iss.severity === "error" ? "ОШИБКА" : iss.severity === "warning" ? "СОВЕТ" : "ИНФО"}
+                    </strong>
+                    {iss.message}
+                  </span>
+                  {iss.target && (
+                    <button
+                      type="button"
+                      className="btn btn-mini"
+                      onClick={() => focusIssueTarget(iss.target)}
+                    >
+                      Показать на карте
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Сегменты маршрута (Старт → КТ #1 → ... → финиш) */}
+          {routeCheck.legs.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 text-[10px]">
+              {routeCheck.legs.map((leg) => (
+                <button
+                  key={leg.index}
+                  type="button"
+                  onClick={() => focusIssueTarget({ kind: "checkpoint", id: leg.checkpointId })}
+                  className={`inline-flex items-center gap-1 rounded-md px-2 py-1 border cursor-pointer mono ${
+                    leg.status === "ok"
+                      ? "bg-[#091a19] border-[#52d6bd]/30 text-[#9ce8d8]"
+                      : leg.status === "offroad"
+                        ? "bg-[#241b09] border-[#f5b942]/35 text-[#f5d78a]"
+                        : "bg-[#2a1014] border-[#ff6b6b]/40 text-[#ff9e9e]"
+                  }`}
+                  title={
+                    leg.blockedBy
+                      ? `Препятствие: ${leg.blockedBy}`
+                      : leg.roadNames.length > 0
+                        ? leg.roadNames.join(" → ")
+                        : leg.toLabel
+                  }
+                >
+                  <span>
+                    {leg.fromLabel} → {leg.toLabel}: {leg.lengthM} м
+                  </span>
+                  {leg.roadNames[0] && <span className="text-[#7c909d]">({leg.roadNames[0]})</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          </>
+          )}
+        </div>
+      )}
+
+      {/* Ошибки и предупреждения проверки геометрии (сворачиваемый и закрываемый блок) */}
+      {(blocked || validation.warnings.length > 0) && !editorClosed.validation && (
         <div className="panel p-3.5 space-y-1">
-          {validation.errors.map((e, i) => (
-            <div key={`e${i}`} className="flex gap-2 text-[12px] text-[#ff9494]">
-              <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
-              <span>{e}</span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="mono text-[10px] text-[#9bafbc]">
+              ПРОВЕРКА ГЕОМЕТРИИ ({validation.errors.length + validation.warnings.length})
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={editorCollapsed.validation ? "Развернуть проверку геометрии" : "Свернуть проверку геометрии"}
+                onClick={() => toggleEditorCollapse("validation")}
+                className="mono h-5 w-5 rounded border hairline text-[10px] text-[#9bafbc] hover:text-[#f5b942]"
+              >
+                {editorCollapsed.validation ? "+" : "−"}
+              </button>
+              <button
+                type="button"
+                aria-label="Закрыть проверку геометрии"
+                onClick={() => closeEditorCard("validation")}
+                className="mono h-5 w-5 rounded border hairline text-[10px] text-[#9bafbc] hover:text-[#ff8080]"
+              >
+                ×
+              </button>
             </div>
-          ))}
-          {validation.warnings.map((w, i) => (
-            <div key={`w${i}`} className="flex gap-2 text-[12px] text-[#f5d78a]">
-              <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
-              <span>{w}</span>
-            </div>
-          ))}
+          </div>
+          {!editorCollapsed.validation && (
+            <>
+              {validation.errors.map((e, i) => (
+                <div key={`e${i}`} className="flex gap-2 text-[12px] text-[#ff9494]">
+                  <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
+                  <span>{e}</span>
+                </div>
+              ))}
+              {validation.warnings.map((w, i) => (
+                <div key={`w${i}`} className="flex gap-2 text-[12px] text-[#f5d78a]">
+                  <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
+                  <span>{w}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Панель быстрого возврата закрытых блоков редактора */}
+      {(editorClosed.palette || editorClosed.inspector || editorClosed.objects || editorClosed.bounds || (editorClosed.validation && (blocked || validation.warnings.length > 0))) && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="mono text-[10px] text-[#7c909d]">СКРЫТЫЕ ПАНЕЛИ:</span>
+          {([
+            ["palette", "Инструменты"],
+            ["inspector", "Инспектор"],
+            ["objects", "Объекты"],
+            ["bounds", "Площадка и границы"],
+            ["validation", "Проверка геометрии"],
+          ] as const)
+            .filter(([k]) =>
+              k === "validation"
+                ? Boolean(editorClosed.validation && (blocked || validation.warnings.length > 0))
+                : Boolean(editorClosed[k])
+            )
+            .map(([k, lbl]) => (
+              <button key={k} type="button" className="btn btn-mini text-[#52d6bd]" onClick={() => reopenEditorCard(k)}>
+                + {lbl}
+              </button>
+            ))}
+          <button
+            type="button"
+            className="btn btn-mini"
+            onClick={() => {
+              setEditorClosed({});
+              setEditorCollapsed({});
+            }}
+          >
+            Показать все
+          </button>
         </div>
       )}
 
       {/* === [SEC:custom-preview] Палитра классов, действия Undo/Redo и интерактивный 2D-холст === */}
+      {!editorClosed.palette && (
       <div className="panel p-3.5 space-y-3">
         {/* Инструменты палитры + Undo/Redo/Дубль/Удалить */}
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -586,8 +1316,158 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             >
               Удалить
             </button>
+            <button
+              type="button"
+              aria-label={editorCollapsed.palette ? "Развернуть настройки палитры" : "Свернуть настройки палитры"}
+              title={editorCollapsed.palette ? "Развернуть настройки палитры" : "Свернуть дополнительные строки палитры"}
+              onClick={() => toggleEditorCollapse("palette")}
+              className="mono h-7 w-7 rounded-lg border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+            >
+              {editorCollapsed.palette ? "+" : "−"}
+            </button>
+            <button
+              type="button"
+              aria-label="Закрыть палитру инструментов"
+              title="Скрыть палитру инструментов (вернуть — кнопкой «+ Инструменты»)"
+              onClick={() => closeEditorCard("palette")}
+              className="mono h-7 w-7 rounded-lg border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+            >
+              ×
+            </button>
           </div>
         </div>
+
+        {!editorCollapsed.palette && (
+        <>
+
+        {/* Подпанель произвольных границ карты и обрезки загруженного маршрута OSM */}
+        {tool === "boundary" && (
+          <div
+            data-testid="editor-boundary-panel"
+            className="rounded-xl bg-[#091017] border border-[#f5b942]/35 p-3 space-y-2.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="mono text-[10px] text-[#f5b942]">
+                ПРОИЗВОЛЬНЫЕ ГРАНИЦЫ МАРШРУТА · НАРИСУЙТЕ МНОГОУГОЛЬНИК ПО ТОЧКАМ ИЛИ ПОСТРОЙТЕ КОРИДОР ВДОЛЬ УЛИЦЫ
+              </span>
+              <span className="mono text-[10px] text-[#9bafbc]">
+                {def.boundaryPolygon && def.boundaryPolygon.length >= 3
+                  ? `Активен контур: ${def.boundaryPolygon.length} вершин · S ≈ ${Math.round(polygonArea(def.boundaryPolygon))} м²`
+                  : `Прямоугольник ${Math.round(def.bounds.maxX - def.bounds.minX)}×${Math.round(def.bounds.maxZ - def.bounds.minZ)} м`}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="mono text-[10px] text-[#8fa2ae]">ФОРМА ПЛОЩАДКИ:</span>
+              {BOUNDARY_SHAPE_PRESETS.map((pr) => (
+                <button
+                  key={pr.id}
+                  type="button"
+                  data-testid={`editor-shape-${pr.id}`}
+                  className="btn btn-mini"
+                  title={pr.hint}
+                  onClick={() => handlePresetBoundary(pr.id)}
+                >
+                  ⬠ {pr.label}
+                </button>
+              ))}
+              <label
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#0d1620] border hairline px-2.5 py-1 text-[11px] cursor-pointer ml-auto"
+                title="Добавляет физический 3D-бордюр по всем сторонам произвольной площадки/границы"
+              >
+                <input
+                  type="checkbox"
+                  data-testid="editor-perimeter-curb-toggle"
+                  checked={Boolean(def.perimeterCurb)}
+                  onChange={(e) => patchDef({ perimeterCurb: e.target.checked || undefined })}
+                  className="accent-[#f5b942]"
+                />
+                <span>3D-бордюр по контуру</span>
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <label className="inline-flex items-center gap-2 rounded-lg bg-[#0d1620] border hairline px-2.5 py-1">
+                <span className="mono text-[10px] text-[#8fa2ae]">БУФЕР КОРИДОРА:</span>
+                <input
+                  type="range"
+                  min={14}
+                  max={120}
+                  step={2}
+                  value={corridorBufferM}
+                  onChange={(e) => setCorridorBufferM(Number(e.target.value))}
+                  className="w-24 accent-[#f5b942]"
+                />
+                <span className="mono text-[11px] text-white w-12">±{corridorBufferM} м</span>
+              </label>
+
+              <button
+                type="button"
+                data-testid="editor-corridor-btn"
+                className="btn btn-mini text-[#52d6bd]"
+                disabled={roads.length === 0 && def.checkpoints.length < 2}
+                onClick={() => handleCorridorBoundary(false)}
+                title="Построить неквадратный коридор вдоль активного маршрута"
+              >
+                ⬠ Коридор маршрута
+              </button>
+
+              <button
+                type="button"
+                data-testid="editor-hull-btn"
+                className="btn btn-mini"
+                onClick={handleHullBoundary}
+                title="Обтянуть все дороги и точки выпуклым многоугольником"
+              >
+                ⬡ Оболочка улиц
+              </button>
+
+              <button
+                type="button"
+                data-testid="editor-crop-btn"
+                className="btn btn-primary btn-mini"
+                onClick={handleCropToBoundary}
+                title="Подрезать все дороги и убрать здания/объекты за пределами текущей границы (отменяется Ctrl+Z)"
+              >
+                ✂ Обрезать по границе
+              </button>
+
+              {rawOsmPack && def.boundaryPolygon && (
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  onClick={handleRecropFromRawOsm}
+                  title="Заново вырезать из полной исходной выгрузки OSM по текущему контуру"
+                >
+                  ↻ Вырезать из исходного OSM
+                </button>
+              )}
+
+              {rawOsmPack && (
+                <button type="button" className="btn btn-mini" onClick={handleRestoreFullOsm}>
+                  Вся выгрузка OSM
+                </button>
+              )}
+
+              {def.boundaryPolygon && (
+                <button
+                  type="button"
+                  data-testid="editor-reset-boundary-btn"
+                  className="btn btn-mini text-[#f5d78a]"
+                  onClick={handleResetBoundaryToRect}
+                >
+                  Сбросить в прямоугольник
+                </button>
+              )}
+            </div>
+
+            <div className="text-[11px] text-[#8fa2ae]">
+              Совет: кликайте по карте, чтобы нарисовать контур любой формы (Г-образный, диагональный, вдоль квартала),
+              затем нажмите <b>«✓ Замкнуть»</b> или <b>«✂ Замкнуть и обрезать»</b>. Бирюзовые кружки на рёбрах добавляют
+              новые вершины, янтарные квадраты перетаскиваются мышью, <span className="mono">Delete</span> удаляет вершину.
+            </div>
+          </div>
+        )}
 
         {/* Подпанель выбора класса знака */}
         {tool === "sign" && (
@@ -728,16 +1608,23 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         {/* Привязка к сетке, видимость слоёв и готовые шаблоны */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t hairline text-[11px]">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mono text-[10px] text-[#7c909d]">СЕТКА:</span>
+            <span
+              className="mono text-[10px] text-[#7c909d] cursor-help"
+              title="Метрическая сетка на карте и шаг привязки координат/углов для ровного выравнивания боксов, бордюров, знаков и вершин площадки. «Выкл» скрывает сетку и включает свободный перенос."
+            >
+              СЕТКА:
+            </span>
             {SNAP_OPTIONS.map((so) => (
               <button
                 key={so.v}
                 type="button"
+                data-testid={`editor-grid-${so.v}`}
+                title={so.hint}
                 onClick={() => setSnapStep(so.v)}
                 className={`px-2 py-0.5 rounded mono text-[10px] cursor-pointer border ${
                   snapStep === so.v
                     ? "bg-[#52d6bd]/15 border-[#52d6bd]/50 text-[#52d6bd]"
-                    : "bg-[#091017] border-white/10 text-[#8fa2ae]"
+                    : "bg-[#091017] border-white/10 text-[#8fa2ae] hover:text-white"
                 }`}
               >
                 {so.l}
@@ -768,7 +1655,12 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             <button
               type="button"
               className="btn btn-mini"
-              onClick={() => applyImportedScenario(defaultCustomScenario(), "Восстановлен стартовый шаблон площадки")}
+              onClick={() =>
+                applyImportedScenario(defaultCustomScenario(), "Восстановлен стартовый шаблон площадки", {
+                  rawPack: null,
+                  openCheck: false,
+                })
+              }
             >
               Площадка
             </button>
@@ -778,7 +1670,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               onClick={() =>
                 applyImportedScenario(
                   customFromWorld(buildPerpendicularScenario(calibration), "Мой бокс 90°"),
-                  "Шаблон: копия «Бокс 90°»"
+                  "Шаблон: копия «Бокс 90°»",
+                  { rawPack: null, openCheck: false }
                 )
               }
             >
@@ -790,7 +1683,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               onClick={() =>
                 applyImportedScenario(
                   customFromWorld(buildParallelScenario(calibration), "Моя параллельная"),
-                  "Шаблон: копия «Параллельная»"
+                  "Шаблон: копия «Параллельная»",
+                  { rawPack: null, openCheck: false }
                 )
               }
             >
@@ -802,7 +1696,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               onClick={() =>
                 applyImportedScenario(
                   customFromWorld(buildCityOsmScenario(calibration), "Мой городской маршрут"),
-                  "Шаблон: копия «Город OSM» со светофорами, знаком 40 и переходом"
+                  "Шаблон: копия «Город OSM» со светофорами, знаком 40 и переходом",
+                  { rawPack: null, openCheck: true }
                 )
               }
             >
@@ -811,16 +1706,24 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             <button
               type="button"
               className="btn btn-mini"
-              onClick={() => applyImportedScenario(emptyCustomScenario(), "Создана чистая учебная карта")}
+              onClick={() =>
+                applyImportedScenario(emptyCustomScenario(), "Создана чистая учебная карта", {
+                  rawPack: null,
+                  openCheck: false,
+                })
+              }
             >
               Пустая
             </button>
           </div>
         </div>
+        </>
+        )}
       </div>
+      )}
 
-      {/* Основная рабочая область: слева 2D-холст, справа инспектор выбранного объекта */}
-      <div className="grid xl:grid-cols-[1fr_410px] gap-4 items-start">
+      {/* Основная рабочая область: слева 2D-холст (на всю ширину, если правые панели закрыты), справа инспектор */}
+      <div className={`grid gap-4 items-start ${anySidebarOpen ? "xl:grid-cols-[1fr_410px]" : ""}`}>
         <MapCanvasEditor
           def={def}
           tool={tool}
@@ -828,15 +1731,23 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           snapStep={snapStep}
           layers={layers}
           placeOptions={placeOptions}
+          routeCheck={routeCheck}
+          draftBoundary={draftBoundary}
+          onDraftBoundaryChange={setDraftBoundary}
+          onFinishBoundary={handleFinishBoundary}
+          onCancelBoundary={handleCancelBoundary}
           fitSignal={fitSignal}
+          focusSignal={focusSignal}
           onSelect={setSelection}
           onLiveChange={onChange}
           onCommitChange={commitChange}
         />
 
         {/* === [SEC:custom-forms] Инспектор выбранного объекта, реестр и параметры карты === */}
+        {anySidebarOpen && (
         <div className="space-y-4 min-w-0">
           {/* Инспектор свойств выбранного объекта */}
+          {!editorClosed.inspector && (
           <div className="panel p-4 space-y-3" data-testid="editor-inspector">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -845,29 +1756,122 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                   {selectedAnchor ? selectedAnchor.label : "Объект не выбран"}
                 </div>
               </div>
-              {selectedAnchor && selectedAnchor.h !== null && (
-                <div className="flex items-center gap-1" title="Быстрый поворот объекта">
-                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(90)}>
-                    ↺ 90°
-                  </button>
-                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(15)}>
-                    ↺ 15°
-                  </button>
-                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(-15)}>
-                    ↻ 15°
-                  </button>
-                  <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(-90)}>
-                    ↻ 90°
-                  </button>
+              <div className="flex flex-wrap items-center gap-1">
+              {selectedAnchor && !editorCollapsed.inspector && (
+                <div className="flex flex-wrap items-center gap-1" title="Поворот и порядок слоёв объекта">
+                  {primary &&
+                    ["obstacle", "bay", "sign", "signal", "crosswalk", "road"].includes(primary.kind) && (
+                      <button
+                        type="button"
+                        data-testid="editor-bring-front-btn"
+                        className="btn btn-mini"
+                        title="Поместить объект на передний план/слой (также по удержанию 0,4 с на карте)"
+                        onClick={handleBringSelectedToFront}
+                      >
+                        ↑ Наверх
+                      </button>
+                    )}
+                  {selectedAnchor.h !== null && (
+                    <>
+                      <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(90)}>
+                        ↺ 90°
+                      </button>
+                      <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(15)}>
+                        ↺ 15°
+                      </button>
+                      <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(-15)}>
+                        ↻ 15°
+                      </button>
+                      <button type="button" className="btn btn-mini" onClick={() => handleQuickRotate(-90)}>
+                        ↻ 90°
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
+                <button
+                  type="button"
+                  aria-label={editorCollapsed.inspector ? "Развернуть инспектор" : "Свернуть инспектор"}
+                  title={editorCollapsed.inspector ? "Развернуть инспектор" : "Свернуть инспектор"}
+                  onClick={() => toggleEditorCollapse("inspector")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+                >
+                  {editorCollapsed.inspector ? "+" : "−"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Закрыть инспектор"
+                  title="Закрыть инспектор (вернуть — «+ Инспектор»)"
+                  onClick={() => closeEditorCard("inspector")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+                >
+                  ×
+                </button>
+              </div>
             </div>
+
+            {!editorCollapsed.inspector && (
+            <>
 
             {!primary && (
               <p className="text-[12px] text-[#8fa2ae] leading-relaxed">
                 Кликните по любому объекту на 2D-карте (или в реестре ниже), чтобы перетащить его мышью, повернуть или
                 изменить точные размеры и параметры. Для добавления выберите класс в палитре сверху.
               </p>
+            )}
+
+            {/* Инспектор: Вершина произвольной границы маршрута */}
+            {primary?.kind === "boundary_point" && def.boundaryPolygon && def.boundaryPolygon[primary.index] && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <NumField
+                    label="ВЕРШИНА X, М"
+                    value={def.boundaryPolygon[primary.index].x}
+                    step={1}
+                    onChange={(v) =>
+                      commitChange(
+                        moveSelected(def, primary, v, def.boundaryPolygon![primary.index].z, 0),
+                        def
+                      )
+                    }
+                  />
+                  <NumField
+                    label="ВЕРШИНА Z, М"
+                    value={def.boundaryPolygon[primary.index].z}
+                    step={1}
+                    onChange={(v) =>
+                      commitChange(
+                        moveSelected(def, primary, def.boundaryPolygon![primary.index].x, v, 0),
+                        def
+                      )
+                    }
+                  />
+                </div>
+                <div className="mono text-[10px] text-[#8fa2ae]">
+                  ВЕРШИН: {def.boundaryPolygon.length} · ПЛОЩАДЬ:{" "}
+                  {Math.round(polygonArea(def.boundaryPolygon))} м²
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className="btn btn-mini"
+                    onClick={() => {
+                      const ins = insertBoundaryPoint(def, primary.index);
+                      if (!ins) return;
+                      commitChange(ins.def, def);
+                      setSelection(ins.selection);
+                    }}
+                  >
+                    + Вершина после
+                  </button>
+                  <button type="button" className="btn btn-mini text-[#52d6bd]" onClick={handleCropToBoundary}>
+                    ✂ Обрезать карту
+                  </button>
+                  <button type="button" className="btn btn-mini text-[#ff9494]" onClick={handleDelete}>
+                    {def.boundaryPolygon.length > 3 ? "Удалить вершину" : "Сбросить контур"}
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* Инспектор: Старт автомобиля */}
@@ -1356,21 +2360,96 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                   />
                   <span>Сплошная осевая 1.1 (иначе прерывистая 1.5)</span>
                 </label>
-                <div className="flex items-center justify-between gap-2 pt-1">
-                  <span className="mono text-[10px] text-[#7c909d]">
-                    УЗЛОВ: {selectedRoad.points.length} (перетаскивайте кружки на карте)
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-mini"
-                    onClick={() => {
-                      const res = appendRoadPoint(def, selectedRoad.id);
-                      commitChange(res.def, def);
-                      setSelection({ kind: "road_point", id: selectedRoad.id, index: res.pointIndex });
-                    }}
-                  >
-                    + Продлить узел
-                  </button>
+                <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="editor-road-oneway-toggle"
+                    checked={Boolean(selectedRoad.oneway)}
+                    onChange={(e) =>
+                      patchDef({
+                        roads: roads.map((r) =>
+                          r.id === selectedRoad.id ? { ...r, oneway: e.target.checked } : r
+                        ),
+                      })
+                    }
+                    className="accent-[#52d6bd]"
+                  />
+                  <span>Одностороннее движение (OSM oneway / 5.5)</span>
+                </label>
+                {selection?.kind === "road_point" &&
+                  selection.id === selectedRoad.id &&
+                  selectedRoad.points[selection.index] && (
+                    <div className="rounded-lg bg-[#091017] border hairline p-2 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="mono text-[10px] text-[#52d6bd]">
+                          ВЫБРАН УЗЕЛ #{selection.index + 1} ИЗ {selectedRoad.points.length}
+                        </span>
+                        {selectedRoad.points.length > 2 && (
+                          <button type="button" className="btn btn-mini text-[#ff9494]" onClick={handleDelete}>
+                            Удалить узел
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumField
+                          label="УЗЕЛ X, М"
+                          value={selectedRoad.points[selection.index].x}
+                          step={0.5}
+                          onChange={(v) =>
+                            commitChange(
+                              moveSelected(def, selection, v, selectedRoad.points[selection.index].z, 0),
+                              def
+                            )
+                          }
+                        />
+                        <NumField
+                          label="УЗЕЛ Z, М"
+                          value={selectedRoad.points[selection.index].z}
+                          step={0.5}
+                          onChange={(v) =>
+                            commitChange(
+                              moveSelected(def, selection, selectedRoad.points[selection.index].x, v, 0),
+                              def
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1">
+                  <span className="mono text-[10px] text-[#7c909d]">УЗЛОВ: {selectedRoad.points.length}</span>
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      className="btn btn-mini"
+                      title="Развернуть направление узлов улицы (для односторонних дорог и автомаршрута)"
+                      onClick={() => {
+                        commitChange(reverseRoadDirection(def, selectedRoad.id), def);
+                        onNotify("Направление улицы развёрнуто");
+                      }}
+                    >
+                      ⇄ Реверс
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-mini text-[#52d6bd]"
+                      title="Построить маршрут по этой улице"
+                      onClick={() => handleAutoRoute(selectedRoad.id, false)}
+                    >
+                      Маршрут тут
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-mini"
+                      onClick={() => {
+                        const res = appendRoadPoint(def, selectedRoad.id);
+                        commitChange(res.def, def);
+                        setSelection({ kind: "road_point", id: selectedRoad.id, index: res.pointIndex });
+                      }}
+                    >
+                      + Продлить узел
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1706,7 +2785,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                     value={selectedCp.radius}
                     step={0.5}
                     min={1}
-                    max={18}
+                    max={25}
                     onChange={(v) =>
                       patchDef({
                         checkpoints: def.checkpoints.map((c) => (c.id === selectedCp.id ? { ...c, radius: v } : c)),
@@ -1714,6 +2793,43 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                     }
                   />
                 </div>
+                {def.checkpoints.length > 1 && (() => {
+                  const cpIdx = def.checkpoints.findIndex((c) => c.id === selectedCp.id);
+                  const swapCp = (dir: -1 | 1) => {
+                    const target = cpIdx + dir;
+                    if (target < 0 || target >= def.checkpoints.length) return;
+                    const arr = [...def.checkpoints];
+                    [arr[cpIdx], arr[target]] = [arr[target], arr[cpIdx]];
+                    patchDef({ checkpoints: arr });
+                  };
+                  return (
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="mono text-[10px] text-[#7c909d]">
+                        ПОРЯДОК В МАРШРУТЕ: #{cpIdx + 1} ИЗ {def.checkpoints.length}
+                      </span>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          className="btn btn-mini"
+                          disabled={cpIdx <= 0}
+                          onClick={() => swapCp(-1)}
+                          title="Переместить КТ раньше по маршруту"
+                        >
+                          ↑ Раньше
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-mini"
+                          disabled={cpIdx >= def.checkpoints.length - 1}
+                          onClick={() => swapCp(1)}
+                          title="Переместить КТ позже по маршруту"
+                        >
+                          ↓ Позже
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
                 <label className="block">
                   <span className="mono text-[10px] text-[#7c909d] block mb-1">ТРЕБУЕМЫЙ ПОВОРОТНИК</span>
                   <select
@@ -1772,18 +2888,45 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 </div>
               </div>
             )}
+            </>
+            )}
           </div>
+          )}
 
           {/* Реестр всех объектов на карте с быстрым переходом */}
+          {!editorClosed.objects && (
           <div className="panel p-4 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-extrabold">Объекты на карте ({totalObjects})</span>
-              {roads.length > 0 && (
-                <button type="button" className="btn btn-mini" onClick={handleAutoRoute}>
-                  Автомаршрут
+              <div className="flex items-center gap-1">
+                {roads.length > 0 && !editorCollapsed.objects && (
+                  <button type="button" className="btn btn-mini" onClick={() => handleAutoRoute()}>
+                    Автомаршрут
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label={editorCollapsed.objects ? "Развернуть список объектов" : "Свернуть список объектов"}
+                  title={editorCollapsed.objects ? "Развернуть" : "Свернуть"}
+                  onClick={() => toggleEditorCollapse("objects")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+                >
+                  {editorCollapsed.objects ? "+" : "−"}
                 </button>
-              )}
+                <button
+                  type="button"
+                  aria-label="Закрыть список объектов"
+                  title="Закрыть список объектов (вернуть — «+ Объекты»)"
+                  onClick={() => closeEditorCard("objects")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+                >
+                  ×
+                </button>
+              </div>
             </div>
+
+            {!editorCollapsed.objects && (
+            <>
 
             <div className="flex flex-wrap gap-1">
               {([
@@ -1984,16 +3127,88 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
+          )}
 
-          {/* Общие параметры сценария, площадки и границ мира */}
+          {/* Общие параметры сценария, площадки и произвольных границ мира */}
+          {!editorClosed.bounds && (
           <div className="panel p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-extrabold">Параметры карты и границы</span>
-              <button type="button" className="btn btn-mini" onClick={handleFitBounds}>
-                Подогнать границы
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <span className="text-xs font-extrabold">Площадка и границы мира</span>
+              <div className="flex flex-wrap items-center gap-1">
+                {!editorCollapsed.bounds && (
+                <>
+                <button
+                  type="button"
+                  className="btn btn-mini text-[#f5b942]"
+                  onClick={() => setTool("boundary")}
+                  title="Нарисовать произвольную форму площадки или выбрать шаблон (Г/Т/П-образная, трапеция, 8-угольник)"
+                >
+                  ⬠ Своя форма
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  onClick={() => handlePresetBoundary("l_shape")}
+                  title="Сделать площадку Г-образной (вогнутый 6-угольник)"
+                >
+                  Г-обр.
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  disabled={roads.length === 0 && def.checkpoints.length < 2}
+                  onClick={() => handleCorridorBoundary(false)}
+                  title="Задать границу коридором вдоль маршрута"
+                >
+                  Коридор
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  onClick={def.boundaryPolygon ? handleResetBoundaryToRect : handleFitBounds}
+                >
+                  {def.boundaryPolygon ? "В прямоуг." : "Подогнать"}
+                </button>
+                </>
+                )}
+                <button
+                  type="button"
+                  aria-label={editorCollapsed.bounds ? "Развернуть параметры площадки" : "Свернуть параметры площадки"}
+                  title={editorCollapsed.bounds ? "Развернуть" : "Свернуть"}
+                  onClick={() => toggleEditorCollapse("bounds")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+                >
+                  {editorCollapsed.bounds ? "+" : "−"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Закрыть параметры площадки"
+                  title="Закрыть блок (вернуть — «+ Площадка и границы»)"
+                  onClick={() => closeEditorCard("bounds")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+                >
+                  ×
+                </button>
+              </div>
             </div>
+
+            {!editorCollapsed.bounds && (
+            <>
+            {def.boundaryPolygon && def.boundaryPolygon.length >= 3 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#091017] border border-[#f5b942]/30 px-2.5 py-1.5 text-[11px]">
+                <span className="text-[#f5d78a]">
+                  ⬠ Произвольная площадка: <b>{def.boundaryPolygon.length}</b> вершин · S ≈{" "}
+                  <b>{Math.round(polygonArea(def.boundaryPolygon))}</b> м² (
+                  {Math.round(def.bounds.maxX - def.bounds.minX)}×{Math.round(def.bounds.maxZ - def.bounds.minZ)} м)
+                </span>
+                <button type="button" className="btn btn-mini text-[#52d6bd]" onClick={handleCropToBoundary}>
+                  ✂ Обрезать
+                </button>
+              </div>
+            )}
             <div className="grid sm:grid-cols-2 gap-2">
               <TextField label="НАЗВАНИЕ" value={def.title} onChange={(v) => patchDef({ title: v })} />
               <TextField label="ПОДЗАГОЛОВОК" value={def.subtitle} onChange={(v) => patchDef({ subtitle: v })} />
@@ -2008,15 +3223,28 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               />
             </label>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={def.useLotSurface !== false}
-                  onChange={(e) => patchDef({ useLotSurface: e.target.checked })}
-                  className="accent-[#f5b942]"
-                />
-                <span>Асфальтовая площадка автодрома</span>
-              </label>
+              <div className="flex flex-col gap-1.5">
+                <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={def.useLotSurface !== false}
+                    onChange={(e) => patchDef({ useLotSurface: e.target.checked })}
+                    className="accent-[#f5b942]"
+                  />
+                  <span>
+                    {def.boundaryPolygon ? "Асфальт по форме контура" : "Асфальтовая площадка автодрома"}
+                  </span>
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(def.perimeterCurb)}
+                    onChange={(e) => patchDef({ perimeterCurb: e.target.checked || undefined })}
+                    className="accent-[#f5b942]"
+                  />
+                  <span>3D-бордюр по контуру площадки</span>
+                </label>
+              </div>
               <div className="w-28">
                 <NumField
                   label="БАЗОВЫЙ КМ/Ч"
@@ -2028,13 +3256,13 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 />
               </div>
             </div>
-            {def.useLotSurface !== false && (
+            {def.useLotSurface !== false && !def.boundaryPolygon && (
               <div className="grid grid-cols-2 gap-2">
                 <NumField
                   label="ПЛОЩАДКА ±X, М"
                   value={def.lotHalfX}
                   min={5}
-                  max={200}
+                  max={400}
                   step={1}
                   onChange={(v) => patchDef({ lotHalfX: v })}
                 />
@@ -2042,7 +3270,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                   label="ПЛОЩАДКА ±Z, М"
                   value={def.lotHalfZ}
                   min={5}
-                  max={200}
+                  max={400}
                   step={1}
                   onChange={(v) => patchDef({ lotHalfZ: v })}
                 />
@@ -2053,29 +3281,33 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 label="MIN X"
                 value={def.bounds.minX}
                 step={2}
-                onChange={(v) => patchDef({ bounds: { ...def.bounds, minX: v } })}
+                onChange={(v) => patchDef({ boundaryPolygon: undefined, bounds: { ...def.bounds, minX: v } })}
               />
               <NumField
                 label="MAX X"
                 value={def.bounds.maxX}
                 step={2}
-                onChange={(v) => patchDef({ bounds: { ...def.bounds, maxX: v } })}
+                onChange={(v) => patchDef({ boundaryPolygon: undefined, bounds: { ...def.bounds, maxX: v } })}
               />
               <NumField
                 label="MIN Z"
                 value={def.bounds.minZ}
                 step={2}
-                onChange={(v) => patchDef({ bounds: { ...def.bounds, minZ: v } })}
+                onChange={(v) => patchDef({ boundaryPolygon: undefined, bounds: { ...def.bounds, minZ: v } })}
               />
               <NumField
                 label="MAX Z"
                 value={def.bounds.maxZ}
                 step={2}
-                onChange={(v) => patchDef({ bounds: { ...def.bounds, maxZ: v } })}
+                onChange={(v) => patchDef({ boundaryPolygon: undefined, bounds: { ...def.bounds, maxZ: v } })}
               />
             </div>
+            </>
+            )}
           </div>
+          )}
         </div>
+        )}
       </div>
     </div>
   );

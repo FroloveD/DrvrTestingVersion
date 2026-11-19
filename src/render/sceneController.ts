@@ -15,16 +15,47 @@
  */
 import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
-import { makeRoadSignTexture } from "./roadSignTextures";
+import {
+  createCityEnvironmentPack,
+  emitRealisticTree,
+  emitRussianBuilding,
+  finalizeCityEnvironmentPack,
+  makeCloudySkyTexture,
+  type CityEnvironmentPack,
+} from "./cityBuildings";
+import { CockpitDisplayController, DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "./cockpitDisplays";
+import {
+  buildGostCrosswalk,
+  buildGostRoadSign,
+  buildGostSpeedSign,
+  buildGostStreetProp,
+  buildGostTrafficSignal,
+  buildWorldRoadsAndSidewalks,
+  createRoadMaterialPack,
+  finalizeRoadMaterialPack,
+  type GostSignalVisualHandle,
+  type RoadMaterialPack,
+} from "./roadInfra";
+import { makeGostBayStencilTexture, makeUrbanGrassTexture } from "./roadTextures";
+import { SpatialChunkBatcher, type WorldChunkHandle } from "./staticBatcher";
+import {
+  buildDetailedCar,
+  buildDetailedPedestrian,
+  makeInstrumentClusterTexture,
+  makeRussianLicensePlateTexture,
+  SHIFTER_LAYOUT,
+  type CockpitControlId,
+  type DetailedCarRig,
+  type DetailedPedestrianVisual,
+  type ShifterHitId,
+} from "./vehiclesAndPeds";
+import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
   CameraMode,
   ObstacleBox,
-  ParkedModelKey,
   ParkingBay,
   QualityPreset,
-  RoadSignDef,
   SimState,
-  TrafficSignalDef,
   WorldData,
 } from "../sim/types";
 import {
@@ -34,43 +65,17 @@ import {
   getTrafficLightPhase,
   getTurnSignalFlash,
   predictTrajectoryArc,
-  VEHICLE_DIMS,
 } from "../sim/vehicle";
 
 // Слои относятся только к геометрии машины игрока. Мир и припаркованные авто — слой 0.
 const PLAYER_EXTERIOR_LAYER = 1;
 const OWN_MIRROR_HARDWARE_LAYER = 2;
 
-type CarRig = {
-  root: THREE.Group;
-  chassis: THREE.Group;
-  flPivot: THREE.Group;
-  frPivot: THREE.Group;
-  wheelMeshes: THREE.Object3D[];
-  steerWheelMesh: THREE.Group;
-  blinkLeftMats: THREE.MeshBasicMaterial[];
-  blinkRightMats: THREE.MeshBasicMaterial[];
-  brakeMat: THREE.MeshBasicMaterial;
-  reverseMat: THREE.MeshBasicMaterial;
-  headlightMat: THREE.MeshBasicMaterial;
-  headSpotL?: THREE.SpotLight;
-  headSpotR?: THREE.SpotLight;
-  learnerSign?: THREE.Mesh;
-};
+type CarRig = DetailedCarRig;
 
-type SignalVisual = {
-  def: TrafficSignalDef;
-  redMat: THREE.MeshBasicMaterial;
-  yellowMat: THREE.MeshBasicMaterial;
-  greenMat: THREE.MeshBasicMaterial;
-};
+type SignalVisual = GostSignalVisualHandle;
 
-type PedestrianVisual = {
-  crosswalkId: string;
-  group: THREE.Group;
-  legL: THREE.Mesh;
-  legR: THREE.Mesh;
-};
+type PedestrianVisual = DetailedPedestrianVisual;
 
 type BayVisual = {
   bay: ParkingBay;
@@ -95,49 +100,6 @@ export type PerfMetrics = {
 };
 
 // === [SEC:render-textures] Процедурные Canvas-текстуры (офлайн, без внешних ассетов) ===
-function makeSkyTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 4;
-  c.height = 256;
-  const g = c.getContext("2d")!;
-  const grad = g.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, "#35669c");
-  grad.addColorStop(0.48, "#7aa8d1");
-  grad.addColorStop(0.82, "#bfd7ea");
-  grad.addColorStop(1, "#dde8f0");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 4, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeAsphaltTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#2f363f";
-  g.fillRect(0, 0, 128, 128);
-  // Детерминированное зерно асфальта
-  let seed = 1337;
-  const rand = () => {
-    seed = (seed * 16807) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-  for (let i = 0; i < 1400; i++) {
-    const shade = 38 + Math.floor(rand() * 26);
-    g.fillStyle = `rgb(${shade},${shade + 3},${shade + 7})`;
-    g.fillRect(Math.floor(rand() * 128), Math.floor(rand() * 128), 2, 2);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 3);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 function makeContactShadowTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 128;
@@ -152,401 +114,28 @@ function makeContactShadowTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(c);
 }
 
-function makeBuildingWindowTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#cfd8e0";
-  g.fillRect(0, 0, 128, 128);
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 4; col++) {
-      const lit = (row * 7 + col * 3) % 5 === 0;
-      g.fillStyle = lit ? "#86a8c5" : "#425466";
-      g.fillRect(col * 32 + 7, row * 32 + 6, 18, 19);
-      g.strokeStyle = "#95a3af";
-      g.lineWidth = 1.5;
-      g.strokeRect(col * 32 + 7, row * 32 + 6, 18, 19);
-    }
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 function makeLearnerSignTexture(): THREE.CanvasTexture {
-  // Табличка «У» (порт из v2; прим.: форма и пропорции — учебная визуализация)
+  // Опознавательный знак «Учебное транспортное средство» (ПДД РФ): жёлтый фон, красная кайма, чёрная «У»
   const c = document.createElement("canvas");
   c.width = 128;
   c.height = 128;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#ffffff";
+  g.fillStyle = "#facc15";
   g.fillRect(0, 0, 128, 128);
-  g.strokeStyle = "#dc2626";
-  g.lineWidth = 18;
-  g.strokeRect(9, 9, 110, 110);
-  g.fillStyle = "#111827";
-  g.font = "800 76px sans-serif";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText("У", 64, 68);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function makeSpeedSignTexture(limit: number): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.clearRect(0, 0, 128, 128);
-  g.beginPath();
-  g.arc(64, 64, 58, 0, Math.PI * 2);
-  g.fillStyle = "#ffffff";
-  g.fill();
+  g.strokeStyle = "#d41e24";
   g.lineWidth = 14;
-  g.strokeStyle = "#dc2626";
-  g.stroke();
+  g.strokeRect(8, 8, 112, 112);
   g.fillStyle = "#0f172a";
-  g.font = "800 54px sans-serif";
+  g.font = "900 78px system-ui, sans-serif";
   g.textAlign = "center";
   g.textBaseline = "middle";
-  g.fillText(String(limit), 64, 67);
+  g.fillText("У", 64, 69);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
-function makeBayNumberTexture(num: number, occupied: boolean): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.clearRect(0, 0, 128, 128);
-  g.fillStyle = occupied ? "rgba(148,163,184,0.45)" : "rgba(245,185,66,0.92)";
-  g.font = "800 68px monospace";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText(String(num), 64, 68);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-// === [SEC:render-car] Колёса и процедурная 3D-модель автомобиля Kia Ceed JD / автопарка ===
-function createWheelMesh(radius: number, width: number): THREE.Group {
-  const g = new THREE.Group();
-  const tireGeo = new THREE.CylinderGeometry(radius, radius, width, 18);
-  tireGeo.rotateZ(Math.PI / 2);
-  const tireMat = new THREE.MeshStandardMaterial({ color: 0x1a1f24, roughness: 0.85 });
-  g.add(new THREE.Mesh(tireGeo, tireMat));
-
-  const rimGeo = new THREE.CylinderGeometry(radius * 0.64, radius * 0.64, width + 0.015, 14);
-  rimGeo.rotateZ(Math.PI / 2);
-  const rimMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.55, roughness: 0.32 });
-  g.add(new THREE.Mesh(rimGeo, rimMat));
-
-  // Спица для наглядного вращения колеса
-  const spoke = new THREE.Mesh(
-    new THREE.BoxGeometry(width + 0.025, radius * 1.12, 0.055),
-    new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.5, roughness: 0.4 })
-  );
-  g.add(spoke);
-  return g;
-}
-
-function buildProceduralCar(
-  model: ParkedModelKey,
-  bodyColor: number,
-  isPlayer: boolean,
-  shadowTex: THREE.CanvasTexture,
-  learnerTex: THREE.CanvasTexture
-): CarRig {
-  const dim = VEHICLE_DIMS[model];
-  const L = dim.length;
-  const W = dim.width;
-  const H = dim.height;
-  const wb = dim.wheelbase;
-  const wr = isPlayer ? CAR.wheelRadius : 0.3;
-  const ww = isPlayer ? CAR.wheelWidth : 0.2;
-  const centerShiftZ = isPlayer ? (CAR.frontOverhang - CAR.rearOverhang) / 2 : 0;
-
-  const root = new THREE.Group();
-  const chassis = new THREE.Group();
-  root.add(chassis);
-
-  // Контактная тень под кузовом
-  const shadowPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(W * 1.28, L * 1.18),
-    new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false })
-  );
-  shadowPlane.rotation.x = -Math.PI / 2;
-  shadowPlane.position.set(0, 0.018, centerShiftZ);
-  root.add(shadowPlane);
-
-  const paintMat = new THREE.MeshStandardMaterial({
-    color: bodyColor,
-    metalness: 0.35,
-    roughness: 0.34,
-  });
-  const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x1e252d, roughness: 0.7 });
-  const glassMat = new THREE.MeshStandardMaterial({
-    color: 0x9ec5e6,
-    transparent: true,
-    opacity: isPlayer ? 0.32 : 0.52,
-    roughness: 0.12,
-    metalness: 0.25,
-  });
-
-  const beltY = 0.84;
-  const sillY = 0.26;
-  const lowerH = beltY - sillY;
-
-  if (isPlayer) {
-    // Полый кузов игрока (инвариант №7: сиденья и водитель внутри, не утоплены в металле)
-    const wall = 0.09;
-    const cabinLen = wb * 0.88;
-    const hoodLen = (L - cabinLen) * 0.54;
-    const trunkLen = L - cabinLen - hoodLen;
-
-    // Днище
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.08, L - 0.1), darkTrimMat);
-    floor.position.set(0, sillY + 0.04, centerShiftZ);
-    chassis.add(floor);
-
-    // Левый (+X) и правый (-X) борта
-    for (const side of [1, -1] as const) {
-      const door = new THREE.Mesh(new THREE.BoxGeometry(wall, lowerH, cabinLen), paintMat);
-      door.position.set(side * (W / 2 - wall / 2), sillY + lowerH / 2, centerShiftZ - 0.06);
-      door.castShadow = true;
-      chassis.add(door);
-    }
-
-    // Передняя часть (капот + бампер)
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(W, lowerH * 0.94, hoodLen), paintMat);
-    hood.position.set(0, sillY + lowerH * 0.47, centerShiftZ + L / 2 - hoodLen / 2);
-    hood.castShadow = true;
-    chassis.add(hood);
-
-    // Задняя часть (багажник + бампер)
-    const trunk = new THREE.Mesh(new THREE.BoxGeometry(W, lowerH * 0.98, trunkLen), paintMat);
-    trunk.position.set(0, sillY + lowerH * 0.49, centerShiftZ - L / 2 + trunkLen / 2);
-    trunk.castShadow = true;
-    chassis.add(trunk);
-
-    // Торпедо и сиденья
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.2, 0.26, 0.36), darkTrimMat);
-    dash.position.set(0, beltY - 0.04, centerShiftZ + cabinLen * 0.36);
-    chassis.add(dash);
-
-    const seatMat = new THREE.MeshStandardMaterial({ color: 0x2b3440, roughness: 0.85 });
-    for (const side of [1, -1] as const) {
-      const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.56, 0.12), seatMat);
-      seatBack.position.set(side * W * 0.24, 0.68, centerShiftZ - 0.14);
-      seatBack.rotation.x = -0.14;
-      chassis.add(seatBack);
-    }
-
-    // Водитель слева (+X, инвариант №2: руль слева +0.36 * halfW)
-    const driverX = W * 0.23;
-    const driverZ = centerShiftZ - 0.02;
-    const torso = new THREE.Mesh(
-      new THREE.BoxGeometry(0.38, 0.46, 0.22),
-      new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.7 })
-    );
-    torso.position.set(driverX, 0.82, driverZ);
-    chassis.add(torso);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.115, 12, 12),
-      new THREE.MeshStandardMaterial({ color: 0xe8be9e, roughness: 0.6 })
-    );
-    head.position.set(driverX, 1.16, driverZ - 0.01);
-    chassis.add(head);
-
-    const hair = new THREE.Mesh(
-      new THREE.SphereGeometry(0.118, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.58),
-      new THREE.MeshStandardMaterial({ color: 0x3b2a1e, roughness: 0.8 })
-    );
-    hair.position.copy(head.position);
-    chassis.add(hair);
-
-    // Стойки крыши и крыша
-    const roofLen = L * 0.46;
-    const roofW = W * 0.82;
-    const roofY = H - 0.03;
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(roofW, 0.055, roofLen), paintMat);
-    roof.position.set(0, roofY, centerShiftZ - 0.16);
-    roof.castShadow = true;
-    chassis.add(roof);
-
-    const pillarOffsets: Array<[number, number, number]> = [
-      [roofW / 2 - 0.03, centerShiftZ + roofLen * 0.44, -0.45],
-      [-roofW / 2 + 0.03, centerShiftZ + roofLen * 0.44, -0.45],
-      [roofW / 2 - 0.03, centerShiftZ - roofLen * 0.55, 0.38],
-      [-roofW / 2 + 0.03, centerShiftZ - roofLen * 0.55, 0.38],
-    ];
-    for (const [px, pz, tilt] of pillarOffsets) {
-      const p = new THREE.Mesh(new THREE.BoxGeometry(0.055, H - beltY + 0.08, 0.065), paintMat);
-      p.position.set(px, (beltY + roofY) / 2, pz);
-      p.rotation.x = tilt;
-      chassis.add(p);
-    }
-
-    // Лобовое и заднее стекло
-    const windshield = new THREE.Mesh(new THREE.PlaneGeometry(roofW - 0.06, 0.68), glassMat);
-    windshield.position.set(0, (beltY + roofY) / 2, centerShiftZ + roofLen * 0.48);
-    windshield.rotation.x = -0.58;
-    chassis.add(windshield);
-
-    const rearGlass = new THREE.Mesh(new THREE.PlaneGeometry(roofW - 0.08, 0.62), glassMat);
-    rearGlass.position.set(0, (beltY + roofY) / 2, centerShiftZ - roofLen * 0.62);
-    rearGlass.rotation.x = Math.PI + 0.52;
-    chassis.add(rearGlass);
-  } else {
-    // Облегчённый кузов для припаркованных машин (минимум draw calls)
-    const lower = new THREE.Mesh(new THREE.BoxGeometry(W, lowerH, L), paintMat);
-    lower.position.set(0, sillY + lowerH / 2, 0);
-    lower.castShadow = true;
-    chassis.add(lower);
-
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(W * 0.83, H - beltY, L * 0.52), glassMat);
-    cabin.position.set(0, beltY + (H - beltY) / 2 - 0.02, -L * 0.05);
-    chassis.add(cabin);
-
-    const roofCap = new THREE.Mesh(new THREE.BoxGeometry(W * 0.81, 0.06, L * 0.46), paintMat);
-    roofCap.position.set(0, H - 0.02, -L * 0.05);
-    roofCap.castShadow = true;
-    chassis.add(roofCap);
-  }
-
-  // Рулевое колесо в салоне (+X — левая сторона)
-  const steerWheelMesh = new THREE.Group();
-  steerWheelMesh.position.set(W * 0.23, 0.93, centerShiftZ + 0.48);
-  steerWheelMesh.rotation.x = 0.35;
-  if (isPlayer) {
-    const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(0.17, 0.02, 8, 20),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.5 })
-    );
-    const marker = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.045, 0.03),
-      new THREE.MeshBasicMaterial({ color: 0xf5b942 })
-    );
-    marker.position.set(0, 0.17, 0);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.028, 0.022), darkTrimMat);
-    steerWheelMesh.add(rim, marker, bar);
-    chassis.add(steerWheelMesh);
-  }
-
-  // Светотехника: фары, стоп-сигналы, огни заднего хода, поворотники (+X левый, -X правый)
-  const headlightMat = new THREE.MeshBasicMaterial({ color: 0xdbeafe });
-  const brakeMat = new THREE.MeshBasicMaterial({ color: 0x7f1d1d });
-  const reverseMat = new THREE.MeshBasicMaterial({ color: 0x334155 });
-  const blinkLeftMats: THREE.MeshBasicMaterial[] = [];
-  const blinkRightMats: THREE.MeshBasicMaterial[] = [];
-
-  const frontZ = centerShiftZ + L / 2 + 0.008;
-  const rearZ = centerShiftZ - L / 2 - 0.008;
-
-  for (const side of [1, -1] as const) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.11, 0.03), headlightMat);
-    hl.position.set(side * (W * 0.34), 0.66, frontZ);
-    chassis.add(hl);
-
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.03), brakeMat);
-    tl.position.set(side * (W * 0.34), 0.72, rearZ);
-    chassis.add(tl);
-
-    if (isPlayer) {
-      const rev = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.03), reverseMat);
-      rev.position.set(side * (W * 0.2), 0.72, rearZ);
-      chassis.add(rev);
-
-      const bMat = new THREE.MeshBasicMaterial({ color: 0x9a621e, toneMapped: false });
-      if (side === 1) blinkLeftMats.push(bMat);
-      else blinkRightMats.push(bMat);
-
-      // Signal lenses protrude from the body so they remain visible from every camera angle.
-      const blinkF = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.11, 0.07), bMat);
-      blinkF.position.set(side * (W * 0.45), 0.66, frontZ + 0.012);
-      const blinkR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.07), bMat);
-      blinkR.position.set(side * (W * 0.45), 0.75, rearZ - 0.012);
-      const mirrorHousing = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.11), paintMat);
-      mirrorHousing.position.set(side * (W / 2 + 0.06), beltY + 0.06, centerShiftZ + 0.52);
-      const blinkSide = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.065, 0.14), bMat);
-      blinkSide.position.set(side * (W / 2 + 0.025), 0.88, centerShiftZ + 0.52);
-      // Виртуальная боковая камера стоит у стекла, не должна видеть корпус собственного зеркала.
-      mirrorHousing.layers.set(OWN_MIRROR_HARDWARE_LAYER);
-      blinkSide.layers.set(OWN_MIRROR_HARDWARE_LAYER);
-      chassis.add(blinkF, blinkR, mirrorHousing, blinkSide);
-    }
-  }
-
-  // Прожекторы фар — только у машины игрока (оптимизация v8)
-  let headSpotL: THREE.SpotLight | undefined;
-  let headSpotR: THREE.SpotLight | undefined;
-  let learnerSign: THREE.Mesh | undefined;
-
-  if (isPlayer) {
-    const makeSpot = (sx: number) => {
-      const sp = new THREE.SpotLight(0xfff6dc, 0, 26, 0.52, 0.55, 1.4);
-      sp.position.set(sx, 0.66, frontZ);
-      sp.target.position.set(sx * 0.9, 0.05, frontZ + 12);
-      chassis.add(sp, sp.target);
-      return sp;
-    };
-    headSpotL = makeSpot(W * 0.34);
-    headSpotR = makeSpot(-W * 0.34);
-
-    // Табличка «У» на крыше (0.28 м, перенос из v2)
-    const signMat = new THREE.MeshBasicMaterial({ map: learnerTex });
-    const sideMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 });
-    learnerSign = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, 0.28, 0.1),
-      [sideMat, sideMat, sideMat, sideMat, signMat, signMat]
-    );
-    learnerSign.position.set(0, H + 0.13, centerShiftZ - 0.12);
-    chassis.add(learnerSign);
-  }
-
-  // Колёса: передние в поворотных кулаках (Аккерман), задние на оси
-  const flPivot = new THREE.Group();
-  const frPivot = new THREE.Group();
-  const trackHalf = W / 2 - ww * 0.44;
-  flPivot.position.set(trackHalf, wr, wb / 2);
-  frPivot.position.set(-trackHalf, wr, wb / 2);
-
-  const wFL = createWheelMesh(wr, ww);
-  const wFR = createWheelMesh(wr, ww);
-  const wRL = createWheelMesh(wr, ww);
-  const wRR = createWheelMesh(wr, ww);
-  wRL.position.set(trackHalf, wr, -wb / 2);
-  wRR.position.set(-trackHalf, wr, -wb / 2);
-  flPivot.add(wFL);
-  frPivot.add(wFR);
-  root.add(flPivot, frPivot, wRL, wRR);
-
-  return {
-    root,
-    chassis,
-    flPivot,
-    frPivot,
-    wheelMeshes: [wFL, wFR, wRL, wRR],
-    steerWheelMesh,
-    blinkLeftMats,
-    blinkRightMats,
-    brakeMat,
-    reverseMat,
-    headlightMat,
-    headSpotL,
-    headSpotR,
-    learnerSign,
-  };
-}
+// === [SEC:render-car] Колёса и процедурная 3D-модель Kia Ceed JD / автопарка (см. src/render/vehiclesAndPeds.ts) ===
 
 // === [SEC:render-init] Контроллер 3D-сцены, зеркальные буферы, орбита и пресеты качества ===
 export class SceneController {
@@ -554,13 +143,27 @@ export class SceneController {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly sun: THREE.DirectionalLight;
+  private readonly groundMesh: THREE.Mesh;
   private readonly worldGroup = new THREE.Group();
-  private readonly buildingMeshes: THREE.Object3D[] = [];
+  private readonly roadChunks: WorldChunkHandle[] = [];
+  private readonly detailChunks: WorldChunkHandle[] = [];
+  private readonly worldPoolMaterials: THREE.Material[] = [];
+  private readonly worldPoolTextures: THREE.Texture[] = [];
+  private readonly worldPoolGeometries: THREE.BufferGeometry[] = [];
   private readonly signalVisuals: SignalVisual[] = [];
   private readonly pedVisuals: PedestrianVisual[] = [];
+  private readonly parkedCarRoots: THREE.Object3D[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
   private readonly bayVisuals: BayVisual[] = [];
+  private readonly cockpitDisplays: CockpitDisplayController;
+  private readonly envMapRT: THREE.WebGLRenderTarget | null = null;
   private readonly playerRig: CarRig;
+  private isLargeWorld = false;
+  private totalBuildings = 0;
+  private shadowDirty = true;
+  private lastShadowX = Number.NaN;
+  private lastShadowZ = Number.NaN;
+  private lastShadowH = Number.NaN;
 
   // Прогнозная траектория Аккермана
   private readonly trajGroup = new THREE.Group();
@@ -575,10 +178,22 @@ export class SceneController {
   private readonly sideRT: THREE.WebGLRenderTarget;
   private readonly sideCam: THREE.PerspectiveCamera;
   private readonly sideBuf: Uint8Array;
+  // Отдельные GPU-буферы физических 3D-зеркал для вида из салона (без CPU readback, прямое наложение текстуры)
+  private readonly cockpitRearRT: THREE.WebGLRenderTarget;
+  private readonly cockpitLeftRT: THREE.WebGLRenderTarget;
+  private readonly cockpitRightRT: THREE.WebGLRenderTarget;
+  private readonly cockpitRearMat: THREE.MeshBasicMaterial;
+  private readonly cockpitLeftMat: THREE.MeshBasicMaterial;
+  private readonly cockpitRightMat: THREE.MeshBasicMaterial;
+  private readonly mirrorIdleMat: THREE.Material;
+  private cockpitRearPrimed = false;
+  private cockpitSidePrimed = false;
   // У каждого canvas собственный кадр нужной высоты: остатки 160 строк бокового кадра
   // никогда не попадают в заднее зеркало (96 строк). Буферы переиспользуются, без аллокаций на кадр.
   private readonly mirrorFrames = new WeakMap<HTMLCanvasElement, { ctx: CanvasRenderingContext2D; image: ImageData }>();
   private readonly mirrorLookTarget = new THREE.Vector3();
+  private readonly cockpitEyeWorld = new THREE.Vector3();
+  private readonly cockpitLookWorld = new THREE.Vector3();
   /**
    * Three.js рендерит в offscreen-таргет в линейном пространстве и без tone mapping
    * (WebGLRenderer отключает ACES для render target). Без этой конверсии readback
@@ -586,12 +201,33 @@ export class SceneController {
    */
   private readonly srgbLut: Uint8Array;
   private frameCounter = 0;
+  private qualityPreset: QualityPreset = "high";
 
-  // Управление орбитальной камерой
+  // Управление орбитальной камерой и обзором головы в салоне
   private orbitYaw = 0;
   private orbitPitch = 0.36;
   private orbitDist = 9.2;
+  private cockpitFov = 68;
+  private lastCameraMode: CameraMode = "chase";
   private camLookTarget = new THREE.Vector3();
+
+  // Интерактивный 3D-рычаг 6АКПП Shiftronic в салоне (без аллокаций в кадре)
+  private readonly shifterRaycaster = new THREE.Raycaster();
+  private readonly shifterNdc = new THREE.Vector2();
+  private readonly shifterInvChassis = new THREE.Matrix4();
+  private readonly shifterLocalRay = new THREE.Ray();
+  private readonly shifterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -SHIFTER_LAYOUT.knobPlaneY);
+  private readonly shifterLocalHit = new THREE.Vector3();
+  private readonly shifterProjTmp = new THREE.Vector3();
+  private shifterHover: ShifterHitId | null = null;
+  private shifterDragging = false;
+  private shifterManualPulse: -1 | 0 | 1 = 0;
+
+  // Интерактивные органы салона (7" ШГУ, VOL/TUNE, аварийка, START/STOP, свет, подрулевой, ручник)
+  private cockpitControlHover: CockpitControlId | null = null;
+  private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
+  private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
+  private savedHeadBeforeShifter: { yaw: number; pitch: number; fov: number } | null = null;
 
   // Общие текстуры (освобождаются при dispose)
   private readonly sharedTextures: THREE.Texture[] = [];
@@ -610,24 +246,58 @@ export class SceneController {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Управляемое обновление карты теней: пересчитывается при движении/смене мира, без лишних проходов в покое
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    const skyTex = makeSkyTexture();
+    // На программном WebGL (SwiftShader/llvmpipe на старых ПК и в headless CI) отключаем кубическую развёртку неба
+    // и IBL-карту PMREM — экономим сотни мс CPU-растеризации на кадр; на любом реальном GPU работает 360°-небо + PBR IBL
+    let isSoftwareGl = false;
+    try {
+      const gl = this.renderer.getContext();
+      const baseRenderer = String(gl.getParameter(gl.RENDERER) ?? "");
+      const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      const unmasked = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) ?? "") : "";
+      isSoftwareGl = /swiftshader|subzero|llvmpipe|softpipe|software/i.test(`${baseRenderer} ${unmasked}`);
+    } catch {
+      isSoftwareGl = false;
+    }
+
+    const skyTex = makeCloudySkyTexture(!isSoftwareGl);
     const shadowTex = makeContactShadowTexture();
     const learnerTex = makeLearnerSignTexture();
-    this.sharedTextures.push(skyTex, shadowTex, learnerTex);
+    const grassTex = makeUrbanGrassTexture();
+    const playerPlateTex = makeRussianLicensePlateTexture("У 077 КС");
+    const civilPlateTex = makeRussianLicensePlateTexture("А 482 МН");
+    const clusterTex = makeInstrumentClusterTexture();
+    this.cockpitDisplays = new CockpitDisplayController();
+    grassTex.repeat.set(160, 160);
+    // Индексы sharedTextures: 0 sky, 1 shadow, 2 learner, 3 grass, 4 playerPlate, 5 civilPlate, 6 cluster
+    this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
-    this.scene.fog = new THREE.Fog(0xbcd3e6, 75, 220);
+    this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
+
+    if (!isSoftwareGl) {
+      try {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envMapRT = pmrem.fromEquirectangular(skyTex);
+        this.scene.environment = this.envMapRT.texture;
+        this.scene.environmentIntensity = 0.56;
+        pmrem.dispose();
+      } catch {
+        this.envMapRT = null;
+      }
+    }
 
     this.camera = new THREE.PerspectiveCamera(56, 16 / 9, 0.12, 420);
 
-    // Освещение
-    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x3b493f, 0.85);
+    // Освещение (естественный дневной свет средней полосы + тёплое солнце)
+    const hemi = new THREE.HemisphereLight(0xdff0ff, 0x435244, 0.9);
     this.scene.add(hemi);
 
-    this.sun = new THREE.DirectionalLight(0xfff6e5, 1.35);
+    this.sun = new THREE.DirectionalLight(0xfff5e2, 1.38);
     this.sun.position.set(28, 46, -22);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -640,28 +310,44 @@ export class SceneController {
     this.sun.shadow.camera.bottom = -d;
     this.scene.add(this.sun, this.sun.target);
 
-    // Травяная подложка
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(1400, 1400),
-      new THREE.MeshStandardMaterial({ color: 0x3f5743, roughness: 0.96 })
+    // Травяная подложка с фактурой городского газона (масштабируется в loadWorld под реальные размеры карты)
+    this.groundMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshStandardMaterial({ map: grassTex, roughness: 0.95 })
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.02;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    this.groundMesh.scale.set(1400, 1400, 1);
+    this.groundMesh.rotation.x = -Math.PI / 2;
+    this.groundMesh.position.y = -0.02;
+    this.groundMesh.receiveShadow = true;
+    this.scene.add(this.groundMesh);
 
     this.scene.add(this.worldGroup);
 
-    // Машина игрока Kia Ceed
-    this.playerRig = buildProceduralCar("ceed", 0xd97706, true, shadowTex, learnerTex);
+    // Детализированный учебный Kia Ceed JD (лак clearcoat, ДХО, живой салон Supervision, 7" ШГУ + R-камера, 3D-зеркала)
+    this.playerRig = buildDetailedCar(
+      "ceed",
+      0xd97706,
+      true,
+      shadowTex,
+      learnerTex,
+      playerPlateTex,
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      {
+        headUnitTex: this.cockpitDisplays.headUnitTex,
+        rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
+      }
+    );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
         obj.layers.set(PLAYER_EXTERIOR_LAYER);
       }
     });
-    // Основной вид сохраняет всю машину, включая зеркала, водителя и светотехнику.
+    // Основной вид сохраняет всю машину, включая зеркала, водителя и светотехнику;
+    // raycaster 3D-рычага АКПП также слушает слой кузова/салона PLAYER_EXTERIOR_LAYER.
     this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
     this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
+    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
     this.scene.add(this.playerRig.root);
 
     // Линии прогнозной траектории Аккермана
@@ -678,12 +364,23 @@ export class SceneController {
     // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир без пересечения крыши/салона;
     // боковые дополнительно видят наружную кромку автомобиля, но не корпуса зеркал.
     this.rearRT = new THREE.WebGLRenderTarget(320, 96, { depthBuffer: true });
-    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 130);
+    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 112);
     this.rearBuf = new Uint8Array(320 * 96 * 4);
     this.sideRT = new THREE.WebGLRenderTarget(320, 160, { depthBuffer: true });
-    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 130);
+    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 105);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
+
+    // Физические 3D-зеркала в салоне: повышенное разрешение, прямой GPU-рендер и единый ACES tone mapping со сценой
+    this.cockpitRearRT = new THREE.WebGLRenderTarget(512, 160, { depthBuffer: true });
+    this.cockpitLeftRT = new THREE.WebGLRenderTarget(384, 240, { depthBuffer: true });
+    this.cockpitRightRT = new THREE.WebGLRenderTarget(384, 240, { depthBuffer: true });
+    this.cockpitRearMat = new THREE.MeshBasicMaterial({ map: this.cockpitRearRT.texture, color: 0xf6fafd });
+    this.cockpitLeftMat = new THREE.MeshBasicMaterial({ map: this.cockpitLeftRT.texture, color: 0xf6fafd });
+    this.cockpitRightMat = new THREE.MeshBasicMaterial({ map: this.cockpitRightRT.texture, color: 0xf6fafd });
+    this.mirrorIdleMat =
+      (this.playerRig.rearMirrorGlass?.material as THREE.Material | undefined) ??
+      new THREE.MeshStandardMaterial({ color: 0x7d93a6, metalness: 0.88, roughness: 0.12 });
 
     // LUT linear → sRGB с небольшим усилением экспозиции
     this.srgbLut = new Uint8Array(256);
@@ -702,120 +399,363 @@ export class SceneController {
   }
 
   adjustOrbit(deltaX: number, deltaY: number): void {
+    this.savedHeadBeforeShifter = null;
     this.orbitYaw -= deltaX * 0.0065;
-    this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.38);
+    this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.42);
   }
 
   adjustZoom(wheelDelta: number): void {
+    if (this.lastCameraMode === "cockpit") {
+      // В салоне колесо мыши плавно регулирует угол обзора (50° крупно — 88° панорамно со всеми 3 зеркалами)
+      this.cockpitFov = clamp(this.cockpitFov + wheelDelta * 0.03, 50, 88);
+      return;
+    }
     this.orbitDist = clamp(this.orbitDist * (1 + wheelDelta * 0.0009), 4.6, 42);
   }
 
   resetOrbit(): void {
+    this.savedHeadBeforeShifter = null;
     this.orbitYaw = 0;
     this.orbitPitch = 0.36;
     this.orbitDist = 9.2;
+    this.cockpitFov = 68;
+  }
+
+  /** Быстрый перевод взгляда водителя в салоне на 3D-рычаг 6АКПП Shiftronic и обратно на дорогу (клавиша G). */
+  toggleCockpitShifterView(): boolean {
+    if (this.isCockpitShifterView()) {
+      const prev = this.savedHeadBeforeShifter;
+      this.savedHeadBeforeShifter = null;
+      this.orbitYaw = prev ? prev.yaw : 0;
+      this.orbitPitch = prev ? prev.pitch : 0.36;
+      this.cockpitFov = prev ? prev.fov : 68;
+      return false;
+    }
+    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
+    this.orbitYaw = -0.82;
+    this.orbitPitch = 1.34;
+    this.cockpitFov = 62;
+    return true;
+  }
+
+  /** Смотрит ли сейчас камера салона вниз-вправо на консоль рычага АКПП. */
+  isCockpitShifterView(): boolean {
+    return this.orbitPitch > 1.05 && this.orbitYaw < -0.45 && this.orbitYaw > -1.35;
+  }
+
+  /** Сохраняет состояние 7" ШГУ (режим, станция, клип, промо-слот) для 3D-экрана и подсветки. */
+  setHeadUnitState(headUnit: HeadUnitState): void {
+    this.headUnit = headUnit;
+  }
+
+  /** Возвращает текущее состояние ШГУ, которым управляет 3D-сцена (для UI и тестов). */
+  getHeadUnitState(): HeadUnitState {
+    return this.headUnit;
+  }
+
+  /** Подсветка наведения на интерактивный орган салона и короткий импульс нажатия. */
+  setCockpitControlInteraction(hovered: CockpitControlId | null, pressed: CockpitControlId | null = null): void {
+    this.cockpitControlHover = hovered;
+    if (pressed) this.controlPressAnim[pressed] = 1;
+  }
+
+  /**
+   * Проверяет попадание курсора (`[0..1]`) в органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка,
+   * ENGINE START/STOP, переключатель света, левый подрулевой и ручник. Только в камере `cockpit`.
+   */
+  pickCockpitControl(normX: number, normY: number): CockpitControlId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets || targets.length === 0) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    const hits = this.shifterRaycaster.intersectObjects(targets, false);
+    if (hits.length === 0) return null;
+    return (hits[0].object.userData.cockpitControl as CockpitControlId | undefined) ?? null;
+  }
+
+  /** Нормализованные экранные координаты `[0..1]` органа салона (для якоря подсказки). */
+  getCockpitControlScreenPoint(id: CockpitControlId): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets) return null;
+    const obj = targets.find((t) => t.userData.cockpitControl === id);
+    if (!obj) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    obj.getWorldPosition(this.shifterProjTmp);
+    this.shifterProjTmp.project(this.camera);
+    if (this.shifterProjTmp.z < -1 || this.shifterProjTmp.z > 1) return null;
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
+  }
+
+  /** Переводит взгляд водителя в салоне на центральную консоль с 7" ШГУ (клик по экрану в HUD). */
+  lookAtHeadUnit(): boolean {
+    if (this.lastCameraMode !== "cockpit") return false;
+    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
+    // Центральная консоль с 7" ШГУ — ниже и правее глаз водителя: взгляд вниз-вправо, но выше кулисы АКПП
+    this.orbitYaw = -0.86;
+    this.orbitPitch = 0.86;
+    this.cockpitFov = 66;
+    return true;
+  }
+
+  /** Обновляет подсветку наведения/захвата и пружинный ход `+/−` 3D-рычага АКПП. */
+  setShifterInteraction(hovered: ShifterHitId | null, dragging: boolean, manualPulse: -1 | 0 | 1 = 0): void {
+    this.shifterHover = hovered;
+    this.shifterDragging = dragging;
+    this.shifterManualPulse = manualPulse;
+  }
+
+  /**
+   * Проверяет попадание курсора (нормализованные координаты холста `[0..1]`) в 3D-рычаг АКПП или пазы кулисы.
+   * Вызывается только в режиме камеры `cockpit` по компактному списку из 8 коллайдеров (< 0,02 мс).
+   */
+  pickCockpitShifter(normX: number, normY: number): ShifterHitId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.shifterPickTargets;
+    if (!targets || targets.length === 0) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    // Сначала проверяем рукоятку рычага — захват за набалдашник всегда имеет приоритет над плоской кулисой
+    const knobHits = this.shifterRaycaster.intersectObject(targets[0], false);
+    if (knobHits.length > 0) return "lever";
+    const slotHits = this.shifterRaycaster.intersectObjects(targets.slice(1), false);
+    if (slotHits.length > 0) {
+      return (slotHits[0].object.userData.shifterHit as ShifterHitId | undefined) ?? null;
+    }
+    return null;
+  }
+
+  /** Проецирует луч курсора (`[0..1]`) на горизонтальную плоскость хода 3D-рычага АКПП в локальных координатах кузова. */
+  projectToShifterLocal(normX: number, normY: number): { x: number; z: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    this.shifterInvChassis.copy(this.playerRig.chassis.matrixWorld).invert();
+    this.shifterLocalRay.copy(this.shifterRaycaster.ray).applyMatrix4(this.shifterInvChassis);
+    const hit = this.shifterLocalRay.intersectPlane(this.shifterPlane, this.shifterLocalHit);
+    if (!hit) return null;
+    return { x: hit.x, z: hit.z };
+  }
+
+  /** Возвращает текущее локальное положение основания 3D-рычага АКПП `(x, z)` и центр кулисы `gateZ`. */
+  getShifterLocalAnchor(): { leverX: number; leverZ: number; gateZ: number } {
+    const gateZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
+    const piv = this.playerRig.gearLeverPivot;
+    return {
+      leverX: piv ? piv.position.x : SHIFTER_LAYOUT.mainRailX,
+      leverZ: piv ? piv.position.z : gateZ + SHIFTER_LAYOUT.offP,
+      gateZ,
+    };
+  }
+
+  /** Возвращает нормализованные экранные координаты `[0..1]` рукоятки или паза 3D-селектора в режиме `cockpit`. */
+  getShifterTargetScreenPoint(id: ShifterHitId): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.shifterPickTargets;
+    if (!targets) return null;
+    const obj = targets.find((t) => t.userData.shifterHit === id);
+    if (!obj) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    obj.getWorldPosition(this.shifterProjTmp);
+    this.shifterProjTmp.project(this.camera);
+    if (this.shifterProjTmp.z < -1 || this.shifterProjTmp.z > 1) return null;
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
   }
 
   applyQuality(preset: QualityPreset): void {
+    this.qualityPreset = preset;
     if (preset === "low") {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
+      this.scene.environment = null;
     } else if (preset === "medium") {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       this.renderer.shadowMap.enabled = true;
       this.sun.shadow.mapSize.set(1024, 1024);
+      this.scene.environment = this.envMapRT?.texture ?? null;
     } else {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       this.renderer.shadowMap.enabled = true;
-      this.sun.shadow.mapSize.set(2048, 2048);
+      const sz = this.isLargeWorld ? 1024 : 2048;
+      this.sun.shadow.mapSize.set(sz, sz);
+      this.scene.environment = this.envMapRT?.texture ?? null;
     }
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
+    this.shadowDirty = true;
   }
 
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
-    this.disposeGroup(this.worldGroup);
-    this.buildingMeshes.length = 0;
+    this.clearWorldResources();
+    this.roadChunks.length = 0;
+    this.detailChunks.length = 0;
     this.signalVisuals.length = 0;
     this.pedVisuals.length = 0;
+    this.parkedCarRoots.length = 0;
     this.checkpointMeshes.length = 0;
     this.bayVisuals.length = 0;
+    this.totalBuildings = 0;
+    this.shadowDirty = true;
+    this.lastShadowX = Number.NaN;
+    this.lastShadowZ = Number.NaN;
+    this.lastShadowH = Number.NaN;
+    this.cockpitRearPrimed = false;
+    this.cockpitSidePrimed = false;
 
-    const asphaltTex = makeAsphaltTexture();
-    const winTex = makeBuildingWindowTexture();
-    const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
-    const learnerTex = this.sharedTextures[2] as THREE.CanvasTexture;
-    const asphaltMat = new THREE.MeshStandardMaterial({ map: asphaltTex, roughness: 0.92 });
-    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.9 });
-    const whiteMarkMat = new THREE.MeshBasicMaterial({ color: 0xf1f5f9 });
-
-    // Дороги и разметка
-    for (const road of world.roads) {
-      for (let i = 0; i < road.points.length - 1; i++) {
-        const p0 = road.points[i];
-        const p1 = road.points[i + 1];
-        const dx = p1.x - p0.x;
-        const dz = p1.z - p0.z;
-        const len = Math.hypot(dx, dz);
-        if (len < 0.5) continue;
-        const angle = Math.atan2(dx, dz);
-        const mx = (p0.x + p1.x) / 2;
-        const mz = (p0.z + p1.z) / 2;
-
-        // Тротуар-подложка для городских и пользовательских улиц (кроме базовой площадки автодрома)
-        const isStreetRoad =
-          world.scenarioId === "city_osm" ||
-          (world.scenarioId === "custom" && road.id !== "custom-lot");
-        if (isStreetRoad) {
-          const sw = new THREE.Mesh(
-            new THREE.PlaneGeometry(road.width + 3.2, len + road.width * 0.4),
-            sidewalkMat
-          );
-          sw.rotation.order = "YXZ";
-          sw.rotation.y = angle;
-          sw.rotation.x = -Math.PI / 2;
-          sw.position.set(mx, 0.005, mz);
-          sw.receiveShadow = true;
-          this.worldGroup.add(sw);
-        }
-
-        const seg = new THREE.Mesh(
-          new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? road.width : 0)),
-          asphaltMat
-        );
-        seg.rotation.order = "YXZ";
-        seg.rotation.y = angle;
-        seg.rotation.x = -Math.PI / 2;
-        seg.position.set(mx, 0.012, mz);
-        seg.receiveShadow = true;
-        this.worldGroup.add(seg);
-
-        // Осевая разметка (1.1 сплошная или 1.5 прерывистая)
-        if (road.lanes >= 2 && len > 8) {
-          if (road.hasSolidCenter) {
-            const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, len - 8), whiteMarkMat);
-            line.rotation.order = "YXZ";
-            line.rotation.y = angle;
-            line.rotation.x = -Math.PI / 2;
-            line.position.set(mx, 0.022, mz);
-            this.worldGroup.add(line);
-          } else {
-            const dashCount = Math.floor(len / 5);
-            for (let k = 0; k < dashCount; k++) {
-              const t = (k + 0.5) / dashCount;
-              const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 2.2), whiteMarkMat);
-              dash.rotation.order = "YXZ";
-              dash.rotation.y = angle;
-              dash.rotation.x = -Math.PI / 2;
-              dash.position.set(p0.x + dx * t, 0.022, p0.z + dz * t);
-              this.worldGroup.add(dash);
-            }
-          }
-        }
+    // Подгоняем травяную подложку, карту теней и дальность камеры под реальные размеры карты (вплоть до 6×6 км)
+    const spanX = Math.max(120, world.bounds.maxX - world.bounds.minX);
+    const spanZ = Math.max(120, world.bounds.maxZ - world.bounds.minZ);
+    const maxSpan = Math.max(spanX, spanZ);
+    this.isLargeWorld = maxSpan > 380 || world.obstacles.length > 180 || world.roads.length > 40;
+    if (this.qualityPreset === "high") {
+      const targetMapSize = this.isLargeWorld ? 1024 : 2048;
+      if (this.sun.shadow.mapSize.x !== targetMapSize) {
+        this.sun.shadow.mapSize.set(targetMapSize, targetMapSize);
+        this.sun.shadow.map?.dispose();
+        this.sun.shadow.map = null;
       }
     }
+    const midX = (world.bounds.minX + world.bounds.maxX) * 0.5;
+    const midZ = (world.bounds.minZ + world.bounds.maxZ) * 0.5;
+    this.groundMesh.position.set(midX, -0.02, midZ);
+    this.groundMesh.scale.set(Math.max(1400, spanX + 900), Math.max(1400, spanZ + 900), 1);
+
+    const targetFar = maxSpan > 340 ? Math.min(1100, Math.max(480, maxSpan * 0.65)) : 420;
+    if (this.camera.far !== targetFar) {
+      this.camera.far = targetFar;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.near = maxSpan > 340 ? 115 : 80;
+      this.scene.fog.far = maxSpan > 340 ? 340 : 235;
+    }
+
+    const roadMats = createRoadMaterialPack();
+    const cityEnv = createCityEnvironmentPack();
+    // Пространственные чанки сливают десятки тысяч дорог, зданий, деревьев, заборов и знаков в считаные draw calls
+    const roadChunkBatcher = new SpatialChunkBatcher(240);
+    const detailChunkBatcher = new SpatialChunkBatcher(165);
+    const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
+    const learnerTex = this.sharedTextures[2] as THREE.CanvasTexture;
+    const civilPlateTex = this.sharedTextures[5] as THREE.CanvasTexture;
+    const clusterTex = this.sharedTextures[6] as THREE.CanvasTexture;
+    const { asphaltMat, whiteMarkMat } = roadMats;
+
+    // Масштабируем повтор текстуры газона пропорционально размеру мира (1 тайл ≈ 9 м)
+    const grassTex = this.sharedTextures[3] as THREE.CanvasTexture | undefined;
+    if (grassTex) {
+      grassTex.repeat.set(
+        Math.round(this.groundMesh.scale.x / 9),
+        Math.round(this.groundMesh.scale.y / 9)
+      );
+    }
+
+    // Асфальтовая площадка произвольной (неквадратной/вогнутой) формы и 3D-кромка границы мира
+    const makeWorldPolygonGeo = (pts: readonly { x: number; z: number }[]): THREE.ShapeGeometry => {
+      const shape = new THREE.Shape();
+      shape.moveTo(pts[0].x, -pts[0].z);
+      for (let i = 1; i < pts.length; i++) {
+        shape.lineTo(pts[i].x, -pts[i].z);
+      }
+      shape.closePath();
+      const geo = new THREE.ShapeGeometry(shape);
+      geo.rotateX(-Math.PI / 2);
+      const pos = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      if (pos && uv) {
+        for (let i = 0; i < pos.count; i++) {
+          uv.setXY(i, pos.getX(i) / 4.5, pos.getZ(i) / 4.5);
+        }
+        uv.needsUpdate = true;
+      }
+      geo.computeVertexNormals();
+      return geo;
+    };
+
+    if (world.lotPolygon && world.lotPolygon.length >= 3) {
+      // Асфальтовое полотно точно по контуру произвольной площадки (Г/Т/П-образной, трапеции, многоугольника)
+      const lotMesh = new THREE.Mesh(makeWorldPolygonGeo(world.lotPolygon), asphaltMat);
+      lotMesh.position.y = 0.009;
+      lotMesh.receiveShadow = true;
+      this.worldGroup.add(lotMesh);
+
+      // Бетонная кромка и белая краевая разметка вдоль всех сторон произвольной площадки
+      const rimMat = new THREE.MeshStandardMaterial({ color: 0x9aa6b2, roughness: 0.82 });
+      const poly = world.lotPolygon;
+      let area2 = 0;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        area2 += a.x * b.z - b.x * a.z;
+      }
+      const outSign = area2 >= 0 ? 1 : -1;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.4) continue;
+        const angle = Math.atan2(dx, dz);
+        const mx = (a.x + b.x) * 0.5;
+        const mz = (a.z + b.z) * 0.5;
+        const nx = (outSign * dz) / len;
+        const nz = (-outSign * dx) / len;
+
+        const rim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, len + 0.2), rimMat);
+        rim.rotation.y = angle;
+        rim.position.set(mx + nx * 0.12, 0.035, mz + nz * 0.12);
+        rim.receiveShadow = true;
+        this.worldGroup.add(rim);
+
+        if (len > 1.2) {
+          const edgeLine = new THREE.Mesh(new THREE.PlaneGeometry(0.12, len - 0.3), whiteMarkMat);
+          edgeLine.rotation.order = "YXZ";
+          edgeLine.rotation.y = angle;
+          edgeLine.rotation.x = -Math.PI / 2;
+          edgeLine.position.set(mx - nx * 0.22, 0.016, mz - nz * 0.22);
+          this.worldGroup.add(edgeLine);
+        }
+      }
+    } else if (world.boundaryPolygon && world.boundaryPolygon.length >= 3) {
+      // Для городских/OSM-карт с произвольной границей: подсвеченный контур рабочей зоны по периметру
+      const borderMat = new THREE.MeshBasicMaterial({ color: 0xf5b942, transparent: true, opacity: 0.62 });
+      const poly = world.boundaryPolygon;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.5) continue;
+        const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.26, len), borderMat);
+        strip.rotation.order = "YXZ";
+        strip.rotation.y = Math.atan2(dx, dz);
+        strip.rotation.x = -Math.PI / 2;
+        strip.position.set((a.x + b.x) * 0.5, 0.04, (a.z + b.z) * 0.5);
+        this.worldGroup.add(strip);
+      }
+    }
+
+    // Дороги, следы наката, объёмные тротуары с плиткой, ГОСТ-бордюры БР 100.30.15, эстакады 11ДО, люки и разметка ГОСТ Р 51256
+    buildWorldRoadsAndSidewalks(roadChunkBatcher, detailChunkBatcher, world, roadMats);
 
     // Парковочные боксы (перпендикулярные и параллельные)
     for (const bay of world.bays) {
@@ -861,10 +801,10 @@ export class SceneController {
         }
       }
 
-      // Номер бокса на асфальте
-      const numTex = makeBayNumberTexture(bay.id, bay.occupied);
+      // Трафаретный номер парковочного места по ГОСТ Р 51256
+      const numTex = makeGostBayStencilTexture(bay.id, bay.occupied);
       const numPlane = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.15, 1.15),
+        new THREE.PlaneGeometry(1.18, 1.18),
         new THREE.MeshBasicMaterial({ map: numTex, transparent: true, depthWrite: false })
       );
       numPlane.rotation.x = -Math.PI / 2;
@@ -877,112 +817,86 @@ export class SceneController {
       }
     }
 
-    // Препятствия: припаркованные машины, бордюры, конусы, здания
+    // Препятствия: автопарк, здания РФ/СНГ (панельные/кирпичные/адм.), многоярусные деревья и инфраструктура ГОСТ
     for (const obs of world.obstacles) {
-      this.addObstacleMesh(obs, winTex, shadowTex, learnerTex);
+      this.addObstacleMesh(
+        obs,
+        world,
+        detailChunkBatcher,
+        roadMats,
+        cityEnv,
+        shadowTex,
+        learnerTex,
+        civilPlateTex,
+        clusterTex
+      );
     }
 
-    // Светофоры и стоп-линии 1.12
+    // Светофоры ГОСТ Р 52282 (Т.1 + Г-консоль + П.1 + табличка 6.16 «СТОП») и стоп-линии 1.12
     for (const sig of world.signals) {
-      this.addTrafficSignal(sig, whiteMarkMat);
+      this.signalVisuals.push(buildGostTrafficSignal(detailChunkBatcher, this.worldGroup, sig, roadMats));
     }
 
-    // Пешеходные переходы «зебра» и пешеходы
-    for (const cw of world.crosswalks) {
-      const cwGroup = new THREE.Group();
-      cwGroup.position.set(cw.cx, 0.026, cw.cz);
-      cwGroup.rotation.y = cw.h;
-      const stripes = Math.floor(cw.width / 0.95);
-      for (let i = 0; i < stripes; i++) {
-        const sx = ((i + 0.5) / stripes - 0.5) * (cw.width - 0.8);
-        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.46, cw.length), whiteMarkMat);
-        stripe.rotation.x = -Math.PI / 2;
-        stripe.position.set(sx, 0, 0);
-        cwGroup.add(stripe);
-      }
-      // Знак 5.19 «Пешеходный переход» справа от дороги
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, 2.5, 8),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8 })
-      );
-      pole.position.set(-cw.width / 2 - 0.9, 1.25, -cw.length / 2 - 0.5);
-      const board = new THREE.Mesh(
-        new THREE.BoxGeometry(0.55, 0.55, 0.05),
-        new THREE.MeshBasicMaterial({ color: 0x2563eb })
-      );
-      board.position.set(-cw.width / 2 - 0.9, 2.45, -cw.length / 2 - 0.5);
-      cwGroup.add(pole, board);
-      this.worldGroup.add(cwGroup);
+    // Пешеходные переходы ГОСТ 1.14.1 (бело-жёлтая «зебра», тактильная плитка, знаки 5.19.1/5.19.2) и пешеходы
+    world.crosswalks.forEach((cw, cwIdx) => {
+      buildGostCrosswalk(detailChunkBatcher, cw, roadMats);
+      const pedVis = buildDetailedPedestrian(cw.id, cwIdx, shadowTex);
+      this.worldGroup.add(pedVis.group);
+      this.pedVisuals.push(pedVis);
+    });
 
-      // Фигура пешехода
-      const ped = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(0.36, 0.58, 0.22),
-        new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.65 })
-      );
-      body.position.y = 1.05;
-      body.castShadow = true;
-      const head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.13, 10, 10),
-        new THREE.MeshStandardMaterial({ color: 0xf1c7a3 })
-      );
-      head.position.y = 1.5;
-      const legGeo = new THREE.BoxGeometry(0.13, 0.68, 0.14);
-      const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
-      const legL = new THREE.Mesh(legGeo, legMat);
-      legL.position.set(0.09, 0.38, 0);
-      const legR = new THREE.Mesh(legGeo, legMat);
-      legR.position.set(-0.09, 0.38, 0);
-      ped.add(body, head, legL, legR);
-      this.worldGroup.add(ped);
-      this.pedVisuals.push({ crosswalkId: cw.id, group: ped, legL, legR });
-    }
-
-    // Дорожные знаки редактора и импорта OSM (все 12 классов, с ориентацией по потоку sign.h)
+    // Дорожные знаки ГОСТ Р 52290-2004 (все 12 классов, кеш текстур, фигурная подложка и ориентация sign.h)
     const renderedSignIds = new Set<string>();
     for (const sign of world.signs ?? []) {
       renderedSignIds.add(`${SIGN_SPEED_ZONE_PREFIX}${sign.id}`);
-      this.addRoadSignMesh(sign);
+      buildGostRoadSign(detailChunkBatcher, sign, roadMats);
     }
 
     // Знаки ограничения скорости 3.24 (для встроенных сценариев без дублирования world.signs)
     for (const sz of world.speedZones) {
       if (renderedSignIds.has(sz.id)) continue;
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, 2.6, 8),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8 })
-      );
-      pole.position.set(sz.signX, 1.3, sz.signZ);
-      const signTex = makeSpeedSignTexture(sz.limitKmh);
-      const disc = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.68, 0.68),
-        new THREE.MeshBasicMaterial({ map: signTex, transparent: true, side: THREE.DoubleSide })
-      );
-      disc.position.set(sz.signX, 2.55, sz.signZ);
-      this.worldGroup.add(pole, disc);
+      const aimH = Math.atan2(sz.x - sz.signX, sz.z - sz.signZ);
+      const snappedH =
+        Math.abs(Math.cos(aimH)) >= Math.abs(Math.sin(aimH))
+          ? Math.cos(aimH) >= 0
+            ? 0
+            : Math.PI
+          : Math.sin(aimH) >= 0
+            ? Math.PI / 2
+            : -Math.PI / 2;
+      buildGostSpeedSign(detailChunkBatcher, sz.limitKmh, sz.signX, sz.signZ, snappedH, roadMats);
     }
 
-    // Контрольные точки маршрута (янтарные маркеры на дороге)
+    // Контрольные точки маршрута (двойной дорожный маркер с красным контуром для STOP и бирюзовым для финиша)
     for (const cp of world.checkpoints) {
+      const mainHex = cp.isFinalPark ? 0x52d6bd : cp.requireStop ? 0xf87171 : 0xf5b942;
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(1.4, 1.85, 28),
+        new THREE.RingGeometry(1.38, 1.86, 32),
         new THREE.MeshBasicMaterial({
-          color: cp.isFinalPark ? 0x52d6bd : 0xf5b942,
+          color: mainHex,
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.78,
+          opacity: 0.82,
         })
       );
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(cp.x, 0.04, cp.z);
+      const inner = new THREE.Mesh(
+        new THREE.RingGeometry(0.62, 0.82, 28),
+        new THREE.MeshBasicMaterial({
+          color: 0xf8fafc,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.65,
+        })
+      );
+      ring.add(inner);
       this.worldGroup.add(ring);
       this.checkpointMeshes.push({ id: cp.id, mesh: ring });
     }
 
-    // Декоративные деревья по периметру только для встроенных сценариев (в своём сценарии деревья — объекты карты)
+    // Декоративные деревья РФ/СНГ (липы, клёны, берёзы, ели) для встроенных сценариев
     if (world.scenarioId !== "custom") {
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 });
-      const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f6a44, roughness: 0.85 });
       const treeCoords: Array<[number, number]> =
         world.scenarioId === "city_osm"
           ? [
@@ -992,17 +906,20 @@ export class SceneController {
           : [
               [-13, -8], [13, -8], [-13, 13], [13, 13], [0, -14], [0, 18],
             ];
-      for (const [tx, tz] of treeCoords) {
-        const tg = new THREE.Group();
-        tg.position.set(tx, 0, tz);
-        const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.8, 7), trunkMat);
-        tr.position.y = 0.9;
-        const cr = new THREE.Mesh(new THREE.DodecahedronGeometry(1.45, 0), crownMat);
-        cr.position.y = 2.65;
-        tg.add(tr, cr);
-        this.worldGroup.add(tg);
-      }
+      treeCoords.forEach(([tx, tz], tIdx) => {
+        emitRealisticTree(detailChunkBatcher, tx, tz, 4.8, cityEnv, `${world.scenarioId}-t${tIdx}`);
+      });
     }
+
+    // Сливаем статическую геометрию по чанкам (десятки тысяч примитивов -> считаные draw calls!) и регистрируем ресурсы пулов
+    this.roadChunks.push(...roadChunkBatcher.flush(this.worldGroup));
+    this.detailChunks.push(...detailChunkBatcher.flush(this.worldGroup));
+
+    const roadRes = finalizeRoadMaterialPack(roadMats);
+    const cityRes = finalizeCityEnvironmentPack(cityEnv);
+    this.worldPoolMaterials.push(...roadRes.materials, ...cityRes.materials);
+    this.worldPoolTextures.push(...roadRes.textures, ...cityRes.textures);
+    this.worldPoolGeometries.push(...roadRes.geometries);
 
     this.resetOrbit();
     this.camLookTarget.set(world.start.x, 1.0, world.start.z);
@@ -1010,238 +927,46 @@ export class SceneController {
 
   private addObstacleMesh(
     obs: ObstacleBox,
-    winTex: THREE.CanvasTexture,
+    world: WorldData,
+    detailChunks: SpatialChunkBatcher,
+    roadMats: RoadMaterialPack,
+    cityEnv: CityEnvironmentPack,
     shadowTex: THREE.CanvasTexture,
-    learnerTex: THREE.CanvasTexture
+    learnerTex: THREE.CanvasTexture,
+    civilPlateTex: THREE.CanvasTexture,
+    clusterTex: THREE.CanvasTexture
   ): void {
     if (obs.kind === "parked_car" && obs.model) {
-      const rig = buildProceduralCar(obs.model, obs.color ?? 0x94a3b8, false, shadowTex, learnerTex);
+      const rig = buildDetailedCar(
+        obs.model,
+        obs.color ?? 0x94a3b8,
+        false,
+        shadowTex,
+        learnerTex,
+        civilPlateTex,
+        clusterTex,
+        OWN_MIRROR_HARDWARE_LAYER
+      );
       rig.root.position.set(obs.cx, 0, obs.cz);
       rig.root.rotation.y = obs.h;
       this.worldGroup.add(rig.root);
+      this.parkedCarRoots.push(rig.root);
       return;
     }
 
-    if (obs.kind === "cone") {
-      const g = new THREE.Group();
-      g.position.set(obs.cx, 0, obs.cz);
-      const base = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.05, 0.32),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b })
-      );
-      base.position.y = 0.025;
-      const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(0.13, obs.height, 10),
-        new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.5 })
-      );
-      cone.position.y = obs.height / 2 + 0.03;
-      const band = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.065, 0.088, 0.11, 10),
-        new THREE.MeshBasicMaterial({ color: 0xf8fafc })
-      );
-      band.position.y = obs.height * 0.62;
-      g.add(base, cone, band);
-      this.worldGroup.add(g);
+    if (buildGostStreetProp(detailChunks, obs, world, roadMats)) {
       return;
     }
 
     if (obs.kind === "building") {
-      const mat = new THREE.MeshStandardMaterial({
-        color: obs.color ?? 0x556472,
-        map: winTex,
-        roughness: 0.82,
-      });
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(obs.halfX * 2, obs.height, obs.halfZ * 2),
-        mat
-      );
-      mesh.position.set(obs.cx, obs.height / 2, obs.cz);
-      mesh.rotation.y = obs.h;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.worldGroup.add(mesh);
-      this.buildingMeshes.push(mesh);
+      emitRussianBuilding(detailChunks, obs, cityEnv);
+      this.totalBuildings++;
       return;
     }
 
     if (obs.kind === "tree") {
-      const tg = new THREE.Group();
-      tg.position.set(obs.cx, 0, obs.cz);
-      const h = Math.max(2.2, obs.height);
-      const trunkH = h * 0.44;
-      const crownR = Math.max(0.85, Math.max(obs.halfX, obs.halfZ) * 2.1, h * 0.32);
-      const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.14, 0.21, trunkH, 7),
-        new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 })
-      );
-      trunk.position.y = trunkH / 2;
-      trunk.castShadow = true;
-      const crown = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(crownR, 0),
-        new THREE.MeshStandardMaterial({ color: obs.color ?? 0x2f6a44, roughness: 0.85 })
-      );
-      crown.position.y = trunkH + crownR * 0.65;
-      crown.castShadow = true;
-      tg.add(trunk, crown);
-      this.worldGroup.add(tg);
-      return;
+      emitRealisticTree(detailChunks, obs.cx, obs.cz, Math.max(3.4, obs.height), cityEnv, obs.id);
     }
-
-    if (obs.kind === "fence") {
-      const fg = new THREE.Group();
-      fg.position.set(obs.cx, 0, obs.cz);
-      fg.rotation.y = obs.h;
-      const alongX = obs.halfX >= obs.halfZ;
-      const span = (alongX ? obs.halfX : obs.halfZ) * 2;
-      const thick = Math.max(0.08, (alongX ? obs.halfZ : obs.halfX) * 2);
-      const h = Math.max(0.5, obs.height);
-      const metalMat = new THREE.MeshStandardMaterial({
-        color: obs.color ?? 0x64748b,
-        metalness: 0.35,
-        roughness: 0.6,
-      });
-      // Верхняя и средняя перекладины + вертикальные стойки каждые ~2 м
-      for (const ry of [h * 0.88, h * 0.48]) {
-        const rail = new THREE.Mesh(
-          new THREE.BoxGeometry(alongX ? span : thick, 0.08, alongX ? thick : span),
-          metalMat
-        );
-        rail.position.y = ry;
-        rail.castShadow = true;
-        fg.add(rail);
-      }
-      const posts = Math.max(2, Math.min(24, Math.round(span / 2) + 1));
-      for (let i = 0; i < posts; i++) {
-        const pos = posts === 1 ? 0 : (i / (posts - 1) - 0.5) * Math.max(0.2, span - 0.12);
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, h, 0.09), metalMat);
-        post.position.set(alongX ? pos : 0, h / 2, alongX ? 0 : pos);
-        post.castShadow = true;
-        fg.add(post);
-      }
-      this.worldGroup.add(fg);
-      return;
-    }
-
-    if (obs.kind === "island") {
-      const ig = new THREE.Group();
-      ig.position.set(obs.cx, 0, obs.cz);
-      ig.rotation.y = obs.h;
-      const h = Math.max(0.14, obs.height);
-      const curb = new THREE.Mesh(
-        new THREE.BoxGeometry(obs.halfX * 2, h, obs.halfZ * 2),
-        new THREE.MeshStandardMaterial({ color: 0x9aa6b2, roughness: 0.85 })
-      );
-      curb.position.y = h / 2;
-      curb.receiveShadow = true;
-      ig.add(curb);
-      if (obs.halfX > 0.25 && obs.halfZ > 0.25) {
-        const lawn = new THREE.Mesh(
-          new THREE.BoxGeometry(obs.halfX * 2 - 0.28, 0.04, obs.halfZ * 2 - 0.28),
-          new THREE.MeshStandardMaterial({ color: obs.color ?? 0x3b6e4c, roughness: 0.92 })
-        );
-        lawn.position.y = h + 0.015;
-        lawn.receiveShadow = true;
-        ig.add(lawn);
-      }
-      this.worldGroup.add(ig);
-      return;
-    }
-
-    if (obs.kind === "pole") {
-      const r = Math.max(0.08, Math.min(obs.halfX, obs.halfZ));
-      const mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(r * 0.85, r, obs.height, 10),
-        new THREE.MeshStandardMaterial({ color: obs.color ?? 0x94a3b8, metalness: 0.35, roughness: 0.55 })
-      );
-      mesh.position.set(obs.cx, obs.height / 2, obs.cz);
-      mesh.castShadow = true;
-      this.worldGroup.add(mesh);
-      return;
-    }
-
-    // Бордюр
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(obs.halfX * 2, obs.height, obs.halfZ * 2),
-      new THREE.MeshStandardMaterial({ color: obs.color ?? 0x9aa6b2, roughness: 0.85 })
-    );
-    mesh.position.set(obs.cx, obs.height / 2, obs.cz);
-    mesh.rotation.y = obs.h;
-    mesh.receiveShadow = true;
-    this.worldGroup.add(mesh);
-  }
-
-  /** Строит стойку и ориентированный щит дорожного знака (лицевая сторона обращена к потоку sign.h). */
-  private addRoadSignMesh(sign: RoadSignDef): void {
-    const g = new THREE.Group();
-    g.position.set(sign.x, 0, sign.z);
-    g.rotation.y = sign.h;
-
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.045, 0.05, 2.55, 8),
-      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.35, roughness: 0.55 })
-    );
-    pole.position.y = 1.275;
-    pole.castShadow = true;
-
-    const tex = makeRoadSignTexture(sign);
-    const front = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.72, 0.72),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true })
-    );
-    // Смотрит к локальному -Z — навстречу водителю, движущемуся вдоль +Z в системе знака
-    front.position.set(0, 2.52, -0.055);
-    front.rotation.y = Math.PI;
-
-    // Оборотная металлическая сторона щита (чтобы сзади знак не зеркалился)
-    const back = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.66, 0.66),
-      new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 })
-    );
-    back.position.set(0, 2.52, -0.045);
-
-    g.add(pole, front, back);
-    this.worldGroup.add(g);
-  }
-
-  private addTrafficSignal(sig: TrafficSignalDef, whiteMat: THREE.MeshBasicMaterial): void {
-    // Стоп-линия 1.12
-    const stopLine = new THREE.Mesh(new THREE.PlaneGeometry(sig.stopLineWidth, 0.42), whiteMat);
-    stopLine.rotation.order = "YXZ";
-    stopLine.rotation.y = sig.h;
-    stopLine.rotation.x = -Math.PI / 2;
-    stopLine.position.set(sig.stopLineX, 0.028, sig.stopLineZ);
-    this.worldGroup.add(stopLine);
-
-    // Опора и головка светофора (обращена к подъезжающему водителю)
-    const g = new THREE.Group();
-    g.position.set(sig.x, 0, sig.z);
-    g.rotation.y = sig.h;
-
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.065, 0.075, 3.6, 8),
-      new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.4 })
-    );
-    pole.position.y = 1.8;
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(0.38, 1.08, 0.24),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.6 })
-    );
-    box.position.y = 3.55;
-
-    const redMat = new THREE.MeshBasicMaterial({ color: 0x3b0d0d });
-    const yellowMat = new THREE.MeshBasicMaterial({ color: 0x3b2f08 });
-    const greenMat = new THREE.MeshBasicMaterial({ color: 0x09381f });
-
-    const lensGeo = new THREE.CircleGeometry(0.125, 14);
-    const makeLens = (mat: THREE.MeshBasicMaterial, y: number) => {
-      const m = new THREE.Mesh(lensGeo, mat);
-      m.position.set(0, y, -0.126); // смотрит к -Z (навстречу потоку +Z)
-      m.rotation.y = Math.PI;
-      return m;
-    };
-    g.add(pole, box, makeLens(redMat, 3.88), makeLens(yellowMat, 3.55), makeLens(greenMat, 3.22));
-    this.worldGroup.add(g);
-    this.signalVisuals.push({ def: sig, redMat, yellowMat, greenMat });
   }
 
   // === [SEC:render-frame] Отрисовка кадра, зеркал (320×96 и 320×160 с троттлингом TD-06) и камер ===
@@ -1279,36 +1004,199 @@ export class SceneController {
     rig.steerWheelMesh.rotation.z = -(state.swDeg * Math.PI) / 180;
 
     if (rig.learnerSign) rig.learnerSign.visible = opts.showLearnerSign;
+    if (rig.driverGroup) rig.driverGroup.visible = opts.cameraMode !== "cockpit";
 
     // Поворотники (период 700 мс, как в v8)
     const { blinkOn, leftLit, rightLit } = getTurnSignalFlash(state.signal, state.time);
     for (const m of rig.blinkLeftMats) m.color.setHex(leftLit ? 0xffb020 : 0x9a621e);
     for (const m of rig.blinkRightMats) m.color.setHex(rightLit ? 0xffb020 : 0x9a621e);
 
-    rig.brakeMat.color.setHex(isBraking || state.handbrake ? 0xff2a2a : state.lights ? 0xb91c1c : 0x6b1515);
+    const lightsActive = state.lights && state.engineOn;
+    rig.brakeMat.color.setHex(isBraking || state.handbrake ? 0xff2a2a : lightsActive ? 0xb91c1c : 0x6b1515);
     rig.reverseMat.color.setHex(state.gear === "R" && state.engineOn ? 0xf8fafc : 0x334155);
-    rig.headlightMat.color.setHex(state.lights && state.engineOn ? 0xfffbeb : 0x94a3b8);
+    rig.headlightMat.color.setHex(lightsActive ? 0xfffbeb : 0x94a3b8);
+    if (rig.drlMat) rig.drlMat.color.setHex(state.engineOn ? 0xf0f9ff : 0x64748b);
+    if (rig.plateLightMat) rig.plateLightMat.color.setHex(lightsActive ? 0xfef9c3 : 0x334155);
+    if (rig.headlightBeamGroup) rig.headlightBeamGroup.visible = lightsActive;
     if (rig.headSpotL && rig.headSpotR) {
-      const inten = state.lights && state.engineOn ? 1.8 : 0;
+      const inten = lightsActive ? 2.1 : 0;
       rig.headSpotL.intensity = inten;
       rig.headSpotR.intensity = inten;
     }
 
-    // Подвижная тень солнца вокруг автомобиля
-    this.sun.position.set(state.x + 26, 44, state.z - 20);
-    this.sun.target.position.set(state.x, 0, state.z);
-
-    // 2. Отсечение дальних зданий по радиусу (оптимизация под школьные ПК)
-    const r2 = opts.drawRadius * opts.drawRadius;
-    let vis = 0;
-    for (const bm of this.buildingMeshes) {
-      const dx = bm.position.x - state.x;
-      const dz = bm.position.z - state.z;
-      const show = dx * dx + dz * dz <= r2;
-      bm.visible = show;
-      if (show) vis++;
+    // Живые органы управления и 3D-дисплеи салона Kia Ceed JD (6-ст. Shiftronic, ручник, подрулевой, педали, Supervision, ШГУ)
+    if (rig.gearLeverPivot) {
+      const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
+      const inManualGate =
+        state.gear === "1" ||
+        state.gear === "2" ||
+        state.gear === "3" ||
+        state.gear === "4" ||
+        state.gear === "5" ||
+        state.gear === "6";
+      const dragPulse = inManualGate ? this.shifterManualPulse * 0.022 : 0;
+      const shiftPulse =
+        inManualGate && dragPulse === 0 && state.shiftTimer > 0 ? 0.015 : dragPulse;
+      const gOff =
+        state.gear === "P"
+          ? SHIFTER_LAYOUT.offP
+          : state.gear === "R"
+            ? SHIFTER_LAYOUT.offR
+            : state.gear === "N"
+              ? SHIFTER_LAYOUT.offN
+              : SHIFTER_LAYOUT.offD + shiftPulse;
+      rig.gearLeverPivot.position.x = inManualGate
+        ? SHIFTER_LAYOUT.manualRailX
+        : SHIFTER_LAYOUT.mainRailX;
+      rig.gearLeverPivot.position.z = gateBaseZ + gOff;
+      // Лёгкий реалистичный наклон штока вдоль хода кулисы и в сторону паза Shiftronic
+      rig.gearLeverPivot.rotation.x = clamp((gOff + 0.004) * 1.45, -0.14, 0.14);
+      rig.gearLeverPivot.rotation.z = inManualGate ? -0.09 : 0;
+      if (rig.gearGateDot) {
+        rig.gearGateDot.position.x = inManualGate
+          ? SHIFTER_LAYOUT.manualDotX
+          : SHIFTER_LAYOUT.mainDotX;
+        rig.gearGateDot.position.z = gateBaseZ + gOff;
+      }
+      if (rig.gearGateDotMat) {
+        rig.gearGateDotMat.color.setHex(
+          state.gear === "R"
+            ? 0xff5a5a
+            : state.gear === "D"
+              ? 0x52d6bd
+              : inManualGate
+                ? 0xf5b942
+                : 0xe2e8f0
+        );
+      }
+      // Тактильная подсветка набалдашника и рамки кулисы при наведении/захвате мышью в салоне
+      const activeGlow = opts.cameraMode === "cockpit" && (this.shifterDragging || this.shifterHover !== null);
+      if (rig.gearKnobCapMat) {
+        rig.gearKnobCapMat.emissive.setHex(this.shifterDragging ? 0xf5b942 : activeGlow ? 0x52d6bd : 0x000000);
+        rig.gearKnobCapMat.emissiveIntensity = this.shifterDragging ? 0.55 : activeGlow ? 0.34 : 0;
+      }
+      if (rig.gearGateRimMat) {
+        rig.gearGateRimMat.emissive.setHex(this.shifterDragging ? 0xf5b942 : activeGlow ? 0x52d6bd : 0x000000);
+        rig.gearGateRimMat.emissiveIntensity = this.shifterDragging ? 0.32 : activeGlow ? 0.2 : 0;
+      }
     }
-    this.visibleBuildings = vis;
+    if (rig.handbrakePivot) {
+      rig.handbrakePivot.rotation.x = state.handbrake ? -0.44 : -0.05;
+    }
+    if (rig.leftStalkPivot) {
+      // Как на реальном Kia Ceed JD: левый поворотник Q — рычажок вниз (-Y), правый E — вверх (+Y)
+      rig.leftStalkPivot.rotation.z = state.signal === "left" ? -0.17 : state.signal === "right" ? 0.17 : 0;
+    }
+    if (rig.hazardBtnMat) {
+      rig.hazardBtnMat.color.setHex(state.signal === "hazard" && blinkOn ? 0xff2e2e : 0x8a1c1c);
+    }
+    if (rig.startBtnMat) {
+      rig.startBtnMat.color.setHex(state.engineOn ? 0x22c55e : 0xd97706);
+    }
+    if (rig.gearGateRimMat && !this.shifterDragging && this.shifterHover === null) {
+      // Shift Lock «как в жизни»: рамка кулисы и набалдашник предупреждают, что селектор заперт без тормоза
+      const lockedInP = state.engineOn && state.gear === "P" && (state.brakePos ?? 0) < SHIFT_LOCK_MIN_BRAKE;
+      const deadSelector = !state.engineOn;
+      if (lockedInP || deadSelector) {
+        rig.gearGateRimMat.emissive.setHex(0xf5b942);
+        rig.gearGateRimMat.emissiveIntensity = 0.22;
+        if (rig.gearKnobCapMat) {
+          rig.gearKnobCapMat.emissive.setHex(0xf5b942);
+          rig.gearKnobCapMat.emissiveIntensity = 0.16;
+        }
+      }
+    }
+    if (rig.brakePedalPivot) {
+      rig.brakePedalPivot.rotation.x = isBraking ? -0.22 : 0;
+    }
+    if (rig.gasPedalPivot) {
+      const throttleFrac = state.engineOn && !isBraking ? clamp(state.throttlePos, 0, 1) : 0;
+      rig.gasPedalPivot.rotation.x = -throttleFrac * 0.24;
+    }
+    if (rig.seatbeltStrap) {
+      rig.seatbeltStrap.visible = state.belt;
+    }
+
+    // Оживление органов салона: нажатия в 3D (ШГУ, VOL/TUNE, свет, START/STOP) и медиафаза экрана
+    const dtSec = Math.min(0.1, Math.max(0, dtMs) / 1000);
+    for (const key of Object.keys(this.controlPressAnim) as CockpitControlId[]) {
+      const v = this.controlPressAnim[key] ?? 0;
+      if (v <= 0) delete this.controlPressAnim[key];
+      else this.controlPressAnim[key] = Math.max(0, v - dtSec * 2.6);
+    }
+    const pressOf = (id: CockpitControlId) => this.controlPressAnim[id] ?? 0;
+    const knobL = rig.headUnitKnobL;
+    const knobR = rig.headUnitKnobR;
+    if (knobL) {
+      // Шайба VOL: плавный доворот при каждом клике (импульс) и подсветка наведения
+      const volTurn = this.headUnit.stationIndex * 0.42 + pressOf("vol") * 0.9;
+      knobL.rotation.y = volTurn;
+      knobL.scale.setScalar(1 + (this.cockpitControlHover === "vol" ? 0.16 : 0) + pressOf("vol") * 0.12);
+    }
+    if (knobR) {
+      knobR.rotation.y = (this.cockpitControlHover === "tune" ? 0.22 : 0) + pressOf("tune") * 0.6;
+      knobR.scale.setScalar(1 + (this.cockpitControlHover === "tune" ? 0.16 : 0) + pressOf("tune") * 0.12);
+    }
+    if (rig.headlightSwitchPivot) {
+      rig.headlightSwitchPivot.rotation.z = state.lights ? -0.62 - pressOf("headlight") * 0.2 : pressOf("headlight") * -0.18;
+    }
+    if (rig.headlightSwitchMat) {
+      rig.headlightSwitchMat.color.setHex(state.lights ? 0x22c55e : this.cockpitControlHover === "headlight" ? 0x64748b : 0x334155);
+    }
+    if (rig.headUnitScreen) {
+      const mat = rig.headUnitScreen.material as THREE.MeshBasicMaterial;
+      const hover = this.cockpitControlHover === "headunit" || this.cockpitControlHover === "vol" || this.cockpitControlHover === "tune";
+      mat.color.setHex(this.headUnit.mode === "off" ? 0x51606e : hover ? 0xa9d4e6 : 0xffffff);
+    }
+    if (rig.startBtnMat && pressOf("start") > 0) {
+      rig.startBtnMat.color.setHex(0xfef08a);
+    }
+    if (rig.hazardBtnMat && (pressOf("hazard") > 0 || this.cockpitControlHover === "hazard")) {
+      if (state.signal !== "hazard") rig.hazardBtnMat.color.setHex(0xb91c1c);
+    }
+
+    if (opts.cameraMode === "cockpit") {
+      // Внутри dirty-кеш: 0 мс в покое; в движении обновляем не чаще ~20 Гц (за исключением мгновенных переключений)
+      this.cockpitDisplays.update(state, world, leftLit, rightLit, this.headUnit, isBraking, now / 1000);
+    }
+
+    // Подвижная тень солнца: пересчитывается при старте и реальном смещении/повороте машины (0 лишних GPU-проходов в покое)
+    if (this.renderer.shadowMap.enabled) {
+      const movedSq = (state.x - this.lastShadowX) ** 2 + (state.z - this.lastShadowZ) ** 2;
+      const turned = Math.abs(state.h - this.lastShadowH);
+      if (this.shadowDirty || ((movedSq >= 0.16 || turned >= 0.03) && this.frameCounter % 3 === 0)) {
+        this.sun.position.set(state.x + 26, 44, state.z - 20);
+        this.sun.target.position.set(state.x, 0, state.z);
+        this.lastShadowX = state.x;
+        this.lastShadowZ = state.z;
+        this.lastShadowH = state.h;
+        this.shadowDirty = false;
+        this.renderer.shadowMap.needsUpdate = true;
+      }
+    }
+
+    // 2. Мгновенное отсечение дальних чанков (здания, деревья, заборы, разметка, знаки, дороги) — O(число чанков)
+    const zoomBonus = opts.cameraMode === "top" || opts.cameraMode === "orbit" ? this.orbitDist * 1.4 : 0;
+    const baseDetailR = opts.drawRadius + 30 + zoomBonus;
+    const baseRoadR = opts.drawRadius + 185 + zoomBonus;
+    let visBld = 0;
+    for (let i = 0; i < this.detailChunks.length; i++) {
+      const ch = this.detailChunks[i];
+      const dx = ch.cx - state.x;
+      const dz = ch.cz - state.z;
+      const lim = baseDetailR + ch.radius;
+      const show = dx * dx + dz * dz <= lim * lim;
+      ch.group.visible = show;
+      if (show) visBld += ch.buildingCount;
+    }
+    for (let i = 0; i < this.roadChunks.length; i++) {
+      const ch = this.roadChunks[i];
+      const dx = ch.cx - state.x;
+      const dz = ch.cz - state.z;
+      const lim = baseRoadR + ch.radius;
+      ch.group.visible = dx * dx + dz * dz <= lim * lim;
+    }
+    this.visibleBuildings = visBld;
 
     // 3. Подсветка линий свободных боксов
     for (const bv of this.bayVisuals) {
@@ -1325,27 +1213,55 @@ export class SceneController {
       }
     }
 
-    // 4. Светофоры, пешеходы и контрольные точки
+    // 4. Светофоры и пешеходы (с радиусным отсечением для крупных OSM-карт) и контрольные точки
+    const sigLimitSq = (baseDetailR + 24) * (baseDetailR + 24);
     for (const sv of this.signalVisuals) {
+      const sdx = sv.def.x - state.x;
+      const sdz = sv.def.z - state.z;
+      const visSig = sdx * sdx + sdz * sdz <= sigLimitSq;
+      sv.lensGroup.visible = visSig;
+      if (!visSig) continue;
       const { phase } = getTrafficLightPhase(sv.def, state.time);
       const redOn = phase === "red" || phase === "red_yellow";
       const yelOn = phase === "yellow" || phase === "red_yellow";
       const grnOn = phase === "green" || (phase === "green_blink" && blinkOn);
-      sv.redMat.color.setHex(redOn ? 0xff3b3b : 0x3b0d0d);
-      sv.yellowMat.color.setHex(yelOn ? 0xffcc29 : 0x3b2f08);
-      sv.greenMat.color.setHex(grnOn ? 0x22e584 : 0x09381f);
+      sv.redMat.color.setHex(redOn ? 0xff3b3b : 0x380c0c);
+      sv.yellowMat.color.setHex(yelOn ? 0xffcc29 : 0x382b08);
+      sv.greenMat.color.setHex(grnOn ? 0x22e584 : 0x08351d);
+      sv.redHaloMat.opacity = redOn ? 0.65 : 0;
+      sv.yellowHaloMat.opacity = yelOn ? 0.58 : 0;
+      sv.greenHaloMat.opacity = grnOn ? 0.62 : 0;
+      const pedGo = phase === "red";
+      sv.pedRedMat.color.setHex(pedGo ? 0x380c0c : 0xff3b3b);
+      sv.pedGreenMat.color.setHex(pedGo ? 0x22e584 : 0x08351d);
     }
 
+    const pedLimitSq = (opts.drawRadius + 24) * (opts.drawRadius + 24);
     for (let i = 0; i < this.pedVisuals.length; i++) {
       const pv = this.pedVisuals[i];
       const cw = world.crosswalks[i];
       if (!cw) continue;
+      const cdx = cw.cx - state.x;
+      const cdz = cw.cz - state.z;
+      const visPed = cdx * cdx + cdz * cdz <= pedLimitSq;
+      pv.group.visible = visPed;
+      if (!visPed) continue;
       const pose = getPedestrianPose(cw, state.time);
       pv.group.position.set(pose.x, 0, pose.z);
       pv.group.rotation.y = pose.h;
-      const swing = Math.sin(pose.walkPhase) * 0.42;
+      const swing = Math.sin(pose.walkPhase) * 0.44;
       pv.legL.rotation.x = swing;
       pv.legR.rotation.x = -swing;
+      pv.armL.rotation.x = -swing * 0.72;
+      pv.armR.rotation.x = swing * 0.72;
+    }
+
+    const carLimitSq = (baseDetailR + 12) * (baseDetailR + 12);
+    for (let i = 0; i < this.parkedCarRoots.length; i++) {
+      const carObj = this.parkedCarRoots[i];
+      const pdx = carObj.position.x - state.x;
+      const pdz = carObj.position.z - state.z;
+      carObj.visible = pdx * pdx + pdz * pdz <= carLimitSq;
     }
 
     const activeCp = world.checkpoints[state.currentCheckpointIndex];
@@ -1380,33 +1296,122 @@ export class SceneController {
       setPts(this.trajLineR, rightTrack, col);
     }
 
-    // 6. Камера
+    // 6. Камера (обновляем матрицу кузова заранее, чтобы салон и физические зеркала не дрожали относительно головы)
+    const prevCameraMode = this.lastCameraMode;
+    this.lastCameraMode = opts.cameraMode;
+    if (prevCameraMode === "cockpit" && opts.cameraMode !== "cockpit" && this.savedHeadBeforeShifter) {
+      this.orbitYaw = this.savedHeadBeforeShifter.yaw;
+      this.orbitPitch = this.savedHeadBeforeShifter.pitch;
+      this.cockpitFov = this.savedHeadBeforeShifter.fov;
+      this.savedHeadBeforeShifter = null;
+    }
+    this.playerRig.chassis.updateWorldMatrix(true, false);
     this.updateCamera(state, opts.cameraMode);
 
-    // 7. Зеркала (без пересчёта карты теней, боковые раз в 3 кадра)
+    // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели.
+    // При shadowMap.autoUpdate=false Three.js сам сбрасывает needsUpdate после ровно одного прохода теней на кадр
+    // (включая самый первый кадр после loadWorld, так что зеркала сразу получают актуальные тени).
     this.frameCounter++;
-    if (mirrors && (opts.showMirrors || opts.showRearMirror)) {
-      const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
-      this.renderer.shadowMap.autoUpdate = false;
-      try {
-        this.playerRig.chassis.updateWorldMatrix(true, false);
-        if (opts.showRearMirror && mirrors.rear && this.frameCounter % 2 === 0) {
-          this.renderInto(this.rearRT, this.rearCam, this.rearBuf, 0, 1.24, 0.25, 0, -0.08, 38, mirrors.rear);
+    const inCockpit = opts.cameraMode === "cockpit";
+    const inReverseCam = inCockpit && state.engineOn && state.gear === "R";
+    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors, inReverseCam);
+
+    const needCockpitRear = inCockpit && (opts.showRearMirror || inReverseCam);
+    if (inCockpit && (needCockpitRear || opts.showMirrors)) {
+      const stride = this.qualityPreset === "low" ? 4 : this.isLargeWorld ? 3 : 2;
+      if (needCockpitRear && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
+        this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
+        this.cockpitRearPrimed = true;
+      }
+      // Боковые зеркала настроены по методике автошколы: внутренняя кромка показывает борт своего авто, остальное — полосу и бордюр
+      const mountX = CAR.width / 2 + 0.13;
+      if (opts.showMirrors) {
+        const prime = !this.cockpitSidePrimed;
+        if (prime || this.frameCounter % stride === 0) {
+          this.renderMirrorTarget(this.cockpitLeftRT, this.sideCam, mountX, 0.945, 0.65, -0.37, -0.105, 44);
         }
-        // Камеры направлены назад и наружу: +X слева, −X справа. Не «смотрят» сквозь дверь.
-        const mountX = CAR.width / 2 + 0.14;
-        if (opts.showMirrors && mirrors.left && this.frameCounter % 3 === 0) {
-          this.renderInto(this.sideRT, this.sideCam, this.sideBuf, mountX, 0.92, 0.49, -0.53, -0.10, 44, mirrors.left);
+        if (prime || this.frameCounter % stride === 1) {
+          this.renderMirrorTarget(this.cockpitRightRT, this.sideCam, -mountX, 0.945, 0.65, 0.37, -0.105, 44);
         }
-        if (opts.showMirrors && mirrors.right && this.frameCounter % 3 === 1) {
-          this.renderInto(this.sideRT, this.sideCam, this.sideBuf, -mountX, 0.92, 0.49, 0.53, -0.10, 44, mirrors.right);
-        }
-      } finally {
-        this.renderer.shadowMap.autoUpdate = prevShadowAuto;
+        this.cockpitSidePrimed = true;
+      }
+    } else if (!inCockpit && mirrors && (opts.showMirrors || opts.showRearMirror)) {
+      const rearStride = this.isLargeWorld ? 3 : 2;
+      const sideStride = this.isLargeWorld ? 4 : 3;
+      if (opts.showRearMirror && mirrors.rear && this.frameCounter % rearStride === 0) {
+        this.renderInto(this.rearRT, this.rearCam, this.rearBuf, 0, 1.24, 0.25, 0, -0.08, 38, mirrors.rear);
+      }
+      const mountX = CAR.width / 2 + 0.14;
+      if (opts.showMirrors && mirrors.left && this.frameCounter % sideStride === 0) {
+        this.renderInto(this.sideRT, this.sideCam, this.sideBuf, mountX, 0.92, 0.49, -0.53, -0.10, 44, mirrors.left);
+      }
+      if (opts.showMirrors && mirrors.right && this.frameCounter % sideStride === 1) {
+        this.renderInto(this.sideRT, this.sideCam, this.sideBuf, -mountX, 0.92, 0.49, 0.53, -0.10, 44, mirrors.right);
       }
     }
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Переключает материал физических 3D-полотeн зеркал и камеры заднего вида R на 7" ШГУ. */
+  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean, activeRevCam = false): void {
+    const rig = this.playerRig;
+    if (rig.rearMirrorGlass) {
+      const target = activeRear ? this.cockpitRearMat : this.mirrorIdleMat;
+      if (rig.rearMirrorGlass.material !== target) rig.rearMirrorGlass.material = target;
+    }
+    if (rig.leftMirrorGlass) {
+      const target = activeSide ? this.cockpitLeftMat : this.mirrorIdleMat;
+      if (rig.leftMirrorGlass.material !== target) rig.leftMirrorGlass.material = target;
+    }
+    if (rig.rightMirrorGlass) {
+      const target = activeSide ? this.cockpitRightMat : this.mirrorIdleMat;
+      if (rig.rightMirrorGlass.material !== target) rig.rightMirrorGlass.material = target;
+    }
+    if (rig.rearCamScreen && rig.rearCamOverlay && rig.headUnitScreen) {
+      const target = activeRevCam ? this.cockpitRearMat : this.mirrorIdleMat;
+      if (rig.rearCamScreen.material !== target) rig.rearCamScreen.material = target;
+      rig.rearCamScreen.visible = activeRevCam;
+      rig.rearCamOverlay.visible = activeRevCam;
+      rig.headUnitScreen.visible = !activeRevCam;
+    }
+    if (!activeRear && !activeRevCam) this.cockpitRearPrimed = false;
+    if (!activeSide) this.cockpitSidePrimed = false;
+  }
+
+  /** Прямой GPU-рендер отражения в текстуру физического 3D-зеркала салона (без CPU readback). */
+  private renderMirrorTarget(
+    rt: THREE.WebGLRenderTarget,
+    cam: THREE.PerspectiveCamera,
+    localX: number,
+    localY: number,
+    localZ: number,
+    yawOffset: number,
+    pitchDown: number,
+    fov: number
+  ): void {
+    const aspect = rt.width / rt.height;
+    if (cam.fov !== fov || Math.abs(cam.aspect - aspect) > 1e-5) {
+      cam.fov = fov;
+      cam.aspect = aspect;
+      cam.updateProjectionMatrix();
+    }
+    const pose = this.playerRig.chassis.matrixWorld;
+    const yaw = Math.PI + yawOffset;
+    cam.position.set(localX, localY, localZ).applyMatrix4(pose);
+    cam.up.set(0, 1, 0).transformDirection(pose);
+    cam.lookAt(
+      this.mirrorLookTarget
+        .set(localX + Math.sin(yaw), localY + pitchDown, localZ + Math.cos(yaw))
+        .applyMatrix4(pose)
+    );
+    const previous = this.renderer.getRenderTarget();
+    try {
+      this.renderer.setRenderTarget(rt);
+      this.renderer.render(this.scene, cam);
+    } finally {
+      this.renderer.setRenderTarget(previous);
+    }
   }
 
   private renderInto(
@@ -1472,28 +1477,41 @@ export class SceneController {
   private updateCamera(s: SimState, mode: CameraMode): void {
     const fx = Math.sin(s.h);
     const fz = Math.cos(s.h);
-    const lx = Math.cos(s.h);
-    const lz = -Math.sin(s.h);
 
     if (mode === "cockpit") {
-      // Водительское место слева (+X)
-      const eyeX = s.x + lx * (CAR.width * 0.23) - fx * 0.02;
-      const eyeY = 1.19;
-      const eyeZ = s.z + lz * (CAR.width * 0.23) - fz * 0.02;
-      const lookYaw = s.h + this.orbitYaw * 0.65;
-      this.camera.fov = 64;
-      this.camera.updateProjectionMatrix();
-      this.camera.position.set(eyeX, eyeY, eyeZ);
-      this.camera.lookAt(
-        eyeX + Math.sin(lookYaw) * 18,
-        eyeY - 0.12 - (this.orbitPitch - 0.36) * 6,
-        eyeZ + Math.cos(lookYaw) * 18
-      );
+      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами)
+      const pose = this.playerRig.chassis.matrixWorld;
+      const localEyeX = CAR.width * 0.225;
+      const localEyeY = 1.195;
+      const localEyeZ = -0.06;
+      const headYaw = clamp(this.orbitYaw * 0.72, -1.55, 1.55);
+      // При базовом orbitPitch = 0.36 наклон равен -0.02 рад (вперёд на дорогу), а ПКМ вниз или G открывает обзор рычага АКПП
+      const pitchDelta = this.orbitPitch - 0.36;
+      const headPitch = clamp(-0.02 - pitchDelta * (pitchDelta > 0 ? 0.66 : 0.45), -0.74, 0.34);
+      const cosP = Math.cos(headPitch);
+      if (this.camera.fov !== this.cockpitFov) {
+        this.camera.fov = this.cockpitFov;
+        this.camera.updateProjectionMatrix();
+      }
+      this.cockpitEyeWorld.set(localEyeX, localEyeY, localEyeZ).applyMatrix4(pose);
+      this.cockpitLookWorld
+        .set(
+          localEyeX + Math.sin(headYaw) * cosP * 18,
+          localEyeY + Math.sin(headPitch) * 18,
+          localEyeZ + Math.cos(headYaw) * cosP * 18
+        )
+        .applyMatrix4(pose);
+      this.camera.position.copy(this.cockpitEyeWorld);
+      this.camera.up.set(0, 1, 0).transformDirection(pose);
+      this.camera.lookAt(this.cockpitLookWorld);
       return;
     }
 
-    this.camera.fov = 55;
-    this.camera.updateProjectionMatrix();
+    this.camera.up.set(0, 1, 0);
+    if (this.camera.fov !== 55) {
+      this.camera.fov = 55;
+      this.camera.updateProjectionMatrix();
+    }
 
     if (mode === "top") {
       // Вид инструктора сверху (вперёд машины — вверх экрана)
@@ -1525,7 +1543,7 @@ export class SceneController {
         fps: 60,
         p95FrameMs: 16.6,
         visibleBuildings: this.visibleBuildings,
-        totalBuildings: this.buildingMeshes.length,
+        totalBuildings: this.totalBuildings,
       };
     }
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -1535,39 +1553,68 @@ export class SceneController {
       fps: Math.round(1000 / Math.max(1, avg)),
       p95FrameMs: Number(p95.toFixed(1)),
       visibleBuildings: this.visibleBuildings,
-      totalBuildings: this.buildingMeshes.length,
+      totalBuildings: this.totalBuildings,
     };
   }
 
+  private clearWorldResources(): void {
+    this.disposeGroup(this.worldGroup);
+    this.worldPoolGeometries.forEach((g) => g.dispose());
+    this.worldPoolMaterials.forEach((m) => m.dispose());
+    this.worldPoolTextures.forEach((t) => {
+      if (!this.sharedTextures.includes(t)) t.dispose();
+    });
+    this.worldPoolGeometries.length = 0;
+    this.worldPoolMaterials.length = 0;
+    this.worldPoolTextures.length = 0;
+  }
+
   private disposeGroup(group: THREE.Group): void {
+    const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     const textures = new Set<THREE.Texture>();
     group.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.geometry) geometries.add(mesh.geometry);
       if (mesh.material) {
         const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const m of list) {
           materials.add(m);
           const std = m as THREE.MeshStandardMaterial;
-          if (std.map && !this.sharedTextures.includes(std.map)) textures.add(std.map);
+          for (const tex of [std.map, std.bumpMap, std.roughnessMap, std.emissiveMap, std.alphaMap]) {
+            if (tex && !this.sharedTextures.includes(tex)) textures.add(tex);
+          }
         }
       }
     });
+    geometries.forEach((g) => g.dispose());
     materials.forEach((m) => m.dispose());
     textures.forEach((t) => t.dispose());
     group.clear();
   }
 
   dispose(): void {
-    this.disposeGroup(this.worldGroup);
+    this.syncPhysicalMirrorMaterials(false, false, false);
+    this.scene.environment = null;
+    this.groundMesh.geometry.dispose();
+    (this.groundMesh.material as THREE.Material).dispose();
+    this.clearWorldResources();
     this.disposeGroup(this.playerRig.root);
+    this.cockpitDisplays.dispose();
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();
     (this.trajLineR.material as THREE.Material).dispose();
+    this.cockpitRearMat.dispose();
+    this.cockpitLeftMat.dispose();
+    this.cockpitRightMat.dispose();
+    this.mirrorIdleMat.dispose();
+    this.envMapRT?.dispose();
     this.rearRT.dispose();
     this.sideRT.dispose();
+    this.cockpitRearRT.dispose();
+    this.cockpitLeftRT.dispose();
+    this.cockpitRightRT.dispose();
     this.sharedTextures.forEach((t) => t.dispose());
     this.renderer.dispose();
   }

@@ -30,8 +30,8 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 29 автотестов ядра (T01–T29), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–O, >105 проверок (Playwright + headless Chromium, автозапуск в CI) |
+| Тесты ядра | 36 автотестов ядра (T01–T36), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
@@ -91,21 +91,25 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | Путь | Роль |
 |---|---|
 | `src/sim/types.ts` | контракты: InputState, SimState, WorldData, SimEvent, CalibrationConfig |
-| `src/sim/vehicle.ts` | Kia Ceed: база 2,65 м, колея 1,57 м, Аккерман, выворот 33–42°, АКПП, фазы светофора, пешеход |
-| `src/sim/controls.ts` | чистые блокировки АКПП (`checkGearChange`) и стартера (`checkEngineToggle`) |
+| `src/sim/vehicle.ts` | Kia Ceed JD 1.6 MPI: база 2,65 м, Аккерман, выворот 33–42°, 6-ст. Shiftronic (0–100 ≈ 10,8 с, Vmax = 180 км/ч), плавные обороты, светофор, пешеход |
+| `src/sim/controls.ts` | чистые блокировки КПП (`checkGearChange`), секвентальный `Shift` (`stepGearSequential`) и стартер (`checkEngineToggle`) |
 | `src/sim/spatialGrid.ts` | сетка 10 м, OBB через SAT, insideBay, findBayLineCross, правый борт |
 | `src/sim/step.ts` | единственный шаг физики и детекторов; чистая функция, dt = 1/60 |
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 29 автотестов ядра (T01–T29) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 35 автотестов ядра (T01–T35) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
-| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер `.osm` XML, Overpass JSON и GeoJSON (дороги, здания, знаки, заборы, деревья), ODbL |
-| `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |
+| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts`, `src/maps/osmDeconflict.ts` | двухпроходный бесконфликтный офлайн-импорт `.osm` XML (`<bounds>`, `<relation>`), Overpass JSON и GeoJSON (WGS84, мультиполигоны/дворы, проемы в заборах, `oneway`, `layer`, ODbL) |
+| `src/maps/boundary.ts` | произвольные многоугольные границы карты: коридор маршрута, выпуклая оболочка, обрезка ломаных и удержание авто |
+| `src/maps/route.ts`, `src/maps/routeCheck.ts` | сшивка улиц OSM, маршрут и реверс, поиск пути Дейкстрой по графу дорог и диагностика маршрута |
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
-| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
-| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |
-| `src/render/sceneController.ts`, `src/render/roadSignTextures.ts` | весь Three.js: сцена, машина, процедурные текстуры 12 знаков, зеркала, dispose (`[SEC:...]`) |
+| `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
+| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |
+| `src/render/sceneController.ts`, `src/render/staticBatcher.ts`, `src/render/cockpitDisplays.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts`, `src/render/cityBuildings.ts`, `src/render/vehiclesAndPeds.ts` | весь Three.js: чанковый батчинг статики, живые 3D-приборы Supervision и ШГУ/R-камера, 360°-небо + PBR IBL, ГОСТ-дороги/тротуары/разметка/светофоры/знаки, здания и деревья РФ/СНГ, Kia Ceed JD, 3D-зеркала, dispose (`[SEC:...]`) |
+| `src/audio/radioCatalog.ts` | каталог реальных интернет-радиостанций (MP3/AAC-потоки), громкость, ключи кэша и детерминированный офлайн-рендер трека в WAV |
+| `src/audio/trackStore.ts` | кэш сохранённых треков в IndexedDB `cdt-audio` с деградацией в память |
+| `src/audio/engineSound.ts` | процедурный звук ДВС 1.6 MPI и шин на Web Audio (без внешних файлов) |
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |
@@ -113,7 +117,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–O |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–P |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
@@ -123,7 +127,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 1. **Координаты**: +Z вперёд, +X — левый борт, −X — правый, положительный heading — поворот влево.
 2. **Поворотники**: Q — левый, E — правый, Z — аварийка; цикл 700 мс от model time. При начале движения на маршруте аварийка не заменяет Q/E.
 3. **Педали**: W — газ, S — тормоз. В D тормоз гасит скорость до 0 и никогда не даёт реверс.
-4. **КПП**: P / R / N / D (F). P блокирует движение и включается только на остановке; выход из P — при запущенном ДВС; запуск ДВС — только из P или N (`src/sim/controls.ts`).
+4. **КПП**: P / R / N / D1–D6 (F) + секвентальный Shiftronic M1–M6 (`Shift` ▲ / `Right Shift`·`X` ▼, защита от перекрута и заглохания). P блокирует движение и включается только на остановке; выход из P — при запущенном ДВС; запуск ДВС — только из P или N (`src/sim/controls.ts`).
 5. **Холодный старт**: ДВС заглушен, КПП в P, ручник затянут, ремень снят — при открытии и после «Сброс».
 6. **Фиксированный шаг** 1/60 с с аккумулятором; рендер интерполирует, физика — нет.
 7. **Чистое ядро**: в sim/scoring/maps/scenarios/analytics/storage/strategy запрещены three, window, document.
@@ -149,6 +153,7 @@ localStorage:
 
 ```text
 cdt.layout.v1           позиции и размеры плавающих панелей HUD
+cdt.panelState.v1       свёрнутые (−) и закрытые (×) панели HUD
 cdt.controls.v1         скорость руления с клавиатуры
 cdt.calibration.v1      размеры боксов, выворот колёс, табличка «У»
 cdt.ruleset.v1          активный набор правил

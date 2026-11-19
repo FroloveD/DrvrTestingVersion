@@ -156,10 +156,14 @@ input[type="checkbox"] { accent-color: var(--mint); }
 .wheel-limit-shortcut:hover { color: #fff; }
 
 /* Полоса захвата не перекрывает рабочую поверхность педали. */
-.pedal-grab { display: grid; place-items: center; width: 100%; height: 24px; color: #91a4b2; background: linear-gradient(#23313c, #17222b); border-bottom: 1px solid #41515e; touch-action: none; cursor: grab; }
+.pedal-bar { display: flex; align-items: stretch; width: 100%; height: 24px; background: linear-gradient(#23313c, #17222b); border-bottom: 1px solid #41515e; }
+.pedal-grab { display: grid; place-items: center; flex: 1 1 auto; min-width: 0; height: 100%; color: #91a4b2; background: transparent; touch-action: none; cursor: grab; }
 .pedal-grab:hover, .pedal-grab:active { color: #f5b942; background: #29323a; }
 .pedal-grab:active { cursor: grabbing; }
-.pedal-grab:focus-visible, .pedal-face:focus-visible, .wheel-lock-control input:focus-visible, .wheel-limit-shortcut:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.pedal-win-btn { display: grid; place-items: center; width: 15px; flex: 0 0 15px; height: 100%; color: #7f94a3; font: 700 11px/1 ui-monospace, monospace; background: transparent; cursor: pointer; transition: color .12s, background-color .12s; }
+.pedal-win-btn:hover { color: #f5b942; background: #29323a; }
+.pedal-win-btn-close:hover { color: #ff8080; background: #341d22; }
+.pedal-grab:focus-visible, .pedal-win-btn:focus-visible, .pedal-face:focus-visible, .wheel-lock-control input:focus-visible, .wheel-limit-shortcut:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
 .pedal-face { --pedal-color: #71ddc3; --pedal-bg: #123029; display: flex; width: 100%; height: 58px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--pedal-color); background: linear-gradient(160deg, var(--pedal-bg), #0b141a 85%); cursor: pointer; touch-action: none; user-select: none; -webkit-touch-callout: none; }
 .pedal-brake { --pedal-color: #ff9a94; --pedal-bg: #322125; }
 .pedal-tread { width: 30px; height: 12px; border-radius: 2px; opacity: .65; background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 7px); }

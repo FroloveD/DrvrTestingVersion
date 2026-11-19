@@ -5,6 +5,7 @@
  * @invariants #1–#7, #10–#11, #15 (детерминизм, холодный старт P, S не даёт реверс в D, аварийка не заменяет Q/E на старте).
  * @tests T01, T03, T04, T08, T10, T15, T22, T24, T25
  */
+import { clampCarToWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import type { RuleSet } from "../scoring/rules";
 import { findBayLineCross, findBayUnderCarCenter, findCompletedBay, SpatialGrid } from "./spatialGrid";
 import type {
@@ -18,13 +19,26 @@ import type {
 import {
   ackermannAngle,
   AUTO_DOWN,
+  AUTO_DOWN_KICK,
+  AUTO_SHIFT_DURATION_S,
   AUTO_UP,
+  AUTO_UP_SPORT,
   CAR,
   clamp,
   computeEngineAccel,
+  computeIdleCreepAccel,
+  computeRoadDragDecel,
+  computeServiceBrakeDecel,
+  ENGINE_IDLE_RPM,
   FIXED_DT,
   getPedestrianPose,
   getTrafficLightPhase,
+  isManualGear,
+  MANUAL_SHIFT_DURATION_S,
+  MAX_FORWARD_GEAR,
+  MAX_REVERSE_KMH,
+  MAX_SPEED_MS,
+  stepEngineRpm,
   wheelDegToSteerRad,
   normalizeWheelLock,
 } from "./vehicle";
@@ -93,7 +107,10 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     gear: readyStart ? defaultGear : "P",
     prevGear: readyStart ? defaultGear : "P",
     autoSubGear: 1,
-    rpm: readyStart ? 800 : 0,
+    rpm: readyStart ? ENGINE_IDLE_RPM : 0,
+    throttlePos: 0,
+    brakePos: 0,
+    shiftTimer: 0,
     engineOn: readyStart,
     handbrake: !readyStart,
     belt: readyStart,
@@ -124,7 +141,7 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     distanceTraveled: 0,
     statusText: readyStart
       ? world.examinerBrief
-      : "Двигатель заглушен, КПП — P (Parking). Нажмите I, пристегните ремень (B), выберите R или F (D), снимите ручник (Space).",
+      : "Двигатель заглушен, КПП — P (Parking). Нажмите I, пристегните ремень (B), удерживая тормоз (S) выберите R или F (D), снимите ручник (Space).",
   };
 }
 
@@ -217,7 +234,10 @@ export function stepSimulation(
   // Если экзамен прекращён мгновенно в строгом режиме — машина остановлена
   if (s.finished && s.finishedReason === "immediate_fail") {
     s.v = 0;
-    s.rpm = s.engineOn ? 800 : 0;
+    s.throttlePos = 0;
+    s.brakePos = 0;
+    s.shiftTimer = 0;
+    s.rpm = s.engineOn ? ENGINE_IDLE_RPM : 0;
     s.statusText = "Экзамен прекращён: допущена критическая ошибка (5 баллов). Откройте «Разбор и Реплей».";
     return {
       state: s,
@@ -244,32 +264,107 @@ export function stepSimulation(
     s.reverseCount = 1;
   }
 
-  // АКПП: переключение подпередач 1..5 с гистерезисом
-  if (s.gear === "D") {
-    const kmh = Math.abs(s.v) * 3.6;
-    if (s.autoSubGear < 5 && kmh > AUTO_UP[s.autoSubGear]) s.autoSubGear += 1;
-    else if (s.autoSubGear > 1 && kmh < AUTO_DOWN[s.autoSubGear]) s.autoSubGear -= 1;
+  // Плавный гидропривод тормозов (ВУТ + АБС), электронная заслонка Kefico ETC (с Brake Override) и пауза КПП
+  const brake = clamp(input.brake, 0, 1);
+  const prevBrakePos = s.brakePos ?? 0;
+  const brRate = brake > prevBrakePos ? 9.5 : 15.0;
+  s.brakePos = clamp(
+    prevBrakePos + (brake - prevBrakePos) * Math.min(1, dt * brRate),
+    0,
+    1
+  );
+  if (s.brakePos < 0.001 && brake === 0) s.brakePos = 0;
+
+  // Brake Override System: нажатая педаль тормоза перекрывает подачу газа (как в реальном ЭБУ Kia Ceed JD)
+  const throttleCmd = s.engineOn && brake <= 0.12 ? clamp(input.throttle, 0, 1) : 0;
+  const thRate = throttleCmd > s.throttlePos ? 10.5 : 8.5;
+  s.throttlePos = clamp(
+    s.throttlePos + (throttleCmd - s.throttlePos) * Math.min(1, dt * thRate),
+    0,
+    1
+  );
+  if (s.throttlePos < 0.001 && throttleCmd === 0) s.throttlePos = 0;
+
+  if (s.shiftTimer > 0) {
+    s.shiftTimer = Math.max(0, s.shiftTimer - dt);
+  }
+
+  // Ручное переключение (Shift: M1..M6) и адаптивный 6-ступенчатый автомат (D1..D6)
+  if (isManualGear(s.gear)) {
+    const manualNum = Number(s.gear);
+    if (isManualGear(s.prevGear) && s.prevGear !== s.gear) {
+      s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    } else if (s.prevGear === "D" && s.autoSubGear !== manualNum) {
+      s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    }
+    s.autoSubGear = manualNum;
+  } else if (s.gear === "D") {
+    const fwdKmh = Math.max(0, s.v * 3.6);
+    const sport = clamp((s.throttlePos - 0.35) / 0.55, 0, 1);
+    const upKmh = AUTO_UP[s.autoSubGear] + (AUTO_UP_SPORT[s.autoSubGear] - AUTO_UP[s.autoSubGear]) * sport;
+    const downKmh =
+      AUTO_DOWN[s.autoSubGear] + (AUTO_DOWN_KICK[s.autoSubGear] - AUTO_DOWN[s.autoSubGear]) * (sport * sport);
+    if (s.shiftTimer <= 0 && s.autoSubGear < MAX_FORWARD_GEAR && fwdKmh >= upKmh) {
+      s.autoSubGear += 1;
+      s.shiftTimer = AUTO_SHIFT_DURATION_S;
+    } else if (s.shiftTimer <= 0 && s.autoSubGear > 1 && fwdKmh < downKmh) {
+      s.autoSubGear -= 1;
+      s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    }
+  } else {
+    s.autoSubGear = 1;
+    s.shiftTimer = 0;
   }
 
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
-  const throttle = clamp(input.throttle, 0, 1);
-  const brake = clamp(input.brake, 0, 1);
-  let accel = computeEngineAccel(throttle, s.gear, s.autoSubGear, s.v, s.engineOn, s.handbrake);
+  const isForwardGear = s.gear === "D" || isManualGear(s.gear);
+  const activeForwardGear = isForwardGear ? s.autoSubGear : 0;
+  const creepAccel = computeIdleCreepAccel(
+    s.gear,
+    s.autoSubGear,
+    s.v,
+    s.throttlePos,
+    s.brakePos,
+    s.engineOn,
+    s.handbrake
+  );
+  let accel =
+    computeEngineAccel(
+      s.throttlePos,
+      s.gear,
+      s.autoSubGear,
+      s.v,
+      s.engineOn,
+      s.handbrake,
+      s.shiftTimer
+    ) + creepAccel;
 
+  const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear, s.engineOn);
   if (s.v !== 0) {
-    const drag = CAR.rollRes + 0.0018 * s.v * s.v + 0.015 * Math.abs(s.v);
     accel -= Math.sign(s.v) * drag;
+  } else if (accel !== 0) {
+    // Преодоление покоя: исключает микроколебания у 0 м/с при отпускании газа
+    if (Math.abs(accel) <= drag) accel = 0;
+    else accel -= Math.sign(accel) * drag;
   }
 
   const vBefore = s.v;
   s.v += accel * dt;
-  if (throttle <= 0.01 && vBefore !== 0 && Math.sign(s.v) !== Math.sign(vBefore)) {
-    s.v = 0;
+  // Сопротивление дороги никогда не разворачивает знак скорости против выбранной передачи
+  if (vBefore !== 0 && Math.sign(s.v) !== Math.sign(vBefore)) {
+    const wantsForward =
+      isForwardGear && (throttleCmd > 0.01 || creepAccel > 0.01) && s.engineOn && !s.handbrake && s.brakePos < 0.12;
+    const wantsReverse = s.gear === "R" && throttleCmd > 0.01 && s.engineOn && !s.handbrake && s.brakePos < 0.12;
+    if (!((wantsForward && s.v > 0) || (wantsReverse && s.v < 0))) {
+      s.v = 0;
+    }
   }
+  // Жёсткий потолок скорости: ровно 180 км/ч (50.0 м/с) вперёд и 14 км/ч назад
+  s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, MAX_SPEED_MS);
 
-  // Рабочий тормоз S
-  if (brake > 0) {
-    const dv = CAR.brakeDecel * brake * dt;
+  // Рабочий дисковый тормоз S (прогрессивный гидропривод + плавный довод к 0 км/ч без отката назад)
+  if (s.brakePos > 0) {
+    const dv = computeServiceBrakeDecel(s.brakePos, Math.abs(s.v)) * dt;
     if (Math.abs(s.v) <= dv) s.v = 0;
     else s.v -= Math.sign(s.v) * dv;
   }
@@ -281,15 +376,19 @@ export function stepSimulation(
     else s.v -= Math.sign(s.v) * dv;
   }
 
-  // Обороты двигателя (800..6500, как в v8)
-  if (!s.engineOn) {
-    s.rpm = Math.max(0, s.rpm - 3500 * dt);
-  } else {
-    const speedRpm = Math.abs(s.v) * 3.6 * (s.gear === "R" ? 165 : 95 / Math.max(1, s.autoSubGear * 0.55));
-    const targetRpm = clamp(800 + throttle * 3600 + speedRpm, 800, 6500);
-    const rate = targetRpm > s.rpm ? 2.6 : 3.8;
-    s.rpm += (targetRpm - s.rpm) * Math.min(1, dt * rate);
-  }
+  // Плавные обороты ДВС (760..6450 об/мин, инерция маховика, ступени 1..6, самоход D1 и перегазовка в P/N)
+  s.rpm = stepEngineRpm(
+    s.rpm,
+    s.throttlePos,
+    s.gear,
+    s.autoSubGear,
+    s.v,
+    s.engineOn,
+    s.shiftTimer,
+    dt,
+    s.brakePos,
+    s.handbrake
+  );
 
   // Перемещение с дроблением шага (защита от проскакивания тонких бордюров)
   const subSteps = Math.min(12, Math.max(1, Math.ceil((Math.abs(s.v) * dt) / 0.12)));
@@ -306,9 +405,26 @@ export function stepSimulation(
     const ph = s.h;
     const ds = s.v * subDt;
 
-    s.x = clamp(s.x + Math.sin(s.h) * ds, world.bounds.minX, world.bounds.maxX);
-    s.z = clamp(s.z + Math.cos(s.h) * ds, world.bounds.minZ, world.bounds.maxZ);
-    s.h += (ds / CAR.wheelbase) * Math.tan(s.steer);
+    const nextX = clamp(s.x + Math.sin(s.h) * ds, world.bounds.minX, world.bounds.maxX);
+    const nextZ = clamp(s.z + Math.cos(s.h) * ds, world.bounds.minZ, world.bounds.maxZ);
+    const nextH = s.h + (ds / CAR.wheelbase) * Math.tan(s.steer);
+    if (isValidBoundaryPolygon(world.boundaryPolygon)) {
+      const polyPos = clampCarToWorldBoundary(
+        nextX,
+        nextZ,
+        nextH,
+        CAR.width * 0.5,
+        CAR.length * 0.5,
+        world.bounds,
+        world.boundaryPolygon
+      );
+      s.x = polyPos.x;
+      s.z = polyPos.z;
+    } else {
+      s.x = nextX;
+      s.z = nextZ;
+    }
+    s.h = nextH;
 
     const { hit, checked } = grid.queryCarHit(s.x, s.z, s.h);
     gridChecks = Math.max(gridChecks, checked);
@@ -339,13 +455,14 @@ export function stepSimulation(
   s.wheelSpin += (s.v * dt) / CAR.wheelRadius;
   const aLong = dt > 0 ? clamp((s.v - s.prevV) / dt, -6, 6) : 0;
   s.prevV = s.v;
-  if (aLong < -5.4 && brake > 0.9 && Math.abs(s.v) > 3.5 && s.speedingCooldown <= 0) {
+  if (aLong < -7.2 && s.brakePos > 0.85 && Math.abs(s.v) > 4.2 && s.speedingCooldown <= 0) {
     s.speedingCooldown = 4;
     emit("harsh_brake", `Резкое замедление (${Math.abs(aLong).toFixed(1)} м/с²)`);
   }
-  const pitchTarget = clamp(-aLong * 0.006, -0.032, 0.032);
+  // Реалистичный клевок кузова на стойках McPherson при торможении и мягкий возврат на остановке
+  const pitchTarget = clamp(-aLong * 0.0068, -0.038, 0.034);
   const rollTarget = clamp(-s.v * s.steer * 0.022, -0.042, 0.042);
-  const smooth = Math.min(1, dt * 6.5);
+  const smooth = Math.min(1, dt * 7.2);
   s.pitch += (pitchTarget - s.pitch) * smooth;
   s.roll += (rollTarget - s.roll) * smooth;
 
@@ -446,10 +563,12 @@ export function stepSimulation(
     }
   }
 
-  // Контрольные точки городского маршрута (для requireStop засчитывается после полной остановки в зоне КТ)
+  // Контрольные точки городского маршрута (для requireStop засчитывается после полной остановки в зоне КТ;
+  // если у финишной КТ выставлен isFinalPark, но на карте нет свободных боксов — завершаем маршрут на КТ)
+  const hasFreeBay = world.bays.some((b) => !b.occupied);
   const currentCp = world.checkpoints[s.currentCheckpointIndex];
   let waitingStopAtCp = false;
-  if (currentCp && !currentCp.isFinalPark) {
+  if (currentCp && (!currentCp.isFinalPark || !hasFreeBay)) {
     const dCp = Math.hypot(s.x - currentCp.x, s.z - currentCp.z);
     if (dCp <= currentCp.radius) {
       if (currentCp.requireStop && absKmh > 0.6) {
@@ -513,7 +632,8 @@ export function stepSimulation(
   if (!s.engineOn) {
     s.statusText = `Двигатель заглушен, КПП — ${s.gear === "P" ? "P (Parking)" : s.gear}. Нажмите I для запуска (или «Быстрый старт»).`;
   } else if (s.gear === "P" && !s.finished) {
-    s.statusText = "Двигатель работает, КПП в P (Parking). Выберите R (клавиша R) или D (клавиша F), затем снимите ручник (Space).";
+    s.statusText =
+      "Двигатель работает, КПП в P (Parking). Удерживая тормоз (S), включите передачу (F / R / Shift или 3D-рычаг) и снимите ручник (Space).";
   } else if (s.handbrake && !s.finished) {
     s.statusText = "Стояночный тормоз активен — снимите ручник (Space).";
   } else if (!s.belt) {

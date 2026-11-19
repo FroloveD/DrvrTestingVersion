@@ -1,9 +1,19 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), КПП/Shift/динамика (T25, T34–T35), радио/кэш треков и Shift Lock (T36), Markdown (T26), OSM/границы/маршруты/редактор (T27–T33).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
+import {
+  clampVolume,
+  describeStation,
+  formatTrackDuration,
+  INTERNET_RADIO_STATIONS,
+  nextStationIndex,
+  renderTrackWav,
+  trackCacheKey,
+  TRACK_SAMPLE_RATE,
+} from "../audio/radioCatalog";
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
 import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
@@ -16,39 +26,94 @@ import {
   updateAxisArming,
   type GamepadSnapshot,
 } from "../input/gamepad";
-import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
+import {
+  BOUNDARY_SHAPE_PRESETS,
+  buildRouteCorridorPolygon,
+  clipPolylineToPolygon,
+  insertBoundaryVertex,
+  isInsideWorldBoundary,
+  isPointInPolygon,
+  isSimplePolygon,
+  polygonArea,
+  removeBoundaryVertex,
+} from "../maps/boundary";
+import {
+  RoadCorridorIndex,
+  doesObstacleOverlapRoads,
+  parseOsmMaxspeedKmh,
+  parseOsmMeters,
+} from "../maps/osmDeconflict";
+import { cropOsmPackToPolygon, parseMapFileText, parseOsmOrGeoJson, parseOsmXml } from "../maps/osmLoader";
+import { buildRouteFromRoads, findRoadNetworkPath, listRouteCandidates } from "../maps/route";
+import { checkScenarioRoute } from "../maps/routeCheck";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
   customFromOsmPack,
   customFromWorld,
+  defaultCustomScenario,
   emptyCustomScenario,
   importEditorFileText,
   validateCustomScenario,
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  applyConvexHullBoundary,
+  deconflictScenarioWithRoads,
+  mergeUserObjectsOntoOsmMap,
+  applyPresetBoundaryShape,
+  applyRouteCorridorBoundary,
   attachCheckpointToSign,
+  autoFixScenarioRoute,
+  bringSelectionToFront,
+  clearBoundaryPolygon,
   createEditorHistory,
+  cropScenarioToBoundary,
   deleteSelected,
   duplicateSelected,
   fitBoundsToContent,
   moveSelected,
   placeObjectAt,
   pushEditorHistory,
+  rebuildRouteFromEditorRoads,
   redoEditorHistory,
+  reverseRoadDirection,
   rotateSelected,
+  setCustomBoundaryPolygon,
   undoEditorHistory,
 } from "../scenarios/editorOps";
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
+import {
+  applyShifterTarget,
+  checkEngineToggle,
+  checkGearChange,
+  shiftLockState,
+  PARK_LOCK_MAX_SPEED_MS,
+  SHIFT_LOCK_MIN_BRAKE,
+  stepGearSequential,
+  stepShifterGate,
+} from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
-import type { SimEvent } from "./types";
-import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, STEER_WHEEL, wheelDegToSteerRad } from "./vehicle";
+import type { Gear, SimEvent } from "./types";
+import {
+  ackermannAngle,
+  CAR,
+  centralSteerLimit,
+  clamp,
+  ENGINE_IDLE_RPM,
+  FIXED_DT,
+  IDLE_CREEP_MAX_KMH,
+  MAX_FORWARD_GEAR,
+  MAX_SPEED_KMH,
+  normalizeWheelLock,
+  outerTurningRadius,
+  STEER_WHEEL,
+  wheelDegToSteerRad,
+} from "./vehicle";
 
 export type SelfTestCase = { id: string; suite: string; name: string; fn: () => string };
 
@@ -382,9 +447,13 @@ export const extraCases: SelfTestCase[] = [
       assert(checkGearChange({ gear: "D", engineOn: true }, 1.2, "P") !== null, "P на ходу должен блокироваться");
       assert(checkGearChange({ gear: "R", engineOn: true }, -(PARK_LOCK_MAX_SPEED_MS + 0.05), "P") !== null, "P при откате назад должен блокироваться");
       assert(checkGearChange({ gear: "D", engineOn: true }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
-      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться");
-      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
-      assert(checkGearChange({ gear: "P", engineOn: true }, 0, "D") === null, "Выход из P с запущенным ДВС разрешён");
+      assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться даже с тормозом");
+      assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "D") !== null, "Выход из P без нажатого тормоза (BTSI) должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "R") !== null, "Переход P → R без тормоза должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "N") !== null, "Переход P → N без тормоза должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: SHIFT_LOCK_MIN_BRAKE }, 0, "D") === null, "Выход из P с запущенным ДВС и нажатым тормозом разрешён");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 1 }, 0, "R") === null, "Переход P → R с нажатым тормозом разрешён");
       assert(checkEngineToggle({ gear: "D", engineOn: false }) !== null, "Запуск ДВС в D запрещён");
       assert(checkEngineToggle({ gear: "R", engineOn: false }) !== null, "Запуск ДВС в R запрещён");
       assert(checkEngineToggle({ gear: "P", engineOn: false }) === null && checkEngineToggle({ gear: "N", engineOn: false }) === null, "Запуск ДВС в P и N разрешён");
@@ -739,6 +808,904 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(r1) && r1!.state.signs?.[0].x === 6.0, "Redo не вернул перенесённое состояние");
 
       return "Сетка 0,5 м · перенос/поворот · КТ от знака 4.1.2 · стоп-линия · узлы дороги · дубль/удаление · Undo/Redo OK";
+    },
+  },
+  {
+    id: "T30",
+    suite: "osm",
+    name: "Неквадратный импорт OSM (<bounds>, > 600 м), OBB диагональных зданий, oneway=-1 и сшивка улиц",
+    fn: () => {
+      // Узкий вытянутый коридор В–З (~1500 × 90 м): раньше обрезался до ±600 и раздувался в квадрат
+      const longXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="OpenStreetMap server">
+  <bounds minlat="55.7498" minlon="37.5980" maxlat="55.7503" maxlon="37.6220"/>
+  <node id="1" lat="55.7500" lon="37.5980"/>
+  <node id="2" lat="55.7500" lon="37.6060"/>
+  <node id="3" lat="55.7500" lon="37.6140">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="4" lat="55.7500" lon="37.6220"/>
+  <!-- Односторонняя улица с oneway=-1 -->
+  <node id="5" lat="55.7502" lon="37.6060"/>
+  <node id="6" lat="55.7502" lon="37.6120"/>
+  <!-- Диагональное здание под ~45° -->
+  <node id="10" lat="55.7501" lon="37.6020"/>
+  <node id="11" lat="55.7503" lon="37.6024"/>
+  <node id="12" lat="55.7502" lon="37.6026"/>
+  <node id="13" lat="55.7500" lon="37.6022"/>
+  <!-- Разбитая на 3 way одна и та же улица -->
+  <way id="201">
+    <nd ref="1"/><nd ref="2"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Длинный"/>
+    <tag k="maxspeed" v="60"/>
+  </way>
+  <way id="202">
+    <nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Длинный"/>
+  </way>
+  <way id="203">
+    <nd ref="3"/><nd ref="4"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Длинный"/>
+  </way>
+  <way id="204">
+    <nd ref="5"/><nd ref="6"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="пер. Обратный"/>
+    <tag k="oneway" v="-1"/>
+  </way>
+  <way id="205">
+    <nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="10"/>
+    <tag k="building" v="yes"/>
+  </way>
+</osm>`;
+
+      const pack = parseOsmXml(longXml, "Длинный коридор");
+      const spanX = pack.bounds.maxX - pack.bounds.minX;
+      const spanZ = pack.bounds.maxZ - pack.bounds.minZ;
+      assert(spanX > 1400, `Ожидалась длина участка > 1400 м без обрезки по ±600, получено ${spanX} м`);
+      assert(spanZ < 160 && spanX / spanZ > 9, `Карта не должна быть квадратной: ${spanX}×${spanZ} м`);
+
+      // Сшивка 3 сегментов «пр-т Длинный» в единый маршрут на всю длину (> 1400 м)
+      const cands = listRouteCandidates(pack.roads);
+      const main = cands.find((c) => c.name === "пр-т Длинный");
+      assert(Boolean(main) && main!.segmentsCount === 3 && main!.lengthM > 1400, "Сегменты одной улицы не сшиты");
+      assert(pack.routeCheckpoints.length >= 5, `Ожидалось ≥ 5 КТ по сшитой улице, получено ${pack.routeCheckpoints.length}`);
+
+      // oneway=-1 развернул узлы: движение от востока (lon 37.6120, меньший X) к западу (lon 37.6060, больший X)
+      const rev = pack.roads.find((r) => r.id === "way-204");
+      assert(Boolean(rev) && rev!.points[0].x < rev!.points[1].x, "oneway=-1 должен разворачивать направление way");
+
+      // Диагональное здание получило ориентированный OBB (h ≠ 0)
+      assert(pack.buildings.length === 1 && Math.abs(pack.buildings[0].h) > 0.2, "Диагональное здание должно иметь OBB-угол h");
+
+      // Безымянная короткая улица (22 м) тоже строит валидный маршрут (а не пустой массив КТ)
+      const shortRoute = buildRouteFromRoads([
+        {
+          id: "unnamed-short",
+          points: [
+            { x: 0, z: 0 },
+            { x: 0, z: 22 },
+          ],
+          width: 6,
+          lanes: 2,
+          highway: "residential",
+        },
+      ]);
+      assert(shortRoute.checkpoints.length >= 1 && Boolean(shortRoute.startPose), "Короткая безымянная дорога не дала КТ");
+
+      return `${Math.round(spanX)}×${Math.round(spanZ)} м (неквадрат) · сшито 3 way (${Math.round(main!.lengthM)} м) · OBB + oneway=-1 OK`;
+    },
+  },
+  {
+    id: "T31",
+    suite: "boundary",
+    name: "Произвольные границы: полигон, коридор маршрута, обрезка дорог OSM и удержание авто в симуляции",
+    fn: () => {
+      // 1. Вогнутый Г-образный контур + детектор самопересечения («бабочка»)
+      const lShape = [
+        { x: -40, z: -40 },
+        { x: 40, z: -40 },
+        { x: 40, z: 0 },
+        { x: 0, z: 0 },
+        { x: 0, z: 50 },
+        { x: -40, z: 50 },
+      ];
+      assert(isSimplePolygon(lShape) && polygonArea(lShape) > 4000, "Г-образный полигон должен быть простым");
+      assert(isPointInPolygon(-20, 30, lShape) && !isPointInPolygon(20, 30, lShape), "Ошибка point-in-polygon на вогнутом углу");
+
+      const bowtie = [
+        { x: -20, z: -20 },
+        { x: 20, z: 20 },
+        { x: -20, z: 20 },
+        { x: 20, z: -20 },
+      ];
+      assert(!isSimplePolygon(bowtie), "Самопересекающийся полигон должен отклоняться");
+
+      // Вставка и удаление вершины
+      const ins = insertBoundaryVertex(lShape, 0);
+      assert(ins.polygon.length === 7 && ins.insertedIndex === 1, "insertBoundaryVertex не вставил вершину");
+      const rem = removeBoundaryVertex(ins.polygon, 1);
+      assert(Boolean(rem) && rem!.length === 6, "removeBoundaryVertex не удалил вершину");
+
+      // Обрезка ломаной, дважды входящей в Г-образный контур
+      const clipped = clipPolylineToPolygon(
+        [
+          { x: -20, z: 35 },
+          { x: 30, z: 35 },
+          { x: 30, z: -20 },
+        ],
+        lShape
+      );
+      assert(clipped.length === 2, `Ожидалось 2 внутренних куска ломаной, получено ${clipped.length}`);
+
+      // 2. Коридор Г-образного маршрута и обрезка карты OSM
+      const osmPack = parseOsmOrGeoJson(
+        {
+          elements: [
+            { type: "node", id: 1, lat: 55.7500, lon: 37.6100 },
+            { type: "node", id: 2, lat: 55.7510, lon: 37.6100 },
+            { type: "node", id: 3, lat: 55.7510, lon: 37.6118 },
+            // Далёкая посторонняя улица и здание в стороне от маршрута
+            { type: "node", id: 4, lat: 55.7524, lon: 37.6075 },
+            { type: "node", id: 5, lat: 55.7528, lon: 37.6075 },
+            { type: "node", id: 6, lat: 55.7525, lon: 37.6078 },
+            { type: "node", id: 7, lat: 55.7525, lon: 37.6081 },
+            { type: "node", id: 8, lat: 55.7527, lon: 37.6081 },
+            { type: "node", id: 9, lat: 55.7527, lon: 37.6078 },
+            { type: "way", id: 10, nodes: [1, 2, 3], tags: { highway: "secondary", name: "ул. Маршрутная" } },
+            { type: "way", id: 11, nodes: [4, 5], tags: { highway: "residential", name: "ул. Дальняя" } },
+            { type: "way", id: 12, nodes: [6, 7, 8, 9, 6], tags: { building: "yes" } },
+          ],
+        },
+        "Квартал для обрезки"
+      );
+
+      let sc = customFromOsmPack(osmPack);
+      const corr = applyRouteCorridorBoundary(sc, 24);
+      assert(corr.ok && corr.vertices >= 6, "Коридор Г-образного маршрута не построен");
+      const crop = cropScenarioToBoundary(corr.def);
+      assert(crop.removedRoads === 1 && crop.removedObjects >= 1, "Внешняя улица и здание должны быть обрезаны");
+      assert(crop.keptCheckpoints >= 3, "Контрольные точки внутри коридора должны сохраниться");
+      assert(validateCustomScenario(crop.def).errors.length === 0, "Обрезанный сценарий должен быть валиден");
+
+      // Прямая обрезка пакета OSM, оболочка и сброс к прямоугольнику
+      const packCropped = cropOsmPackToPolygon(osmPack, buildRouteCorridorPolygon(osmPack.roads[0].points, 25));
+      assert(packCropped.roads.length === 1 && Boolean(packCropped.boundaryPolygon), "cropOsmPackToPolygon не сработал");
+      const hull = applyConvexHullBoundary(crop.def, 14);
+      assert(hull.ok && hull.vertices >= 3, "Выпуклая оболочка не построена");
+      const resetRect = clearBoundaryPolygon(hull.def, 10);
+      assert(resetRect.boundaryPolygon === undefined, "clearBoundaryPolygon должен сбрасывать полигон");
+      const badSet = setCustomBoundaryPolygon(resetRect, bowtie);
+      assert(!badSet.ok, "setCustomBoundaryPolygon должен отклонять самопересечение");
+
+      // 3. Все 6 шаблонов произвольной формы площадки (вкл. Г/Т/П-образную, трапецию, 8-угольник) + 3D-бордюр + передний слой
+      const baseLot = defaultCustomScenario();
+      for (const preset of BOUNDARY_SHAPE_PRESETS) {
+        const shaped = applyPresetBoundaryShape(baseLot, preset.id);
+        assert(
+          shaped.vertices >= 4 && isSimplePolygon(shaped.def.boundaryPolygon!),
+          `Шаблон площадки ${preset.id} невалиден`
+        );
+        const val = validateCustomScenario(shaped.def);
+        assert(val.errors.length === 0, `Шаблон ${preset.id} дал ошибки на площадке: ${val.errors.join("; ")}`);
+      }
+      const lYard = { ...applyPresetBoundaryShape(baseLot, "l_shape").def, perimeterCurb: true };
+      const lWorld = buildCustomWorld(lYard);
+      assert(lWorld.lotPolygon?.length === 6, "Г-образная площадка должна задавать lotPolygon из 6 вершин");
+      assert(
+        lWorld.roads.every((r) => r.id !== "custom-lot"),
+        "При lotPolygon прямоугольная custom-lot не должна создаваться"
+      );
+      assert(
+        lWorld.obstacles.filter((o) => o.id.startsWith("boundary-curb-")).length === 6,
+        "perimeterCurb должен строить 6 сегментов бордюра по Г-образному контуру"
+      );
+      const firstObsId = baseLot.obstacles[0].id;
+      const promoted = bringSelectionToFront(baseLot, { kind: "obstacle", id: firstObsId });
+      assert(
+        promoted.moved && promoted.def.obstacles[promoted.def.obstacles.length - 1].id === firstObsId,
+        "bringSelectionToFront должен переносить объект на передний слой"
+      );
+
+      // 4. Физика stepSimulation удерживает автомобиль внутри треугольной площадки
+      const tri = [
+        { x: -25, z: -20 },
+        { x: 25, z: -20 },
+        { x: 0, z: 25 },
+      ];
+      const triSc = setCustomBoundaryPolygon(
+        { ...emptyCustomScenario(), start: { x: 0, z: 0, h: 0 }, checkpoints: [{ id: "cp1", x: 0, z: 12, radius: 5, instruction: "Вперёд" }] },
+        tri
+      ).def;
+      const triWorld = buildCustomWorld(triSc);
+      assert(triWorld.lotPolygon?.length === 3, "Треугольная площадка должна строить треугольный lotPolygon");
+      const grid = new SpatialGrid(triWorld.obstacles, 10);
+      let st = createInitialState(triWorld, true);
+      const drive = { ...createReadyInput("D"), throttle: 1, signal: "left" as const };
+      for (let i = 0; i < 360; i++) {
+        st = stepSimulation(st, drive, triWorld, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        isInsideWorldBoundary(st.x, st.z, triWorld.bounds, triWorld.boundaryPolygon),
+        `Автомобиль вышел за треугольную границу: (${st.x.toFixed(2)}, ${st.z.toFixed(2)})`
+      );
+
+      return `6 форм площадки + lotPolygon/curb · коридор ${corr.vertices} т. · обрезано дорог=${crop.removedRoads} · clamp OK`;
+    },
+  },
+  {
+    id: "T32",
+    suite: "route",
+    name: "Проверка маршрута после импорта OSM: граф дорог (Дейкстра), реверс улицы и autoFixScenarioRoute",
+    fn: () => {
+      // Перекрёсток двух улиц OSM + проверка после импорта
+      const pack = parseOsmOrGeoJson(
+        {
+          elements: [
+            { type: "node", id: 1, lat: 55.7500, lon: 37.6100 },
+            { type: "node", id: 2, lat: 55.7508, lon: 37.6100, tags: { highway: "traffic_signals" } },
+            { type: "node", id: 3, lat: 55.7516, lon: 37.6100 },
+            { type: "node", id: 4, lat: 55.7508, lon: 37.6088 },
+            { type: "node", id: 5, lat: 55.7508, lon: 37.6114, tags: { highway: "crossing" } },
+            { type: "way", id: 50, nodes: [1, 2, 3], tags: { highway: "secondary", name: "ул. Северная", maxspeed: "40" } },
+            { type: "way", id: 51, nodes: [4, 2, 5], tags: { highway: "tertiary", name: "ул. Поперечная", maxspeed: "40" } },
+          ],
+        },
+        "Перекрёсток OSM"
+      );
+
+      const imported = customFromOsmPack(pack);
+      const initialCheck = checkScenarioRoute(imported);
+      assert(
+        initialCheck.ok && initialCheck.status === "valid" && initialCheck.connectedLegsCount === initialCheck.checkpointsCount,
+        `Свежеимпортированный маршрут OSM должен проходить проверку: ${initialCheck.summary}`
+      );
+      assert(initialCheck.signalsOnRoute >= 1, "Светофор на маршруте должен учитываться в отчёте");
+
+      // Поиск пути Дейкстрой с поворотом с «ул. Северной» на «ул. Поперечную»
+      const turnPath = findRoadNetworkPath(
+        imported.roads!,
+        imported.roads![0].points[0],
+        imported.roads![1].points[2]
+      );
+      assert(turnPath.connected && turnPath.roadNames.length === 2, "Граф дорог должен находить путь через перекрёсток");
+
+      // Перестроение маршрута по второй улице + реверс направления
+      const altFwd = rebuildRouteFromEditorRoads(imported, { candidateId: "way-51", reverse: false });
+      const altRev = rebuildRouteFromEditorRoads(imported, { candidateId: "way-51", reverse: true });
+      assert(altFwd.count >= 3 && altFwd.roadName === "ул. Поперечная", "Выбор альтернативной улицы не сработал");
+      assert(
+        Math.hypot(
+          altFwd.def.checkpoints[0].x - altRev.def.checkpoints[0].x,
+          altFwd.def.checkpoints[0].z - altRev.def.checkpoints[0].z
+        ) > 20,
+        "Реверс маршрута должен менять начало и конец местами"
+      );
+      const flipped = reverseRoadDirection(imported, "way-51");
+      assert(
+        flipped.roads![1].points[0].x === imported.roads![1].points[2].x,
+        "reverseRoadDirection не развернул узлы дороги"
+      );
+
+      // Намеренно ломаем маршрут (старт снаружи, КТ в поле, дубль ID, isFinalPark без боксов) и чиним
+      const broken = {
+        ...imported,
+        start: { x: imported.bounds.maxX + 45, z: imported.bounds.maxZ + 45, h: Math.PI },
+        checkpoints: [
+          { id: "dup", x: 65, z: -55, radius: 5, instruction: "КТ вне дороги" },
+          { id: "dup", x: imported.checkpoints[1].x, z: imported.checkpoints[1].z, radius: 0, instruction: "Финиш", isFinalPark: true },
+        ],
+      };
+      const brokenCheck = checkScenarioRoute(broken);
+      assert(!brokenCheck.ok && brokenCheck.status === "errors" && brokenCheck.canAutoFix, "Поломки маршрута не обнаружены");
+
+      const fixed = autoFixScenarioRoute(broken);
+      assert(fixed.fixes.length >= 4, `Ожидалось ≥ 4 автоисправлений, получено ${fixed.fixes.length}`);
+      assert(validateCustomScenario(fixed.def).errors.length === 0, "После autoFixScenarioRoute остались ошибки валидации");
+      const fixedCheck = checkScenarioRoute(fixed.def);
+      assert(fixedCheck.ok, `После autoFixScenarioRoute маршрут должен быть проходим: ${fixedCheck.summary}`);
+
+      // Проезд финишной КТ с isFinalPark=true на карте без боксов корректно завершает заезд
+      const parklessWorld = buildCustomWorld({
+        ...emptyCustomScenario(),
+        start: { x: 0, z: 0, h: 0 },
+        bays: [],
+        checkpoints: [{ id: "end", x: 0, z: 8, radius: 5, instruction: "Финиш", isFinalPark: true }],
+      });
+      let s = createInitialState(parklessWorld, true);
+      const g = new SpatialGrid([], 10);
+      const inp = { ...createReadyInput("D"), throttle: 0.7, signal: "left" as const };
+      for (let i = 0; i < 180 && !s.finished; i++) {
+        s = stepSimulation(s, inp, parklessWorld, g, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(s.finished && s.finishedReason === "completed", "Маршрут с isFinalPark без боксов должен завершаться на КТ");
+
+      return `OSM check OK (${initialCheck.checkpointsCount} КТ, ${initialCheck.totalLengthM} м) · Дейкстра 2 ул. · реверс · autoFix (${fixed.fixes.length}) OK`;
+    },
+  },
+  {
+    id: "T33",
+    suite: "osm",
+    name: "Бесконфликтный импорт реальной карты: дворы, мультиполигоны, oneway, мосты, заборы и WGS84-слияние",
+    fn: () => {
+      // 1. Парсеры реальных единиц OSM (RU:urban, RU:living_street, mph, футы, составные значения)
+      assert(parseOsmMaxspeedKmh("RU:urban") === 60 && parseOsmMaxspeedKmh("RU:living_street") === 20, "Ошибка RU:* maxspeed");
+      assert(parseOsmMaxspeedKmh("30 mph") === 48 && parseOsmMaxspeedKmh("40; 60") === 40, "Ошибка mph / списка maxspeed");
+      assert(Math.abs((parseOsmMeters("10.5 m") ?? 0) - 10.5) < 0.05, "Ошибка parseOsmMeters(m)");
+      assert(Math.abs((parseOsmMeters("30'") ?? 0) - 9.14) < 0.1, "Ошибка parseOsmMeters(ft)");
+
+      // 2. Реалистичный сложный .osm XML с типичными конфликтами реальных карт:
+      // - главная односторонняя улица (oneway=yes, 60 км/ч) + эстакада (bridge=yes, layer=1) поперёк без общего узла;
+      // - примыкающая жилая зона (20 км/ч) рядом с магистралью (не должна ронять лимит на магистрали);
+      // - здание-мультиполигон с внутренним двором и проездом + навес АЗС (building=roof) + удалённый узел (action=delete);
+      // - забор поперёк улицы с воротами + дерево/столб на оси дороги + парные светофоры + direction=backward + пешеходный светофор.
+      const realConflictXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7490" minlon="37.6090" maxlat="55.7520" maxlon="37.6130"/>
+  <!-- Главная односторонняя улица с юга на север (lon=37.6105) -->
+  <node id="1" lat="55.7492" lon="37.6105"/>
+  <node id="2" lat="55.7502" lon="37.6105" ><tag k="highway" v="traffic_signals"/><tag k="traffic_signals:direction" v="forward"/></node>
+  <node id="3" lat="55.75024" lon="37.6105"><tag k="highway" v="traffic_signals"/></node>
+  <node id="4" lat="55.7510" lon="37.6105"><tag k="traffic_sign" v="RU:2.4"/><tag k="direction" v="backward"/></node>
+  <node id="5" lat="55.7518" lon="37.6105"/>
+  <!-- Дерево и удалённый боллард прямо на оси главной улицы -->
+  <node id="6" lat="55.7497" lon="37.6105"><tag k="natural" v="tree"/></node>
+  <node id="7" lat="55.7498" lon="37.6105" action="delete"><tag k="barrier" v="bollard"/></node>
+  <!-- Пешеходная дорожка со своим светофором (не должна создавать стоп-линию для авто) -->
+  <node id="8" lat="55.7496" lon="37.6094"/>
+  <node id="9" lat="55.7500" lon="37.6094"><tag k="highway" v="traffic_signals"/></node>
+  <node id="10" lat="55.7504" lon="37.6094"/>
+  <!-- Поперечная эстакада (bridge=yes, layer=1) без общих узлов с главной улицей -->
+  <node id="11" lat="55.7506" lon="37.6092"/>
+  <node id="12" lat="55.7506" lon="37.6122"/>
+  <!-- Боковая жилая зона (20 км/ч) восточнее главной улицы -->
+  <node id="13" lat="55.7498" lon="37.6110"/>
+  <node id="14" lat="55.7498" lon="37.6122"/>
+  <!-- Забор поперёк главной улицы с воротами -->
+  <node id="15" lat="55.7513" lon="37.6098"/>
+  <node id="16" lat="55.7513" lon="37.6105"><tag k="barrier" v="gate"/></node>
+  <node id="17" lat="55.7513" lon="37.6112"/>
+  <!-- Здание-мультиполигон с двором (outer 20..23, inner 24..27) и проездом во двор (28..29) -->
+  <node id="20" lat="55.7500" lon="37.6113"/>
+  <node id="21" lat="55.7500" lon="37.6123"/>
+  <node id="22" lat="55.7505" lon="37.6123"/>
+  <node id="23" lat="55.7505" lon="37.6113"/>
+  <node id="24" lat="55.75012" lon="37.6115"/>
+  <node id="25" lat="55.75012" lon="37.6121"/>
+  <node id="26" lat="55.75038" lon="37.6121"/>
+  <node id="27" lat="55.75038" lon="37.6115"/>
+  <node id="28" lat="55.75025" lon="37.6111"/>
+  <node id="29" lat="55.75025" lon="37.6119"/>
+  <!-- Навес АЗС (building=roof) прямо над дорогой — не должен становиться глухой стеной -->
+  <node id="30" lat="55.7494" lon="37.6103"/>
+  <node id="31" lat="55.7494" lon="37.6107"/>
+  <node id="32" lat="55.7496" lon="37.6107"/>
+  <node id="33" lat="55.7496" lon="37.6103"/>
+
+  <way id="100">
+    <nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="6"/><nd ref="4"/><nd ref="16"/><nd ref="5"/>
+    <tag k="highway" v="primary"/><tag k="name" v="Набережная"/><tag k="oneway" v="yes"/><tag k="lanes" v="2"/><tag k="maxspeed" v="RU:urban"/>
+  </way>
+  <way id="101">
+    <nd ref="8"/><nd ref="9"/><nd ref="10"/>
+    <tag k="highway" v="footway"/>
+  </way>
+  <way id="102">
+    <nd ref="11"/><nd ref="12"/>
+    <tag k="highway" v="secondary"/><tag k="name" v="Эстакада"/><tag k="bridge" v="yes"/><tag k="layer" v="1"/>
+  </way>
+  <way id="103">
+    <nd ref="13"/><nd ref="14"/>
+    <tag k="highway" v="living_street"/><tag k="name" v="Тихий двор"/>
+  </way>
+  <way id="104">
+    <nd ref="15"/><nd ref="16"/><nd ref="17"/>
+    <tag k="barrier" v="fence"/>
+  </way>
+  <way id="105">
+    <nd ref="28"/><nd ref="29"/>
+    <tag k="highway" v="service"/>
+  </way>
+  <way id="106">
+    <nd ref="1"/><nd ref="5"/>
+    <tag k="highway" v="construction"/><tag k="name" v="Закрытая стройка"/>
+  </way>
+  <way id="200"><nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="23"/><nd ref="20"/></way>
+  <way id="201"><nd ref="24"/><nd ref="25"/><nd ref="26"/><nd ref="27"/><nd ref="24"/></way>
+  <way id="202">
+    <nd ref="30"/><nd ref="31"/><nd ref="32"/><nd ref="33"/><nd ref="30"/>
+    <tag k="building" v="roof"/>
+  </way>
+  <relation id="500">
+    <member type="way" ref="200" role="outer"/>
+    <member type="way" ref="201" role="inner"/>
+    <tag k="type" v="multipolygon"/><tag k="building" v="apartments"/><tag k="building:levels" v="6"/>
+  </relation>
+</osm>`;
+
+      // Исправим порядок узлов на way 100, чтобы улица шла монотонно с юга на север
+      const cleanXml = realConflictXml.replace(
+        '<nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="6"/><nd ref="4"/><nd ref="16"/><nd ref="5"/>',
+        '<nd ref="1"/><nd ref="6"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="16"/><nd ref="5"/>'
+      );
+      const pack = parseOsmXml(cleanXml, "Реальный квартал OSM");
+
+      // Только реальные автомобильные дороги (без footway и construction)
+      assert(pack.roads.length === 4, `Ожидалось 4 автодороги, получено ${pack.roads.length}`);
+      const mainRoad = pack.roads.find((r) => r.name === "Набережная")!;
+      const bridgeRoad = pack.roads.find((r) => r.name === "Эстакада")!;
+      assert(mainRoad.oneway === true && mainRoad.speedLimitKmh === 60, "Не распознаны oneway=yes или RU:urban");
+      assert(bridgeRoad.layer === 1, "Не распознан layer=1 у эстакады");
+
+      // Ни одно здание, забор, дерево или столб не перекрывает проезжую часть ни одной наземной дороги!
+      const roadIdx = new RoadCorridorIndex(pack.roads, true);
+      const allObs = [...pack.buildings, ...(pack.extraObstacles ?? [])];
+      for (const obs of allObs) {
+        assert(!doesObstacleOverlapRoads(obs, roadIdx, 0.25), `Конфликт с дорогой у препятствия ${obs.id} (${obs.kind})`);
+      }
+      // Мультиполигон дома с двором разложен на корпуса вокруг проезда, а забор разрезан по обе стороны улицы
+      assert(pack.buildings.length >= 2, `Дом-двор должен разложиться на корпуса без перекрытия проезда (${pack.buildings.length})`);
+      const fenceParts = (pack.extraObstacles ?? []).filter((o) => o.kind === "fence");
+      assert(fenceParts.length >= 2, `Забор через улицу должен быть разрезан на боковые секции (${fenceParts.length})`);
+      assert(!(pack.extraObstacles ?? []).some((o) => o.id.includes("7")), "Удалённый узел action=delete не должен импортироваться");
+
+      // Светофоры: дубль объединён, пешеходный светофор отброшен → ровно 1 светофор на проезжей части
+      assert(pack.signals.length === 1, `Ожидался 1 дедуплицированный автосветофор, получено ${pack.signals.length}`);
+      // Знак с direction=backward повёрнут на юг (|h| > 2.5 рад), а не по ходу северной улицы (h ≈ 0)
+      const yieldSign = pack.signs.find((s) => s.kind === "give_way");
+      assert(Boolean(yieldSign) && Math.abs(yieldSign!.h) > 2.5, "direction=backward не развернул знак");
+      // Счётчик устранённых конфликтов и WGS84-якорь заполнены
+      assert((pack.meta.resolvedConflictsCount ?? 0) >= 3 && Boolean(pack.meta.origin), "Нет отчёта согласования или WGS84 origin");
+
+      // Односторонняя улица запрещает реверс маршрута против потока
+      const revAttempt = buildRouteFromRoads(pack.roads, { reverse: true });
+      assert(revAttempt.reverseBlocked === true, "Односторонняя улица должна блокировать реверс маршрута");
+      // Искусственный старт против шерсти на oneway ловится проверкой и чинится autoFixScenarioRoute
+      const scen = customFromOsmPack(pack);
+      const wrongStart = { ...scen, start: { ...scen.start, h: Math.PI } };
+      const wrongCheck = checkScenarioRoute(wrongStart);
+      assert(wrongCheck.status === "errors" && wrongCheck.canAutoFix, "Старт против oneway должен быть ошибкой");
+      const repaired = autoFixScenarioRoute(wrongStart);
+      assert(Math.abs(Math.sin(repaired.def.start.h)) < 0.3 && Math.cos(repaired.def.start.h) > 0.8, "autoFix не развернул старт по oneway");
+
+      // Развязка по уровням: граф не перепрыгивает с Набережной (layer=0) на Эстакаду (layer=1) без общего узла
+      const crossLayer = findRoadNetworkPath(pack.roads, mainRoad.points[0], bridgeRoad.points[1]);
+      assert(!crossLayer.connected, "Граф дорог не должен соединять layer=0 с эстакадой layer=1 без съезда");
+
+      // Жилая зона 20 км/ч не роняет лимит на главной магистрали 60 км/ч; физический проезд без ложных столкновений
+      const cityWorld = buildScenarioWorld("city_osm", DEFAULT_CALIBRATION, pack);
+      const cityGrid = new SpatialGrid(cityWorld.obstacles, 10);
+      assert(!cityGrid.queryCarHit(cityWorld.start.x, cityWorld.start.z, cityWorld.start.h).hit, "Коллизия на старте OSM");
+      for (const sz of cityWorld.speedZones) {
+        const dToMain = Math.abs(sz.x - mainRoad.points[0].x);
+        assert(dToMain > sz.radius + 1, "Зона 20 км/ч бокового двора не должна накрывать главную магистраль");
+      }
+
+      // 3. GeoJSON: MultiLineString + Polygon с дырой двора + landuse=residential (не должен становиться стеной!)
+      const gjPack = parseOsmOrGeoJson(
+        {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { highway: "secondary", name: "пр-т Ленина", oneway: "yes" },
+              geometry: {
+                type: "MultiLineString",
+                coordinates: [
+                  [[37.61, 55.75], [37.61, 55.7506]],
+                  [[37.61, 55.7506], [37.61, 55.7512]],
+                ],
+              },
+            },
+            {
+              type: "Feature",
+              properties: { landuse: "residential", name: "Микрорайон" },
+              geometry: {
+                type: "Polygon",
+                coordinates: [[[37.609, 55.7495], [37.612, 55.7495], [37.612, 55.7515], [37.609, 55.7515], [37.609, 55.7495]]],
+              },
+            },
+          ],
+        },
+        "GeoJSON тест"
+      );
+      assert(gjPack.roads.length === 2 && gjPack.buildings.length === 0, "landuse=residential в GeoJSON не должен быть зданием");
+
+      // 4. Слияние пользовательских боксов и ручных знаков при повторном импорте сдвинутого участка OSM (WGS84) + deconflictScenarioWithRoads
+      const withUserBay = {
+        ...scen,
+        useLotSurface: true,
+        bays: [
+          {
+            id: 1,
+            label: "Мой карман",
+            kind: "parallel" as const,
+            cx: mainRoad.points[0].x - 7.5,
+            cz: mainRoad.points[0].z + 18,
+            width: 2.5,
+            length: 6.7,
+            h: 0,
+            openSide: "left" as const,
+            occupied: false,
+          },
+        ],
+        obstacles: [
+          ...scen.obstacles,
+          { id: "bad-tree", kind: "tree" as const, cx: mainRoad.points[0].x, cz: mainRoad.points[0].z + 25, halfX: 0.45, halfZ: 0.45, h: 0, height: 4, color: 0x2f6a44 },
+        ],
+      };
+      const cleaned = deconflictScenarioWithRoads(withUserBay);
+      assert(cleaned.changedCount >= 2 && cleaned.def.useLotSurface === false, "deconflictScenarioWithRoads не убрал конфликт");
+      const shiftedXml = cleanXml.replace('maxlon="37.6130"', 'maxlon="37.6145"');
+      const shiftedDef = customFromOsmPack(parseOsmXml(shiftedXml, "Расширенный участок"));
+      const merged = mergeUserObjectsOntoOsmMap(cleaned.def, shiftedDef);
+      assert(merged.reprojected && merged.keptBays === 1, "mergeUserObjectsOntoOsmMap не перенёс бокс с WGS84-репроекцией");
+
+      return `Согласовано ${pack.meta.resolvedConflictsCount} конфл. · двор ${pack.buildings.length} корп. · забор ${fenceParts.length} секц. · oneway/layer/WGS84 OK`;
+    },
+  },
+  {
+    id: "T34",
+    suite: "vehicle",
+    name: "6-ст. КПП Shiftronic (Shift): плавные обороты ДВС, 0–100 км/ч ≈ 10,8 с и Vmax = 180 км/ч",
+    fn: () => {
+      const baseWorld = buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+      const track = {
+        ...baseWorld,
+        bounds: { minX: -50, maxX: 50, minZ: -50, maxZ: 4000 },
+        boundaryPolygon: undefined,
+        obstacles: [],
+        bays: [],
+        checkpoints: [],
+        signals: [],
+        crosswalks: [],
+        pedestrians: [],
+        start: { x: 0, z: 0, h: 0 },
+        defaultSpeedLimitKmh: 200,
+      };
+      const grid = new SpatialGrid([], 10);
+
+      // 1. Секвентальное переключение Shift (P ↔ R ↔ N ↔ M1..M6) и защитные блокировки (вкл. тормоз BTSI из P)
+      assert(stepGearSequential({ gear: "P", engineOn: false, brake: 1 }, 0, 1, 1).next === null, "Shift из P без ДВС должен блокироваться");
+      assert(stepGearSequential({ gear: "P", engineOn: true, brake: 0 }, 0, 1, 1).next === null, "Shift из P без тормоза должен блокироваться");
+      const upSeq: Gear[] = [];
+      let cur: Gear = "P";
+      for (let i = 0; i < 8; i++) {
+        const res = stepGearSequential({ gear: cur, engineOn: true, brake: cur === "P" ? 1 : 0 }, 0, 1, 1);
+        assert(res.next !== null, `Ожидалось повышение с ${cur}`);
+        cur = res.next!;
+        upSeq.push(cur);
+      }
+      assert(upSeq.join(",") === "R,N,1,2,3,4,5,6", `Неверный ряд Shift▲: ${upSeq.join(",")}`);
+      assert(stepGearSequential({ gear: "6", engineOn: true }, 30, 6, 1).next === null, "Выше M6 передач нет");
+      // Защита от перекрута при понижении на высокой скорости (110 км/ч -> M2 запрещено, -> M3 разрешено)
+      assert(stepGearSequential({ gear: "4", engineOn: true }, 110 / 3.6, 4, -1).next === "3", "Понижение M4→M3 на 110 км/ч должно работать");
+      assert(stepGearSequential({ gear: "3", engineOn: true }, 110 / 3.6, 3, -1).next === null, "Перекрут M3→M2 на 110 км/ч должен блокироваться");
+      // На ходу понижение с M1 не выбрасывает в N
+      assert(stepGearSequential({ gear: "1", engineOn: true }, 6, 1, -1).next === null, "На ходу M1 не должна сбрасываться в N");
+      // На месте полный спуск M6 → ... → P
+      for (let i = 0; i < 8; i++) {
+        const res = stepGearSequential({ gear: cur, engineOn: true }, 0, 1, -1);
+        assert(res.next !== null, `Ожидалось понижение с ${cur}`);
+        cur = res.next!;
+      }
+      assert(cur === "P", `Полный спуск должен вернуть в P, получено ${cur}`);
+      // Переход из D по Shift▲ на ходу повышает ступень в ручной режим
+      assert(stepGearSequential({ gear: "D", engineOn: true }, 12, 2, 1).next === "3", "Shift▲ из D2 на ходу должен включать M3");
+
+      // 1b. Физическая 3D-кулиса салона (applyShifterTarget / stepShifterGate): P↔R↔N↔D ⇄ M (+/−) + BTSI из P
+      assert(applyShifterTarget({ gear: "P", engineOn: false, brake: 1 }, 0, 1, "D").next === null, "3D-рычаг из P без ДВС должен блокироваться");
+      assert(applyShifterTarget({ gear: "P", engineOn: true, brake: 0 }, 0, 1, "D").next === null, "3D-рычаг из P без тормоза должен блокироваться");
+      assert(stepShifterGate({ gear: "P", engineOn: true, brake: 0 }, 0, 1, 1).next === null, "Шаг 3D-рычага P→R без тормоза должен блокироваться");
+      assert(stepShifterGate({ gear: "P", engineOn: true, brake: 1 }, 0, 1, 1).next === "R", "Шаг 3D-рычага P→R с нажатым тормозом");
+      assert(stepShifterGate({ gear: "R", engineOn: true }, 0, 1, 1).next === "N", "Шаг 3D-рычага R→N");
+      assert(stepShifterGate({ gear: "N", engineOn: true }, 0, 1, 1).next === "D", "Шаг 3D-рычага N→D");
+      assert(applyShifterTarget({ gear: "D", engineOn: true }, 12, 3, "M").next === "3", "Перевод рычага D3→M фиксирует M3");
+      assert(applyShifterTarget({ gear: "3", engineOn: true }, 12, 3, "M+").next === "4", "Качание M+ повышает M3→M4");
+      assert(applyShifterTarget({ gear: "4", engineOn: true }, 12, 4, "M-").next === "3", "Качание M- понижает M4→M3");
+      assert(applyShifterTarget({ gear: "1", engineOn: true }, 0, 1, "M-").next === null, "Упор M- на M1 не выбрасывает в N");
+      assert(applyShifterTarget({ gear: "3", engineOn: true }, 15, 3, "D").next === "D", "Возврат рычага M3→D включает автомат D");
+      assert(applyShifterTarget({ gear: "2", engineOn: true }, 8, 2, "M", { toggleManualOnClick: true }).next === "D", "Повторный клик по M возвращает D");
+      assert(applyShifterTarget({ gear: "D", engineOn: true }, 5, 2, "R").next === null, "Включение R на скорости вперёд блокируется");
+      assert(applyShifterTarget({ gear: "D", engineOn: true }, 5, 2, "P").next === null, "Включение P на скорости блокируется");
+
+      // 2. Плавная раскрутка и спад оборотов на холостом ходу (P): без скачков, скорость 0
+      let idleState = createInitialState(track, true);
+      idleState = { ...idleState, gear: "P", prevGear: "P" };
+      let maxRevStep = 0;
+      for (let i = 0; i < 120; i++) {
+        const prev = idleState.rpm;
+        idleState = stepSimulation(
+          idleState,
+          { ...createReadyInput("P"), throttle: 1 },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+        assert(idleState.rpm >= prev - 0.01, "Обороты при перегазовке должны расти монотонно");
+        maxRevStep = Math.max(maxRevStep, idleState.rpm - prev);
+        assert(idleState.v === 0, "В P при перегазовке скорость обязана быть 0");
+      }
+      const peakFreeRpm = idleState.rpm;
+      assert(peakFreeRpm > 6100 && maxRevStep <= 95, `Неплавная перегазовка: peak=${peakFreeRpm.toFixed(0)}, step=${maxRevStep.toFixed(1)}`);
+      for (let i = 0; i < 150; i++) {
+        idleState = stepSimulation(
+          idleState,
+          { ...createReadyInput("P"), throttle: 0 },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+      }
+      assert(idleState.rpm < ENGINE_IDLE_RPM + 80, `Обороты не вернулись к ХХ: ${idleState.rpm.toFixed(0)}`);
+
+      // 3. Разгон 0–100 км/ч и максимальная скорость 180 км/ч в режиме D (6АКПП)
+      let autoS = createInitialState(track, true);
+      let t100Auto: number | null = null;
+      let maxKmhAuto = 0;
+      let maxDriveRpmStep = 0;
+      for (let i = 0; i < 55 * 60; i++) {
+        const prevRpm = autoS.rpm;
+        autoS = stepSimulation(
+          autoS,
+          { ...createReadyInput("D"), throttle: 1, signal: "left" },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+        const kmh = autoS.v * 3.6;
+        if (t100Auto === null && kmh >= 100) t100Auto = autoS.time;
+        maxKmhAuto = Math.max(maxKmhAuto, kmh);
+        maxDriveRpmStep = Math.max(maxDriveRpmStep, Math.abs(autoS.rpm - prevRpm));
+        assert(kmh <= MAX_SPEED_KMH + 1e-6, `Превышен потолок 180 км/ч: ${kmh.toFixed(3)}`);
+      }
+      assert(
+        t100Auto !== null && t100Auto >= 10.2 && t100Auto <= 11.6,
+        `Разгон 0–100 в D вне паспорта Kia Ceed 1.6 (10.2–11.6 с): ${t100Auto}`
+      );
+      assert(autoS.autoSubGear === MAX_FORWARD_GEAR, `Ожидалась 6-я передача на Vmax, получено D${autoS.autoSubGear}`);
+      assert(maxKmhAuto >= 179.5 && Math.round(maxKmhAuto) === 180, `Vmax != 180 км/ч: ${maxKmhAuto.toFixed(2)}`);
+      assert(maxDriveRpmStep <= 135, `Скачок оборотов на переключении слишком резкий: ${maxDriveRpmStep.toFixed(1)} об/тик`);
+
+      // 4. Ручной разгон 0–100 км/ч на Shift (M1 → M2 → M3) + побитовый RLE-реплей
+      let manS = createInitialState(track, true);
+      const rec = new AttemptRecorder(manS, true);
+      let manGear: Gear = "1";
+      let t100Man: number | null = null;
+      for (let i = 0; i < 14 * 60; i++) {
+        if (manS.shiftTimer <= 0 && manS.rpm >= 6220) {
+          const sh = stepGearSequential({ gear: manGear, engineOn: true }, manS.v, manS.autoSubGear, 1);
+          if (sh.next) manGear = sh.next;
+        }
+        const inp = quantizeInput({ ...createReadyInput(manGear), throttle: 1, signal: "left" });
+        const out = stepSimulation(manS, inp, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        manS = out.state;
+        rec.recordTick(inp, manS, out.newEvents);
+        if (t100Man === null && manS.v * 3.6 >= 100) t100Man = manS.time;
+      }
+      assert(
+        t100Man !== null && t100Man >= 10.0 && t100Man <= 11.4,
+        `Ручной разгон 0–100 на Shift вне паспорта (10.0–11.4 с): ${t100Man}`
+      );
+      assert(manGear === "3" || manGear === "4", `Ожидалась M3/M4 после 100 км/ч, получено M${manGear}`);
+      const snap = rec.snapshot(manS, track, DEFAULT_CALIBRATION, DEFAULT_RULESET);
+      const rep = replayInputStream(
+        JSON.parse(JSON.stringify(snap.inputStream)),
+        track,
+        DEFAULT_CALIBRATION,
+        DEFAULT_RULESET,
+        true
+      );
+      assert(
+        rep.finalState.x === manS.x &&
+          rep.finalState.z === manS.z &&
+          rep.finalState.v === manS.v &&
+          rep.finalState.rpm === manS.rpm &&
+          rep.finalState.gear === manS.gear,
+        "Реплей заезда с переключениями Shift разошёлся с оригиналом"
+      );
+
+      return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
+    },
+  },
+  {
+    id: "T35",
+    suite: "vehicle",
+    name: "Самоход D1 на ХХ, реалистичное торможение (60/100–0), выбег без газа (N/D/M2/R) и BTSI P",
+    fn: () => {
+      const baseWorld = buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+      const track = {
+        ...baseWorld,
+        bounds: { minX: -50, maxX: 50, minZ: -200, maxZ: 4000 },
+        boundaryPolygon: undefined,
+        obstacles: [],
+        bays: [],
+        checkpoints: [],
+        signals: [],
+        crosswalks: [],
+        pedestrians: [],
+        start: { x: 0, z: 0, h: 0 },
+        defaultSpeedLimitKmh: 200,
+      };
+      const grid = new SpatialGrid([], 10);
+
+      // 1. Самоход гидротрансформатора на D1 на минимальных оборотах (~800–880 об/мин, ~6,4 км/ч):
+      // при нажатом тормозе S — 0 км/ч; при отпускании S — плавно трогается сам; на ручнике и в P/N/R — 0 км/ч
+      let creepS = createInitialState(track, true);
+      const rec = new AttemptRecorder(creepS, true);
+      const runTick = (inp: ReturnType<typeof createReadyInput>) => {
+        const q = quantizeInput(inp);
+        const out = stepSimulation(creepS, q, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        creepS = out.state;
+        rec.recordTick(q, creepS, out.newEvents);
+      };
+      // Удерживаем тормоз в D1 1,5 с — машина стоит неподвижно
+      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
+      assert(creepS.v === 0, `В D1 с нажатым тормозом скорость обязана быть 0, получено ${creepS.v}`);
+      // Отпускаем тормоз и НЕ нажимаем газ — машина плавно разгоняется сама до ~6,2–6,5 км/ч на ХХ
+      for (let i = 0; i < 12 * 60; i++) runTick({ ...createReadyInput("D"), throttle: 0, brake: 0 });
+      const creepKmh = creepS.v * 3.6;
+      assert(
+        creepKmh >= 5.6 && creepKmh <= IDLE_CREEP_MAX_KMH + 0.05 && creepS.autoSubGear === 1,
+        `Неверная скорость самохода D1: ${creepKmh.toFixed(2)} км/ч (передача D${creepS.autoSubGear})`
+      );
+      assert(
+        creepS.rpm >= ENGINE_IDLE_RPM - 10 && creepS.rpm <= 920,
+        `Самоход D1 должен идти на минимальных оборотах ХХ, получено ${creepS.rpm.toFixed(0)} об/мин`
+      );
+      // Нажимаем тормоз S — плавная полная остановка в 0 без отката назад; отпускаем — снова едет сама
+      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
+      assert(creepS.v === 0, `Тормоз S должен остановить самоход D1 в 0, получено ${creepS.v}`);
+      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 0 });
+      assert(creepS.v * 3.6 > 1.5, "После отпускания тормоза самоход D1 должен плавно возобновиться");
+      // В N, R и с ручником без газа самохода нет
+      for (const idleInp of [
+        createReadyInput("N"),
+        createReadyInput("R"),
+        { ...createReadyInput("D"), handbrake: true },
+      ]) {
+        let st = createInitialState(track, true);
+        for (let i = 0; i < 120; i++) {
+          st = stepSimulation(st, idleInp, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        }
+        assert(st.v === 0, `Без газа в режиме ${idleInp.gear} (hb=${idleInp.handbrake}) машина должна стоять`);
+      }
+
+      // 2. Реалистичное экстренное торможение 100–0 км/ч (паспорт Kia Ceed JD: ~38–44 м) + клевок кузова
+      let brakeS = { ...createInitialState(track, true), v: 100 / 3.6, prevV: 100 / 3.6, autoSubGear: 4, rpm: 4160 };
+      const z0 = brakeS.z;
+      let maxDivePitch = 0;
+      for (let i = 0; i < 6 * 60; i++) {
+        brakeS = stepSimulation(
+          brakeS,
+          { ...createReadyInput("D"), brake: 1 },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+        maxDivePitch = Math.max(maxDivePitch, brakeS.pitch);
+        assert(brakeS.v >= 0, "Тормоз S никогда не должен давать откат назад");
+      }
+      const stopDist100 = brakeS.z - z0;
+      assert(
+        brakeS.v === 0 && stopDist100 >= 38 && stopDist100 <= 52,
+        `Тормозной путь 100–0 км/ч вне реалистичного диапазона (38–52 м): ${stopDist100.toFixed(1)} м`
+      );
+      assert(maxDivePitch > 0.02 && Math.abs(brakeS.pitch) < 0.004, "Кузов должен клюнуть при торможении и выровняться в 0");
+
+      // 3. Остановка выбегом без газа: в N — до 0 км/ч; в M2 торможение двигателем сильнее N; в D — до самохода D1
+      let coastN = { ...createInitialState(track, true), gear: "N" as Gear, prevGear: "N" as Gear, v: 25 / 3.6, prevV: 25 / 3.6 };
+      for (let i = 0; i < 50 * 60 && coastN.v > 0; i++) {
+        coastN = stepSimulation(coastN, createReadyInput("N"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(coastN.v === 0, `Выбег в N без газа должен плавно остановиться в 0, осталось ${(coastN.v * 3.6).toFixed(2)} км/ч`);
+
+      let ebN = { ...createInitialState(track, true), gear: "N" as Gear, prevGear: "N" as Gear, v: 55 / 3.6, prevV: 55 / 3.6 };
+      let ebM2 = { ...createInitialState(track, true), gear: "2" as Gear, prevGear: "2" as Gear, autoSubGear: 2, v: 55 / 3.6, prevV: 55 / 3.6 };
+      for (let i = 0; i < 4 * 60; i++) {
+        ebN = stepSimulation(ebN, createReadyInput("N"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        ebM2 = stepSimulation(ebM2, createReadyInput("2"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        ebM2.v + 1.2 < ebN.v,
+        `Торможение двигателем на M2 (${(ebM2.v * 3.6).toFixed(1)} км/ч) должно быть заметно сильнее выбега в N (${(ebN.v * 3.6).toFixed(1)} км/ч)`
+      );
+
+      let coastD = { ...createInitialState(track, true), v: 50 / 3.6, prevV: 50 / 3.6, autoSubGear: 3 };
+      for (let i = 0; i < 45 * 60; i++) {
+        coastD = stepSimulation(coastD, createReadyInput("D"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        coastD.autoSubGear === 1 && Math.abs(coastD.v * 3.6 - IDLE_CREEP_MAX_KMH) < 0.8,
+        `Выбег в D без газа должен плавно спуститься до самохода D1, получено D${coastD.autoSubGear} ${(coastD.v * 3.6).toFixed(2)} км/ч`
+      );
+
+      // Выбег задним ходом R без газа — плавная полная остановка в 0 км/ч
+      let coastR = { ...createInitialState(track, true), gear: "R" as Gear, prevGear: "R" as Gear, v: -10 / 3.6, prevV: -10 / 3.6 };
+      for (let i = 0; i < 8 * 60 && coastR.v < 0; i++) {
+        coastR = stepSimulation(coastR, createReadyInput("R"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(coastR.v === 0, `Выбег в R без газа должен плавно остановиться в 0, получено ${coastR.v}`);
+
+      // 4. Побитовый детерминизм реплея заезда с самоходом D1 и гидротормозом
+      const snap = rec.snapshot(creepS, track, DEFAULT_CALIBRATION, DEFAULT_RULESET);
+      const rep = replayInputStream(JSON.parse(JSON.stringify(snap.inputStream)), track, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
+      assert(
+        rep.finalState.z === creepS.z && rep.finalState.v === creepS.v && rep.finalState.brakePos === creepS.brakePos,
+        "Реплей самохода D1 и прогрессивного тормоза разошёлся"
+      );
+
+      return `D1 creep=${creepKmh.toFixed(1)} км/ч @ ${Math.round(creepS.rpm)} об/мин · 100–0=${stopDist100.toFixed(1)} м · M2<N · BTSI P OK`;
+    },
+  },
+  {
+    id: "T36",
+    suite: "audio",
+    name: "Радио ШГУ: реальные интернет-станции, громкость, кэш-ключи и офлайн-рендер трека в WAV",
+    fn: () => {
+      // 1. Каталог реальных интернет-станций: уникальные id/частоты, только https-потоки
+      assert(INTERNET_RADIO_STATIONS.length >= 4, `В каталоге должно быть ≥ 4 станции, есть ${INTERNET_RADIO_STATIONS.length}`);
+      const ids = new Set(INTERNET_RADIO_STATIONS.map((st) => st.id));
+      assert(ids.size === INTERNET_RADIO_STATIONS.length, "id станций должны быть уникальны");
+      for (const st of INTERNET_RADIO_STATIONS) {
+        assert(/^https:\/\//.test(st.streamUrl), `Поток станции ${st.id} должен быть по https`);
+        assert(st.bpm >= 40 && st.notes.length >= 4, `Станция ${st.id}: нужны bpm и аккордовая сетка`);
+        assert(describeStation(st).includes(st.freq) && describeStation(st).includes(st.name), "Описание станции должно содержать частоту и название");
+      }
+
+      // 2. Листание станций по кругу и громкость 0..100 %
+      assert(nextStationIndex(0, -1) === INTERNET_RADIO_STATIONS.length - 1, "Листание станции влево должно зацикливаться");
+      assert(nextStationIndex(INTERNET_RADIO_STATIONS.length - 1, 1) === 0, "Листание станции вправо должно зацикливаться");
+      assert(nextStationIndex(2, 1) === 3, "Следующая станция +1");
+      assert(clampVolume(1.4) === 1 && clampVolume(-0.3) === 0 && clampVolume(Number.NaN) === 0.7, "Громкость ограничивается 0..1");
+      assert(clampVolume(0.456) === 0.46, "Громкость округляется до 1 %");
+
+      // 3. Ключи кэша треков и форматирование длительности
+      assert(trackCacheKey("record", 32) === "radio:record:32s", "Ключ кэша трека");
+      assert(trackCacheKey("record", 32) === trackCacheKey("record", 31.6), "Ключ кэша округляет длительность");
+      assert(formatTrackDuration(32) === "00:32" && formatTrackDuration(125) === "02:05", "Формат длительности мм:сс");
+
+      // 4. Офлайн-рендер трека в WAV: корректный RIFF/WAVE-заголовок, PCM 16 бит моно, ненулевой сигнал
+      const station = INTERNET_RADIO_STATIONS[0];
+      const wav = renderTrackWav(station, 2);
+      const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+      const ascii = (off: number, len: number) => String.fromCharCode(...wav.slice(off, off + len));
+      assert(ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE" && ascii(36, 4) === "data", "WAV: заголовок RIFF/WAVE/data");
+      assert(view.getUint16(20, true) === 1, "WAV: PCM");
+      assert(view.getUint16(22, true) === 1, "WAV: моно");
+      assert(view.getUint32(24, true) === TRACK_SAMPLE_RATE, "WAV: частота дискретизации");
+      assert(view.getUint16(34, true) === 16, "WAV: 16 бит на сэмпл");
+      const frames = view.getUint32(40, true) / 2;
+      assert(frames === TRACK_SAMPLE_RATE * 2, `WAV: 2 с должно быть ${TRACK_SAMPLE_RATE * 2} кадров, есть ${frames}`);
+      let peak = 0;
+      for (let i = 44; i < wav.length; i += 2) peak = Math.max(peak, Math.abs(view.getInt16(i, true)));
+      assert(peak > 3000, `WAV: сигнал не должен быть тишиной (пик ${peak})`);
+      assert(renderTrackWav(station, 1).length !== renderTrackWav(station, 2).length, "Длина WAV зависит от запрошенных секунд");
+
+      // 5. Блокировка селектора «как в реальном автомобиле»: Shift Lock / BTSI
+      const deadEngine = shiftLockState({ gear: "P", engineOn: false, brake: 1 }, 0);
+      assert(deadEngine.locked && deadEngine.reason === "engine_off", "Заглушенный ДВС должен запирать селектор");
+      const noBrake = shiftLockState({ gear: "P", engineOn: true, brake: 0 }, 0, "D");
+      assert(noBrake.locked && noBrake.reason === "brake" && noBrake.brakeRequired, "BTSI: выход из P без тормоза заперт");
+      const withBrake = shiftLockState({ gear: "P", engineOn: true, brake: SHIFT_LOCK_MIN_BRAKE }, 0, "D");
+      assert(!withBrake.locked && withBrake.reason === null, "BTSI: с нажатым тормозом селектор свободен");
+      const moving = shiftLockState({ gear: "D", engineOn: true, brake: 1 }, 8, "P");
+      assert(moving.locked && moving.reason === "speed", "P на ходу должен быть заперт");
+      const driving = shiftLockState({ gear: "D", engineOn: true, brake: 0 }, 15, "D");
+      assert(!driving.locked, "В движении в D селектор не заперт");
+
+      return `станций=${INTERNET_RADIO_STATIONS.length} · WAV ${(wav.length / 1024).toFixed(0)} КБ/2 с · пик ${peak} · Shift Lock OK`;
     },
   },
 ];

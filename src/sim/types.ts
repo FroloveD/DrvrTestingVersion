@@ -14,7 +14,7 @@
  */
 
 /** P — Parking (стояночная блокировка АКПП), R/N/D — рабочие режимы, 1–3 — ручные ступени. */
-export type Gear = "P" | "R" | "N" | "D" | "1" | "2" | "3";
+export type Gear = "P" | "R" | "N" | "D" | "1" | "2" | "3" | "4" | "5" | "6";
 
 export type TurnSignal = "left" | "right" | "hazard" | null;
 
@@ -51,8 +51,11 @@ export type SimState = {
   swDeg: number; // град, -540..+540
   gear: Gear;
   prevGear: Gear;
-  autoSubGear: number; // 1..5 в режиме D
-  rpm: number; // 0 или 800..6500
+  autoSubGear: number; // 1..6 в режиме D (и синхронизированная ступень в M1..M6)
+  rpm: number; // 0 или 760..6500 об/мин (плавная инерция маховика)
+  throttlePos: number; // 0..1 сглаженное открытие электронной дроссельной заслонки
+  brakePos: number; // 0..1 сглаженное давление в гидроприводе рабочих тормозов
+  shiftTimer: number; // с оставшегося размыкания тяги при переключении передачи
   engineOn: boolean;
   handbrake: boolean;
   belt: boolean;
@@ -228,6 +231,14 @@ export type RoadSegment = {
   name?: string;
   hasSolidCenter?: boolean;
   speedLimitKmh?: number;
+  /** Одностороннее движение по ходу `points[0] → points[n-1]` (включая развёрнутые `oneway=-1` и кольца). */
+  oneway?: boolean;
+  /** Круговое движение (`junction=roundabout | circular`). */
+  roundabout?: boolean;
+  /** Вертикальный уровень OSM (`0` — земля, `> 0` — мост/эстакада, `< 0` — тоннель). */
+  layer?: number;
+  /** Подтип служебного проезда OSM (`driveway`, `parking_aisle`, `alley` и др.). */
+  service?: string;
 };
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
@@ -283,6 +294,21 @@ export type MapPackMeta = {
   buildingsCount: number;
   signalsCount: number;
   signsCount?: number;
+  /** Точка начала локальной метрической проекции WGS84 (для точного переимпорта без сдвига координат). */
+  origin?: { lat: number; lon: number };
+  /** Число распознанных односторонних участков (включая круговое движение). */
+  onewayRoadsCount?: number;
+  /** Сколько геометрических и дорожных конфликтов автоматически устранено при импорте реальной карты. */
+  resolvedConflictsCount?: number;
+  /** Сводка устранённых конфликтов импорта для инструктора. */
+  conflictNotes?: string[];
+};
+
+export type WorldBounds = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
 };
 
 export type WorldData = {
@@ -307,5 +333,16 @@ export type WorldData = {
    * карта OSM) — его снимок сохраняется в попытке, иначе реплей шёл бы по другому миру.
    */
   embedInAttempt?: boolean;
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Охватывающий прямоугольник мира (вычисляется по реальным пропорциям участка или `boundaryPolygon`). */
+  bounds: WorldBounds;
+  /**
+   * Произвольный замкнутый контур границы участка/маршрута (минимум 3 вершины, в метрах).
+   * Если задан — определяет точную неквадратную рабочую область (многоугольник, Г/Т-площадку или коридор маршрута).
+   */
+  boundaryPolygon?: Vec2[];
+  /**
+   * Произвольный многоугольный контур асфальтовой площадки автодрома (минимум 3 вершины, в метрах).
+   * Если задан — 3D-сцена и 2D-реплей строят асфальтовое покрытие и кромку точно по этой форме (вместо прямоугольника).
+   */
+  lotPolygon?: Vec2[];
 };
