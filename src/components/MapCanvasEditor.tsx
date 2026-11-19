@@ -277,15 +277,26 @@ export function MapCanvasEditor({
     });
   }, []);
 
+  // React может регистрировать wheel-обработчики как passive: preventDefault()
+  // тогда не отменяет прокрутку документа. Нативный listener с passive:false
+  // гарантированно оставляет колесо мыши внутри карты.
   const handleWheel = useCallback(
-    (e: React.WheelEvent<SVGSVGElement>) => {
-      e.preventDefault();
+    (e: WheelEvent) => {
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
       const pt = clientToWorld(e.clientX, e.clientY);
       const factor = e.deltaY > 0 ? 1.16 : 1 / 1.16;
       zoomBy(factor, pt?.sx, pt?.sy);
     },
     [clientToWorld, zoomBy]
   );
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    svg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
 
   const fitView = useCallback(() => {
     setVb(computeFitViewBox(def.bounds));
@@ -554,13 +565,12 @@ export function MapCanvasEditor({
           ref={svgRef}
           data-testid="map-editor-canvas"
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-          onWheel={handleWheel}
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={endPointerDrag}
           onPointerCancel={endPointerDrag}
           onPointerLeave={() => setCursor(null)}
-          style={{ touchAction: "none" }}
+          style={{ touchAction: "none", overscrollBehavior: "contain" }}
           className={`w-full h-[460px] sm:h-[520px] ${
             tool === "pan" ? "cursor-grab active:cursor-grabbing" : tool === "select" ? "cursor-default" : "cursor-crosshair"
           }`}
