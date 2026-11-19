@@ -61,25 +61,33 @@ function makeRng(seedInit: number): () => number {
  * солнечный диск с ореолом (согласованный с направлением `DirectionalLight` +26, +44, -20)
  * и мягкий рефлекс земли в нижней полусфере для реалистичных PBR-отражений на кузове и стёклах.
  */
-export function makeCloudySkyTexture(): THREE.CanvasTexture {
+export function makeCloudySkyTexture(equirectangular = true): THREE.CanvasTexture {
   const w = 512;
   const h = 256;
-  const horizonY = h * 0.5;
+  const horizonY = equirectangular ? h * 0.5 : h;
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
   const g = c.getContext("2d")!;
 
-  // Верхняя полусфера (зенит -> горизонт) и нижняя полусфера (городской рефлекс для IBL-кубмапы)
+  // Верхняя полусфера (зенит -> горизонт) и при 360°-режиме нижняя полусфера (городской рефлекс для IBL-кубмапы)
   const skyGrad = g.createLinearGradient(0, 0, 0, h);
-  skyGrad.addColorStop(0, "#24558b");
-  skyGrad.addColorStop(0.18, "#447db6");
-  skyGrad.addColorStop(0.35, "#7cb0da");
-  skyGrad.addColorStop(0.46, "#bdd8ec");
-  skyGrad.addColorStop(0.5, "#dce9f3");
-  skyGrad.addColorStop(0.53, "#bcc8ce");
-  skyGrad.addColorStop(0.66, "#6f7b78");
-  skyGrad.addColorStop(1, "#3f4847");
+  if (equirectangular) {
+    skyGrad.addColorStop(0, "#24558b");
+    skyGrad.addColorStop(0.18, "#447db6");
+    skyGrad.addColorStop(0.35, "#7cb0da");
+    skyGrad.addColorStop(0.46, "#bdd8ec");
+    skyGrad.addColorStop(0.5, "#dce9f3");
+    skyGrad.addColorStop(0.53, "#bcc8ce");
+    skyGrad.addColorStop(0.66, "#6f7b78");
+    skyGrad.addColorStop(1, "#3f4847");
+  } else {
+    skyGrad.addColorStop(0, "#2b5e96");
+    skyGrad.addColorStop(0.36, "#5a91c5");
+    skyGrad.addColorStop(0.7, "#9dc2e2");
+    skyGrad.addColorStop(0.9, "#cde0ef");
+    skyGrad.addColorStop(1, "#e2ecf4");
+  }
   g.fillStyle = skyGrad;
   g.fillRect(0, 0, w, h);
 
@@ -184,7 +192,9 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.mapping = THREE.EquirectangularReflectionMapping;
+  if (equirectangular) {
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+  }
   return tex;
 }
 
