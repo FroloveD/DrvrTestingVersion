@@ -778,6 +778,9 @@ try {
 
   // 3D-органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, свет и ENGINE START/STOP доступны кликом
   // (координаты берём из отладочного моста __cdtCockpit — реальный raycast по 3D-мешам).
+  // Возвращаемся в салон (после K7c вид сзади) и направляем взгляд на центральную консоль с 7" ШГУ
+  await page.keyboard.press("Digit2");
+  await sleep(260);
   await page.getByTestId("cockpit-look-headunit").click();
   await sleep(320);
   const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
