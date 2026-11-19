@@ -30,10 +30,10 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 31 автотест ядра (T01–T31), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Тесты ядра | 32 автотеста ядра (T01–T32), прогоняются и в Node, и во вкладке «Тесты и Модули» |
 | Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–O, >105 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
-| Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
+| Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
 
 Ядро детерминированное: шаг 1/60 с, одинаковый ввод даёт одинаковый заезд при 30 и 144 FPS,
@@ -98,12 +98,13 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 31 автотестов ядра (T01–T31) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 32 автотеста ядра (T01–T32) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
 | `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |
 | `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |
 | `src/maps/boundary.ts` | геометрия произвольных границ мира: шаблоны форм, проверка полигона, проекция автомобиля внутрь и обрезка по контуру |
 | `src/maps/route.ts` | сшивка сегментов, кандидаты и граф маршрутов с учётом oneway/layer, стартовая поза и текущая улица |
+| `src/maps/routeCatalog.ts` | построение и проверка записей каталога OSM: путь, КТ, fingerprint и снимок карты |
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
 | `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
 | `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |
@@ -115,11 +116,13 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |
+| `src/storage/routeCatalogStore.ts` | отдельная IndexedDB `cdt-route-catalog` для каталога маршрутов |
 | `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, экспорт strategy.md |
+| `src/components/RouteCatalogView.tsx` | выбор начала/конца на SVG-схеме OSM, проверка, сохранение, импорт/экспорт и открытие маршрута |
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–O |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–P |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
@@ -151,6 +154,8 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 IndexedDB `cdt-journal`: store `meta` (лёгкие записи журнала) и `payload` (поток ввода, траектория,
 мир своего сценария, правила на момент заезда). Одна попытка — одна запись: повторное сохранение обновляет её.
 
+Отдельная IndexedDB `cdt-route-catalog` (store `routes`) хранит `cdt.route.v1`: геометрию пути, контрольные точки, ODbL-метаданные, fingerprint и полный снимок карты. Экспорт каталога — `cdt.routes.v1.json`; сервер и Overpass в рантайме не используются.
+
 localStorage:
 
 ```text
@@ -163,7 +168,7 @@ cdt.gamepad.profile.v2  включённое устройство, откали�
 cdt.activeStudent.v1    активный ученик в кабинете инструктора
 cdt.instructorName.v1   имя инструктора для сверки
 cdt.blindReview.v1      слепой режим: вердикты скрыты до оценки
-cdt.strategy.v1         прогресс по следующим действиям стратегии
+cdt.strategy.v3         прогресс по следующим действиям стратегии
 cdt.licenseNote.v1      решение владельца по лицензии
 cdt-checklist-v1        чек-лист исторического аудита (AuditView)
 cdt.attempts.journal.v1 устаревший ключ: переносится в IndexedDB и удаляется
@@ -185,10 +190,14 @@ cdt.gamepad.mapping.v1  устаревший ключ: удаляется при
 
 ## 7. Открытые задачи (по приоритету)
 
-**Сейчас — доверие к оценке**
-1. Снять 10–20 реальных заездов и получить вердикты 2–3 инструкторов (есть слепой режим и журнал сверки).
-2. Подписать набор правил: статус `instructor_signed`, ФИО, ссылка на нормативный документ и дату редакции.
-3. Зафиксировать размеры боксов по нормативу (сейчас 2,5 × 5,3 м — предварительные).
+**Сейчас — каталог экзаменационных маршрутов OSM**
+1. Проверить построение между разными улицами, связность, one-way и уровни layer на нескольких картах.
+2. Проверить сохранение/импорт каталога, snapshot карты и повторное открытие маршрута после перезагрузки.
+3. Добавить редактор контрольных точек, манёвров и заданий экзаменатора.
+
+**Дальше — качество и калибровка**
+4. Продолжить аудит сложных OSM-сцен: развязки, мосты/тоннели, разорванные сегменты и границы импорта.
+5. Снять 10–20 реальных заездов и получить вердикты 2–3 инструкторов; подписать набор правил `instructor_signed`.
 
 **Дальше — распространение**
 4. Выбрать LICENSE и условия распространения; поле для решения уже есть в правовом блоке.
