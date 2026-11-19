@@ -731,6 +731,7 @@ try {
   const mouseSteerMode = page.getByTestId("mouse-steer-mode");
   await mouseSteerMode.selectOption("hold");
   await page.mouse.move(sceneX, sceneY);
+  await sleep(850); // дать рулю завершить возврат к центру после предыдущего свободного теста
   const wheelBeforeHoldDrag = await wheelReadout.innerText();
   await page.mouse.move(sceneX + 55, sceneY);
   await sleep(120);
