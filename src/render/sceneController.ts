@@ -15,6 +15,7 @@
  */
 import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
+import { roadGeometryPoints } from "../maps/route";
 import { makeRoadSignTexture } from "./roadSignTextures";
 import type {
   CameraMode,
