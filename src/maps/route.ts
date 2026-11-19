@@ -3,7 +3,7 @@
  * @layer pure-core
  * @role Построение учебного маршрута по дорожной сети OSM: сшивка сегментов улиц, учёт произвольной границы и препятствий, кратчайший путь по графу дорог и улица в HUD.
  * @invariants #1 (координаты: правая полоса = смещение вдоль `(-cos h, sin h)`), #7 (чистое ядро без DOM и three), #8 (офлайн).
- * @tests T21, T30, T32
+ * @tests T21, T30, T32, T33
  */
 import { SpatialGrid } from "../sim/spatialGrid";
 import type { ObstacleBox, RoadSegment, RouteCheckpoint, Vec2, WorldBounds } from "../sim/types";
