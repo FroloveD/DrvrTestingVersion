@@ -198,6 +198,8 @@ export function SimulatorView({
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
+  const [quickStartUsed, setQuickStartUsed] = useState(false);
   const [webglFallback, setWebglFallback] = useState(false);
   const [pedalVisual, setPedalVisual] = useState<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
 
@@ -422,6 +424,8 @@ export function SimulatorView({
       stateRef.current = initState;
       inputRef.current = useReady ? createReadyInput(defGear) : createInitialInput();
       throttleBoostRef.current = 1;
+      setShowQuickStartPrompt(true);
+      setQuickStartUsed(false);
       gridRef.current = new SpatialGrid(targetWorld.obstacles, 10);
       recorderRef.current = new AttemptRecorder(initState, useReady);
       latestViolationRef.current = null;
@@ -958,6 +962,9 @@ export function SimulatorView({
 
   /** Явное действие ученика: переводит автомобиль из холодного старта P в рабочий режим. */
   const handleQuickStart = () => {
+    if (quickStartUsed) return;
+    setQuickStartUsed(true);
+    setShowQuickStartPrompt(false);
     const inp = inputRef.current;
     const targetGear: Gear = defaultGearForWorld(worldRef.current);
     inp.engineOn = true;
@@ -1361,10 +1368,16 @@ export function SimulatorView({
               }`}
             >
               <span>{s.statusText}</span>
-              {needsPrep && !s.finished && (
-                <button type="button" onClick={handleQuickStart} className="btn btn-primary btn-mini py-1 px-2.5">
-                  Быстрый старт
-                </button>
+              {needsPrep && !s.finished && showQuickStartPrompt && !quickStartUsed && (
+                <>
+                  <span className="text-[11px] text-[#9fb2be]">Подготовка: ДВС, ремень, ручник и передача</span>
+                  <button type="button" data-testid="quick-start-button" onClick={handleQuickStart} className="btn btn-primary btn-mini py-1 px-2.5">
+                    Быстрый старт
+                  </button>
+                  <button type="button" data-testid="quick-start-dismiss" aria-label="Закрыть окно быстрого старта" title="Закрыть подсказку до следующего сброса" onClick={() => setShowQuickStartPrompt(false)} className="mono text-xs text-[#8fa2ae] hover:text-white px-1">
+                    ✕
+                  </button>
+                </>
               )}
               {s.finished && (
                 <button type="button" onClick={handleFinishAndDebrief} className="btn btn-primary btn-mini py-1 px-2.5">
