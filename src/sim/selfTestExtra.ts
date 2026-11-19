@@ -20,6 +20,7 @@ import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
+  roundRoadPolyline,
   defaultCustomScenario,
   customFromOsmPack,
   customFromWorld,
@@ -584,6 +585,18 @@ export const extraCases: SelfTestCase[] = [
       assert(!lotOffWorld.roads.some((road) => road.id === "custom-lot"), "При отключении площадка не должна попадать в 3D-мир");
       assert(lotOffWorld.bays.length === lotOnWorld.bays.length && lotOffWorld.obstacles.length === lotOnWorld.obstacles.length,
         "Отключение асфальта не должно удалять боксы и препятствия");
+
+      const sharp = [{ x: 0, z: 0 }, { x: 0, z: 20 }, { x: 20, z: 20 }];
+      const rounded = roundRoadPolyline(sharp, 5);
+      assert(rounded.length > sharp.length, "Скругление должно добавлять промежуточные точки дуги");
+      assert(rounded[0].x === 0 && rounded[0].z === 0 && rounded[rounded.length - 1].x === 20 && rounded[rounded.length - 1].z === 20,
+        "Скругление должно сохранять начало и конец дороги");
+      assert(roundRoadPolyline(sharp, 0).length === sharp.length, "Нулевой радиус должен сохранять острые углы");
+      const curvedDef = { ...emptyCustomScenario(), roads: [{ id: "rounded", points: sharp, width: 1.5, lanes: 1, highway: "service", cornerRadiusM: 5 }] };
+      const curvedWorld = buildCustomWorld(curvedDef);
+      assert(curvedWorld.roads.find((road) => road.id === "rounded")?.points.length === rounded.length,
+        "3D-мир должен получать сглаженную осевую линию дороги");
+      assert(validateCustomScenario(curvedDef).errors.length === 0, "Ширина 1,5 м должна проходить валидацию");
 
       // Клон встроенного города переносит дороги, светофоры, переход, знак 40 и ODbL
       const cityWorld = buildScenarioWorld("city_osm", DEFAULT_CALIBRATION);
