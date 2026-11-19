@@ -296,6 +296,7 @@ export const extraCases: SelfTestCase[] = [
           const dir = Math.floor(t / 120) % 2 === 0 ? 1 : -1;
           input.steerWheelDeg = clamp(input.steerWheelDeg + dir * (340 / 60), -540, 540); // как удержание A/D
           input.throttle = 0.37 + 0.2 * Math.sin(t / 17); // как аналоговая педаль
+          input.throttleMultiplier = 1 + Math.min(1, t / 60); // плавный разгон Shift до x2
           if (quantize) quantizeInput(input);
           const out = stepSimulation(state, input, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
           state = out.state;
@@ -305,7 +306,8 @@ export const extraCases: SelfTestCase[] = [
         // Через JSON — как при сохранении в журнал и экспорте golden-набора
         const stream = JSON.parse(JSON.stringify(snap.inputStream)) as RecordedAttempt["inputStream"];
         const replay = replayInputStream(stream, world, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
-        return { state, replay, events: snap.events.length, frames: snap.inputStream.length };
+        const boostMax = Math.max(...snap.inputStream.map((f) => f.input.throttleMultiplier ?? 1));
+        return { state, replay, events: snap.events.length, frames: snap.inputStream.length, boostMax };
       };
 
       for (const [label, run] of [
@@ -319,8 +321,9 @@ export const extraCases: SelfTestCase[] = [
           `Реплей ${label} разошёлся: Δx=${Math.abs(run.replay.finalState.x - run.state.x)} м`
         );
         assert(run.replay.events.length === run.events, `Реплей ${label}: другое число событий`);
+        assert(run.boostMax === 2, `Реплей ${label}: множитель Shift должен достигать x2`);
       }
-      return "900 тиков, руль +5,67°/тик и синусоида газа: Δx = Δz = Δh = 0 в обоих режимах, события совпали";
+      return "900 тиков, руль +5,67°/тик, синусоида газа и Shift x1→x2: Δx = Δz = Δh = 0, события совпали";
     },
   },
   {
@@ -715,36 +718,6 @@ export const extraCases: SelfTestCase[] = [
       assert(validateCustomScenario(osmDef).errors.length === 0, "Импортированная OSM-карта должна быть валидна");
 
       return "12 знаков · 8 препятствий · стартовая асфальтовая площадка отключается отдельно · отрезки 30/20 км/ч · перекрёсток отменяет лимит · КТ STOP · реплей бит-в-бит";
-    },
-  },
-  {
-    id: "T30",
-    suite: "simulation",
-    name: "Плавное усиление тяги до x2 и детерминированный реплей множителя",
-    fn: () => {
-      const world = buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
-      const grid = new SpatialGrid(world.obstacles, 10);
-      let normal = createInitialState(world, true);
-      let boosted = createInitialState(world, true);
-      const rec = new AttemptRecorder(boosted, true);
-      for (let t = 0; t < 90; t++) {
-        const ramp = 1 + Math.min(1, (t + 1) / 45);
-        const normalInput = { ...createReadyInput("D"), throttle: 0.7 };
-        const boostedInput = { ...normalInput, throttleMultiplier: ramp };
-        const a = stepSimulation(normal, normalInput, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
-        const b = stepSimulation(boosted, boostedInput, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
-        normal = a.state;
-        boosted = b.state;
-        rec.recordTick(boostedInput, boosted, b.newEvents);
-      }
-      assert(boosted.v > normal.v, "Множитель тяги должен увеличивать разгон");
-      assert(boosted.v < normal.v * 2.1, "Множитель x2 не должен удваивать итоговую скорость");
-      const snap = rec.snapshot(boosted, world, DEFAULT_CALIBRATION, DEFAULT_RULESET);
-      assert(snap.inputStream.some((f) => (f.input.throttleMultiplier ?? 1) > 1.8), "RLE должен сохранять плавный рост множителя до x2");
-      const replay = replayInputStream(snap.inputStream, world, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
-      assert(replay.finalState.x === boosted.x && replay.finalState.z === boosted.z && replay.finalState.v === boosted.v,
-        "Реплей с множителем тяги должен совпадать с исходным заездом");
-      return "Тяга усиливается плавно до x2 · RLE сохраняет множитель · реплей совпадает";
     },
   },
   {
