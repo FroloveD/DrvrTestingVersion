@@ -707,22 +707,29 @@ try {
     JSON.stringify({ isMin, fullH: scoreFull?.height, minH: scoreMin?.height, closedGone, reopened }));
 
   // Подсказка КПП при наведении на HUD и живое переключение передач 3D-рычагом АКПП в салоне
+  // (возвращаем statusBar с центра холста после K2 на штатное место, чтобы не перекрывал центр 3D-салона)
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByRole("button", { name: "Сбросить раскладку" }).click();
+  await page.getByRole("button", { name: "Закрыть настройки управления" }).click();
+  await sleep(120);
+  const canvasEl = page.locator("canvas").first();
+  await canvasEl.scrollIntoViewIfNeeded();
   const hudDriveBtn = page.locator('[data-gear-slot="D"]');
   await hudDriveBtn.hover();
-  await sleep(100);
+  await sleep(120);
   const hudHintText = (await page.locator('[data-testid="hud-gearbox-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
   const hudHintOk = hudHintText.includes("6АКПП") && hudHintText.includes("Shift") && hudHintText.includes("M1–M6") && hudHintText.includes("3D-рычаг");
-  // Убираем фокус с кнопки HUD, переходим к 3D-рычагу АКПП в салоне (G) и заводим ДВС (I)
-  await page.mouse.move(20, 20);
+  // Переходим к 3D-рычагу АКПП в салоне (G) и заводим ДВС (I)
   await page.keyboard.press("KeyG");
   await page.locator('[data-testid="cockpit-look-shifter"]').waitFor({ timeout: 5000 });
   await page.keyboard.press("KeyI");
-  // Дожидаемся хотя бы двух кадров rAF после переключения камеры в салон под SwiftShader
+  // Дожидаемся двух полных кадров rAF после переключения камеры в салон под SwiftShader
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await sleep(160);
-  const cvBox = await page.locator("canvas").first().boundingBox();
-  const knobPx = { x: cvBox.x + cvBox.width * 0.488, y: cvBox.y + cvBox.height * 0.489 };
+  const cvBox = await canvasEl.boundingBox();
+  const knobPx = { x: cvBox.x + cvBox.width * 0.486, y: cvBox.y + cvBox.height * 0.486 };
   const slotDPx = { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
+  const topTag = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName || "NONE", knobPx);
   await page.mouse.move(knobPx.x, knobPx.y);
   await sleep(140);
   const cabinHintText = (await page.locator('[data-testid="cockpit-shifter-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
@@ -742,7 +749,7 @@ try {
   const afterDragM2 = (await hudDriveBtn.innerText()).trim();
   // Возвращаем рычаг в центр M и толкаем вправо обратно в автомат D
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
-  await page.mouse.move(slotDPx.x + 6, slotDPx.y, { steps: 5 });
+  await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
   await page.mouse.up();
   await sleep(100);
   const afterBackD = (await hudDriveBtn.innerText()).trim();
@@ -751,7 +758,7 @@ try {
   await sleep(120);
   check("K7c подсказки КПП (HUD + 3D-рычаг) и переключение рычагом в салоне P→D1→M1→M2→D1",
     hudHintOk && cabinHintOk && afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && afterBackD === "D1",
-    JSON.stringify({ hudHintOk, cabinHintOk, afterDragD, afterDragM1, afterDragM2, afterBackD }));
+    JSON.stringify({ topTag, hudHintOk, cabinHintOk, afterDragD, afterDragM1, afterDragM2, afterBackD }));
 
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
