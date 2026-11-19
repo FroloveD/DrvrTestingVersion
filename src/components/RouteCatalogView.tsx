@@ -168,7 +168,9 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     const svg = event.currentTarget.ownerSVGElement;
     if (!svg) return;
     dragCheckpointRef.current = checkpointId;
-    svg.setPointerCapture(event.pointerId);
+    // Capture on the marker that received pointerdown. Captured pointermove
+    // events bubble to the SVG map handler even after the pointer leaves it.
+    event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   };
 
@@ -187,11 +189,9 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     });
   };
 
-  const handleCheckpointPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const handleCheckpointPointerUp = (_event: ReactPointerEvent<SVGSVGElement>) => {
+    // The browser releases pointer capture automatically after pointerup.
     dragCheckpointRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
   };
 
   const handleSaveEdit = async (route: ExamRouteRecord) => {
