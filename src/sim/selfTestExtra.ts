@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
