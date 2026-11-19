@@ -5,6 +5,7 @@
  * @tests T34 (ядро маршрутизации), Browser Smoke P.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import {
   buildExamRouteRecord,
@@ -25,12 +26,19 @@ type Props = {
 type Bounds = { minX: number; maxX: number; minZ: number; maxZ: number };
 
 function mapBounds(source: CustomScenarioDef): Bounds | null {
-  const points = (source.roads ?? []).flatMap((road) => road.points);
-  if (points.length < 2) return null;
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minZ = Math.min(...points.map((point) => point.z));
-  const maxZ = Math.max(...points.map((point) => point.z));
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  let count = 0;
+  for (const road of source.roads ?? []) {
+    for (const point of road.points) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) continue;
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minZ = Math.min(minZ, point.z);
+      maxZ = Math.max(maxZ, point.z);
+      count += 1;
+    }
+  }
+  if (count < 2) return null;
   const pad = Math.max(18, Math.max(maxX - minX, maxZ - minZ) * 0.06);
   return { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad };
 }
@@ -75,7 +83,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     return () => { alive = false; };
   }, []);
 
-  const handleMapClick = (event: React.MouseEvent<SVGSVGElement>) => {
+  const handleMapClick = (event: MouseEvent<SVGSVGElement>) => {
     if (!bounds) return;
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
@@ -304,6 +312,6 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   );
 }
 
-function ChipFallback({ children }: { children: React.ReactNode }) {
+function ChipFallback({ children }: { children: ReactNode }) {
   return <span className="inline-flex items-center rounded-full px-2 py-1 text-[10px] font-bold bg-[#f5b942]/10 text-[#f5b942] border border-[#f5b942]/20">{children}</span>;
 }
