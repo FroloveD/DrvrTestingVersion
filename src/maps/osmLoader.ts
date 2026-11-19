@@ -427,6 +427,8 @@ function parseOverpassElements(elements: RawOsmElement[], title: string, source:
           name: el.tags.name,
           hasSolidCenter: lanes >= 2 && width >= 7,
           speedLimitKmh,
+          layer: parseNumericTag(el.tags.layer) ?? 0,
+          oneway: el.tags.oneway === "yes" || el.tags.oneway === "1" || el.tags.oneway === "true",
         });
         if (maxspeed && maxspeed <= 40 && speedZones.length < 20) {
           const midIdx = Math.floor(pts.length / 2);
@@ -573,6 +575,8 @@ function parseGeoJsonFeatures(features: GeoJsonFeature[], title: string): Normal
         name: tags.name,
         hasSolidCenter: lanes >= 2,
         speedLimitKmh: maxspeed ?? preset.limit,
+        layer: parseNumericTag(tags.layer) ?? 0,
+        oneway: tags.oneway === "yes" || tags.oneway === "1" || tags.oneway === "true",
       });
       if (maxspeed && maxspeed <= 40 && signs.length < 80 && speedZones.length < 20) {
         const mid = pts[Math.floor(pts.length / 2)];
