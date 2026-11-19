@@ -5,6 +5,7 @@
  * @invariants #1–#7, #10–#11, #15 (детерминизм, холодный старт P, S не даёт реверс в D, аварийка не заменяет Q/E на старте).
  * @tests T01, T03, T04, T08, T10, T15, T22, T24, T25
  */
+import { clampCarToWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import type { RuleSet } from "../scoring/rules";
 import { findBayLineCross, findBayUnderCarCenter, findCompletedBay, SpatialGrid } from "./spatialGrid";
 import type {
@@ -334,9 +335,18 @@ export function stepSimulation(
     const ph = s.h;
     const ds = s.v * subDt;
 
-    s.x = clamp(s.x + Math.sin(s.h) * ds, world.bounds.minX, world.bounds.maxX);
-    s.z = clamp(s.z + Math.cos(s.h) * ds, world.bounds.minZ, world.bounds.maxZ);
-    s.h += (ds / CAR.wheelbase) * Math.tan(s.steer);
+    const nextX = clamp(s.x + Math.sin(s.h) * ds, world.bounds.minX, world.bounds.maxX);
+    const nextZ = clamp(s.z + Math.cos(s.h) * ds, world.bounds.minZ, world.bounds.maxZ);
+    const nextH = s.h + (ds / CAR.wheelbase) * Math.tan(s.steer);
+    if (isValidBoundaryPolygon(world.boundaryPolygon)) {
+      const pos = clampCarToWorldBoundary(nextX, nextZ, nextH, CAR.width * 0.5, CAR.length * 0.5, world.bounds, world.boundaryPolygon);
+      s.x = pos.x;
+      s.z = pos.z;
+    } else {
+      s.x = nextX;
+      s.z = nextZ;
+    }
+    s.h = nextH;
 
     const { hit, checked } = grid.queryCarHit(s.x, s.z, s.h);
     gridChecks = Math.max(gridChecks, checked);
