@@ -239,8 +239,12 @@ export type RoadSegment = {
   cornerRadiusM?: number;
   /** Высотный уровень OSM: положительное значение — эстакада/мост, отрицательное — тоннель. */
   layer?: number;
-  /** Одностороннее движение по данным OSM. */
+  /** Одностороннее движение по ходу points (включая развёрнутые oneway=-1). */
   oneway?: boolean;
+  /** Круговое движение OSM (junction=roundabout|circular). */
+  roundabout?: boolean;
+  /** Подтип сервисного проезда OSM (driveway, parking_aisle, alley и др.). */
+  service?: string;
 };
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
@@ -296,7 +300,17 @@ export type MapPackMeta = {
   buildingsCount: number;
   signalsCount: number;
   signsCount?: number;
+  /** Начало локальной метрической проекции WGS84 для точного повторного импорта. */
+  origin?: { lat: number; lon: number };
+  /** Количество распознанных односторонних участков (включая кольца). */
+  onewayRoadsCount?: number;
+  /** Число автоматически устранённых конфликтов геометрии/дорог. */
+  resolvedConflictsCount?: number;
+  /** Сводка устранённых конфликтов импорта для инструктора. */
+  conflictNotes?: string[];
 };
+
+export type WorldBounds = { minX: number; maxX: number; minZ: number; maxZ: number };
 
 export type WorldData = {
   scenarioId: ScenarioId;
@@ -320,7 +334,7 @@ export type WorldData = {
    * карта OSM) — его снимок сохраняется в попытке, иначе реплей шёл бы по другому миру.
    */
   embedInAttempt?: boolean;
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  bounds: WorldBounds;
   /** Произвольный контур границы рабочей области мира (необязательно). */
   boundaryPolygon?: Vec2[];
   /** Контур асфальтовой площадки автодрома (необязательно). */

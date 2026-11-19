@@ -1,20 +1,35 @@
 /**
  * @module maps/osmXml
  * @layer pure-core
- * @role Автономный парсер стандартных файлов `.osm` (XML с openstreetmap.org и JOSM) без DOMParser и внешних пакетов.
+ * @role Автономный парсер стандартных файлов `.osm` (XML v0.6 с openstreetmap.org, JOSM и Overpass), включая `<bounds>` и `<relation>` мультиполигонов, без DOMParser и внешних пакетов.
  * @invariants #7 (чистое ядро — исполняется в Node.js и браузере без DOM), #8 (строго офлайн), #9 (ODbL 1.0).
- * @tests T27
+ * @tests T27, T30, T33
  */
 
-/** Унифицированный элемент OSM, совместимый со структурой Overpass JSON (`node` / `way`). */
+/** Участник отношения OSM (`<member type="way|node|relation" ref="..." role="outer|inner|..."/>`). */
+export type RawOsmMember = {
+  type: "node" | "way" | "relation";
+  ref: number;
+  role: string;
+  geometry?: Array<{ lat: number; lon: number }>;
+};
+
+/** Унифицированный элемент OSM, совместимый со структурой Overpass JSON (`node` / `way` / `relation`). */
 export type RawOsmElement = {
   type: "node" | "way" | "relation";
   id: number;
   lat?: number;
   lon?: number;
   nodes?: number[];
+  members?: RawOsmMember[];
   geometry?: Array<{ lat: number; lon: number }>;
   tags?: Record<string, string>;
+};
+
+export type ParsedOsmXmlDoc = {
+  elements: RawOsmElement[];
+  /** Рамка экспорта `<bounds minlat minlon maxlat maxlon/>` в формате `[minLon, minLat, maxLon, maxLat]`. */
+  exportBbox?: [number, number, number, number];
 };
 
 const XML_ENTITIES: Record<string, string> = {
@@ -57,24 +72,43 @@ function isIgnoredElement(attrs: Record<string, string>): boolean {
 }
 
 /**
- * Разбирает содержимое локального файла `.osm` (XML v0.6) в список `node` и `way`
- * с координатами, ссылками `<nd ref="..."/>` и тегами `<tag k="..." v="..."/>`.
- * Поддерживает как самозакрывающиеся `<node .../>`, так и вложенные блоки, а также
- * формат Overpass XML (`<nd lat="..." lon="..."/>`).
+ * Разбирает содержимое локального файла `.osm` (XML v0.6) в структуру `{ elements, exportBbox }`.
+ * Поддерживает `<bounds/>`, `<node>`, `<way>`, `<relation>` (мультиполигоны зданий с дворами и границы маршрутов)
+ * и Overpass XML (`<nd lat lon/>`, `<member ...><nd lat lon/></member>`).
  */
-export function parseOsmXmlElements(xml: string): RawOsmElement[] {
+export function parseOsmXmlDocument(xml: string): ParsedOsmXmlDoc {
   if (typeof xml !== "string" || !xml.trim()) {
     throw new Error("OSM XML-файл пуст.");
   }
-  // Убираем BOM и XML-комментарии
   const cleaned = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
   if (!/<osm[\s>]/i.test(cleaned)) {
     throw new Error("Не найден корневой тег <osm>: ожидается выгрузка OpenStreetMap (.osm XML).");
   }
 
+  let exportBbox: [number, number, number, number] | undefined;
+  const boundsMatch = cleaned.match(/<bounds\b([^>]*?)\/?>/i);
+  if (boundsMatch) {
+    const ba = parseAttributes(boundsMatch[1]);
+    const minLat = Number(ba.minlat);
+    const minLon = Number(ba.minlon);
+    const maxLat = Number(ba.maxlat);
+    const maxLon = Number(ba.maxlon);
+    if (
+      Number.isFinite(minLat) &&
+      Number.isFinite(minLon) &&
+      Number.isFinite(maxLat) &&
+      Number.isFinite(maxLon) &&
+      maxLat > minLat &&
+      maxLon > minLon
+    ) {
+      exportBbox = [minLon, minLat, maxLon, maxLat];
+    }
+  }
+
   const elements: RawOsmElement[] = [];
-  const tagRe = /<(\/?)(node|way|nd|tag)\b([^>]*?)(\/?)>/gi;
+  const tagRe = /<(\/?)(node|way|relation|member|nd|tag)\b([^>]*?)(\/?)>/gi;
   let current: RawOsmElement | null = null;
+  let currentMember: RawOsmMember | null = null;
   let skipChildren = false;
   let autoId = 1_000_000;
 
@@ -86,11 +120,16 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
     const isSelfClosing = match[4] === "/";
 
     if (isClosing) {
-      if ((name === "node" || name === "way") && current && current.type === name) {
+      if (name === "member") {
+        currentMember = null;
+        continue;
+      }
+      if ((name === "node" || name === "way" || name === "relation") && current && current.type === name) {
         elements.push(current);
         current = null;
+        currentMember = null;
       }
-      if (name === "node" || name === "way") {
+      if (name === "node" || name === "way" || name === "relation") {
         skipChildren = false;
       }
       continue;
@@ -101,6 +140,7 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
         elements.push(current);
         current = null;
       }
+      currentMember = null;
       const attrs = parseAttributes(attrPart);
       if (isIgnoredElement(attrs)) {
         skipChildren = !isSelfClosing;
@@ -126,6 +166,7 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
         elements.push(current);
         current = null;
       }
+      currentMember = null;
       const attrs = parseAttributes(attrPart);
       if (isIgnoredElement(attrs)) {
         skipChildren = !isSelfClosing;
@@ -140,23 +181,68 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
       continue;
     }
 
+    if (name === "relation") {
+      if (current) {
+        elements.push(current);
+        current = null;
+      }
+      currentMember = null;
+      const attrs = parseAttributes(attrPart);
+      if (isIgnoredElement(attrs)) {
+        skipChildren = !isSelfClosing;
+        continue;
+      }
+      skipChildren = false;
+      const rawId = Number(attrs.id);
+      const id = Number.isFinite(rawId) ? rawId : autoId++;
+      const el: RawOsmElement = { type: "relation", id, members: [] };
+      if (isSelfClosing) elements.push(el);
+      else current = el;
+      continue;
+    }
+
     if (skipChildren || !current) continue;
 
-    if (name === "nd" && current.type === "way") {
+    if (name === "member" && current.type === "relation") {
       const attrs = parseAttributes(attrPart);
-      if (attrs.ref !== undefined) {
-        const ref = Number(attrs.ref);
-        if (Number.isFinite(ref)) {
-          current.nodes = current.nodes ?? [];
-          current.nodes.push(ref);
-        }
+      const mType = attrs.type;
+      const ref = Number(attrs.ref);
+      if ((mType === "node" || mType === "way" || mType === "relation") && Number.isFinite(ref)) {
+        const mem: RawOsmMember = {
+          type: mType,
+          ref,
+          role: attrs.role ?? "",
+        };
+        if (!current.members) current.members = [];
+        current.members.push(mem);
+        currentMember = isSelfClosing ? null : mem;
       }
-      if (attrs.lat !== undefined && attrs.lon !== undefined) {
+      continue;
+    }
+
+    if (name === "nd") {
+      const attrs = parseAttributes(attrPart);
+      if (current.type === "relation" && currentMember && attrs.lat !== undefined && attrs.lon !== undefined) {
         const lat = Number(attrs.lat);
         const lon = Number(attrs.lon);
         if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          current.geometry = current.geometry ?? [];
-          current.geometry.push({ lat, lon });
+          if (!currentMember.geometry) currentMember.geometry = [];
+          currentMember.geometry.push({ lat, lon });
+        }
+      } else if (current.type === "way") {
+        if (attrs.lat !== undefined && attrs.lon !== undefined) {
+          const lat = Number(attrs.lat);
+          const lon = Number(attrs.lon);
+          if (Number.isFinite(lat) && Number.isFinite(lon)) {
+            if (!current.geometry) current.geometry = [];
+            current.geometry.push({ lat, lon });
+          }
+        } else if (attrs.ref !== undefined) {
+          const ref = Number(attrs.ref);
+          if (Number.isFinite(ref)) {
+            if (!current.nodes) current.nodes = [];
+            current.nodes.push(ref);
+          }
         }
       }
       continue;
@@ -165,15 +251,17 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
     if (name === "tag") {
       const attrs = parseAttributes(attrPart);
       if (attrs.k && attrs.v !== undefined) {
-        current.tags = current.tags ?? {};
+        if (!current.tags) current.tags = {};
         current.tags[attrs.k] = attrs.v;
       }
     }
   }
 
   if (current) elements.push(current);
-  if (elements.length === 0) {
-    throw new Error("В .osm XML не найдено ни одного узла <node> или линии <way>.");
-  }
-  return elements;
+  return { elements, exportBbox };
+}
+
+/** Разбирает список элементов `.osm` XML (совместимая обёртка над `parseOsmXmlDocument`). */
+export function parseOsmXmlElements(xml: string): RawOsmElement[] {
+  return parseOsmXmlDocument(xml).elements;
 }
