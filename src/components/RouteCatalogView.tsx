@@ -279,7 +279,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
             </div>
             <h2 className="text-2xl font-extrabold tracking-tight">Каталог экзаменационных маршрутов</h2>
             <p className="text-sm text-[#9bafbc] mt-1 max-w-3xl">
-              Маршруты строятся по дорожному графу импортированной карты. Для каждого сохраняется отдельный снимок карты, контрольные точки и стартовая поза.
+              Маршруты строятся по дорожному графу импортированной карты. Снимок каждой карты хранится один раз и совместно используется маршрутами с одинаковым fingerprint; контрольные точки и стартовая поза принадлежат маршруту.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

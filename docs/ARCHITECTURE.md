@@ -286,7 +286,7 @@ requestAnimationFrame(now)
 - `src/maps/osmLoader.ts` нормализует OSM XML, Overpass JSON и GeoJSON: `oneway=-1`, roundabout, service, lanes/width, мосты/тоннели по `layer`, multipolygon-дома с дворами и WGS84 origin.
 - `src/maps/route.ts` строит кандидаты и граф дорожной сети с учётом направления и уровня дороги; узлы/сегменты индексируются пространственно, поиск пути выполняется A*; `cropOsmPackToPolygon()` ограничивает импорт произвольным полигоном.
 - `src/maps/routeCatalog.ts` строит сохраняемую запись между двумя точками, валидирует связность и границы, ставит автомобиль в правую полосу, выделяет повороты с сигналами, создаёт КТ и snapshot исходной карты; `reviseExamRouteRecord()` валидирует правки заданий и синхронизирует их со snapshot.
-- `src/storage/routeCatalogStore.ts` хранит записи каталога в отдельной IndexedDB `cdt-route-catalog`; интерфейс находится в `src/components/RouteCatalogView.tsx`.
+- `src/storage/routeCatalogStore.ts` хранит каталог в IndexedDB `cdt-route-catalog` v2: `routes` содержит отдельные маршруты, `maps` — общие OSM snapshot по fingerprint. При чтении маршрут гидратируется до полной доменной записи; экспорт JSON остаётся автономным. Интерфейс находится в `src/components/RouteCatalogView.tsx`.
 
 Новые поля схемы необязательны. `RoadSegment.cornerRadiusM` остаётся в активной модели; геометрия пользовательских дорог продолжает строиться через `roadGeometryPoints()`. OSM-импорт остаётся офлайн.
 
