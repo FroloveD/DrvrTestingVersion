@@ -752,7 +752,45 @@ export class SceneController {
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.9 });
     const whiteMarkMat = new THREE.MeshBasicMaterial({ color: 0xf1f5f9 });
 
-
+    // Асфальтовое покрытие по произвольному контуру площадки и обозначение границы мира.
+    const addWorldPolygon = (pts: readonly { x: number; z: number }[]) => {
+      if (pts.length < 3) return;
+      const shape = new THREE.Shape();
+      shape.moveTo(pts[0].x, -pts[0].z);
+      for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i].x, -pts[i].z);
+      shape.closePath();
+      const geo = new THREE.ShapeGeometry(shape);
+      geo.rotateX(-Math.PI / 2);
+      const pos = geo.attributes.position, uv = geo.attributes.uv;
+      if (pos && uv) {
+        for (let i = 0; i < pos.count; i++) uv.setXY(i, pos.getX(i) / 4.5, pos.getZ(i) / 4.5);
+        uv.needsUpdate = true;
+      }
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, asphaltMat);
+      mesh.position.y = 0.009; mesh.receiveShadow = true; this.worldGroup.add(mesh);
+      const edgeMat = new THREE.MeshBasicMaterial({ color: 0xf1f5f9 });
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
+        if (len < 1) continue;
+        const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.12, len), edgeMat);
+        edge.rotation.order = "YXZ"; edge.rotation.y = Math.atan2(dx, dz); edge.rotation.x = -Math.PI / 2;
+        edge.position.set((a.x + b.x) / 2, 0.016, (a.z + b.z) / 2); this.worldGroup.add(edge);
+      }
+    };
+    if (world.lotPolygon && world.lotPolygon.length >= 3) addWorldPolygon(world.lotPolygon);
+    else if (world.boundaryPolygon && world.boundaryPolygon.length >= 3) {
+      const edgeMat = new THREE.MeshBasicMaterial({ color: 0xf5b942, transparent: true, opacity: 0.7 });
+      for (let i = 0; i < world.boundaryPolygon.length; i++) {
+        const a = world.boundaryPolygon[i], b = world.boundaryPolygon[(i + 1) % world.boundaryPolygon.length];
+        const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
+        if (len < 0.5) continue;
+        const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.26, len), edgeMat);
+        edge.rotation.order = "YXZ"; edge.rotation.y = Math.atan2(dx, dz); edge.rotation.x = -Math.PI / 2;
+        edge.position.set((a.x + b.x) / 2, 0.04, (a.z + b.z) / 2); this.worldGroup.add(edge);
+      }
+    }
 
     // Дороги и разметка
     for (const road of world.roads) {
