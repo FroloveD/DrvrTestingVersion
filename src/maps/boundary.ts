@@ -5,7 +5,8 @@
  * @invariants #1 (координаты +Z север, +X лево, −X восток), #7 (чистое ядро без DOM и three), #8 (офлайн).
  * @tests T30
  */
-import type { Vec2, WorldBounds } from "../sim/types";
+import type { Vec2 } from "../sim/types";
+export type WorldBounds = { minX: number; maxX: number; minZ: number; maxZ: number };
 
 /** Максимальный модуль координаты мира (поддерживает реальные городские маршруты до 6×6 км). */
 export const MAX_WORLD_COORD = 3000;
