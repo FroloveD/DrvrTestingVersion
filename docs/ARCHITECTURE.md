@@ -28,7 +28,7 @@
 │  src/sim/*        types · vehicle · controls · spatialGrid · step       │
 │                   recorder · journal · golden · selfTest · selfTestExtra│
 │  src/scoring/*    rules (RuleSet, evaluateAttempt, DEFAULT_CALIBRATION) │
-│  src/maps/*       osmLoader · route                                     │
+│  src/maps/*       osmLoader · osmXml · route · boundary (произвольные полигоны мира)                                     │
 │  src/scenarios/*  catalog · custom                                      │
 │  src/analytics/*  summary · calibration (ДИ Уилсона)                    │
 │  src/storage/*    journalStore (IndexedDB с fallback в память)          │
@@ -253,3 +253,8 @@ requestAnimationFrame(now)
 ## Пользовательские дороги в редакторе карт
 
 Инструмент «Дорога» собирает осевую линию кликами по карте; Enter или двойной клик завершает черновик, Esc отменяет его. `RoadSegment.width` допускает 1,5–60 м. Необязательный `cornerRadiusM` задаёт квадратичное скругление узлов: исходные контрольные точки сохраняются в JSON, `roundRoadPolyline()` создаёт производную линию для SVG и `buildCustomWorld()`, поэтому 2D-предпросмотр и 3D-геометрия используют одну форму. Радиус ограничивается 45 % длины каждого соседнего сегмента, чтобы короткие участки не схлопывались.
+
+
+## Произвольные границы мира
+
+`src/maps/boundary.ts` содержит чистую геометрию полигональных границ: проверку простоты и площади, шаблоны неквадратных форм, проекцию точек и удержание габаритов автомобиля внутри контура. `CustomScenarioDef.boundaryPolygon` сохраняется в пользовательском сценарии; `WorldData.boundaryPolygon` ограничивает физику, а `lotPolygon` задаёт точную форму асфальтовой площадки.
