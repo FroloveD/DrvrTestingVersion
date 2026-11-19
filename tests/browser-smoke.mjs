@@ -725,8 +725,27 @@ try {
   await page.mouse.move(sceneX + 55, sceneY);
   await sleep(120);
   const wheelEnabledAfter = await wheelReadout.innerText();
-  check("L8b включённое руление мышью работает без удержания ЛКМ", wheelEnabledBefore !== wheelEnabledAfter,
+  check("L8b свободное руление мышью работает без удержания ЛКМ", wheelEnabledBefore !== wheelEnabledAfter,
     `${wheelEnabledBefore} -> ${wheelEnabledAfter}`);
+
+  const mouseSteerMode = page.getByTestId("mouse-steer-mode");
+  await mouseSteerMode.selectOption("hold");
+  await page.mouse.move(sceneX, sceneY);
+  const wheelBeforeHoldDrag = await wheelReadout.innerText();
+  await page.mouse.move(sceneX + 55, sceneY);
+  await sleep(120);
+  const wheelWithoutHold = await wheelReadout.innerText();
+  await page.mouse.move(sceneX, sceneY);
+  await page.mouse.down();
+  await page.mouse.move(sceneX + 55, sceneY, { steps: 5 });
+  await sleep(120);
+  const wheelWithHold = await wheelReadout.innerText();
+  await page.mouse.up();
+  check("L8b1 режим с ЛКМ не рулит без нажатия, но работает при перетаскивании",
+    wheelBeforeHoldDrag === wheelWithoutHold && wheelWithHold !== wheelWithoutHold,
+    `без ЛКМ=${wheelWithoutHold}; с ЛКМ=${wheelWithHold}`);
+  await mouseSteerMode.selectOption("free");
+  await page.mouse.move(sceneX, sceneY);
 
   await page.mouse.move(sceneX, sceneY);
   await page.mouse.down();
