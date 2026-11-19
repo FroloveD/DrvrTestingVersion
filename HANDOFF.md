@@ -94,7 +94,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/sim/vehicle.ts` | Kia Ceed: база 2,65 м, колея 1,57 м, Аккерман, выворот 33–42°, АКПП, фазы светофора, пешеход |
 | `src/sim/controls.ts` | чистые блокировки АКПП (`checkGearChange`) и стартера (`checkEngineToggle`) |
 | `src/sim/spatialGrid.ts` | сетка 10 м, OBB через SAT, insideBay, findBayLineCross, правый борт |
-| `src/sim/step.ts` | единственный шаг физики и детекторов; чистая функция, dt = 1/60 |
+| `src/sim/step.ts` | единственный шаг физики, детекторов и скоростных отрезков до перекрёстков; чистая функция, dt = 1/60 |
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
