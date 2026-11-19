@@ -104,12 +104,11 @@ export function getSelectionAnchor(
     case "sign_zone": {
       const sn = (def.signs ?? []).find((s) => s.id === sel.id);
       if (!sn) return null;
-      return {
-        x: sn.zoneX ?? sn.x,
-        z: sn.zoneZ ?? sn.z,
-        h: null,
-        label: `Зона знака «${sn.label || sn.id}»`,
-      };
+      const h = sn.h;
+      const startX = sn.x + Math.cos(h) * 3.2;
+      const startZ = sn.z - Math.sin(h) * 3.2;
+      const length = sn.zoneLength ?? sn.zoneRadius ?? 250;
+      return { x: startX + Math.sin(h) * length, z: startZ + Math.cos(h) * length, h: null, label: `Конец участка знака «${sn.label || sn.id}»` };
     }
     case "signal": {
       const sg = (def.signals ?? []).find((s) => s.id === sel.id);
@@ -320,9 +319,14 @@ export function moveSelected(
     case "sign_zone":
       return {
         ...def,
-        signs: (def.signs ?? []).map((s) =>
-          s.id === sel.id ? { ...s, zoneX: clampX, zoneZ: clampZ } : s
-        ),
+        signs: (def.signs ?? []).map((s) => {
+          if (s.id !== sel.id) return s;
+          const h = s.h;
+          const startX = s.x + Math.cos(h) * 3.2;
+          const startZ = s.z - Math.sin(h) * 3.2;
+          const length = (clampX - startX) * Math.sin(h) + (clampZ - startZ) * Math.cos(h);
+          return { ...s, zoneLength: Math.max(0.5, Math.min(2000, round2(length))) };
+        }),
       };
 
     case "signal":
