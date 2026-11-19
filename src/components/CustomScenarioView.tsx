@@ -2008,7 +2008,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 <span>Стартовая асфальтовая площадка</span>
               </label>
               <div className="w-full text-[10px] text-[#7c909d]">
-                Снимите флажок, чтобы убрать прямоугольное асфальтовое покрытие старта. Дороги, боксы и остальные объекты останутся.
+                Снимите флажок, чтобы убрать покрытие. В режиме «Выбор» перетащите площадку для перемещения, угловые ручки — для изменения размеров.
               </div>
               <div className="w-28">
                 <NumField
@@ -2039,6 +2039,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                   step={1}
                   onChange={(v) => patchDef({ lotHalfZ: v })}
                 />
+                <NumField label="ЦЕНТР X, М" value={def.lotCenterX ?? 0} step={0.5} onChange={(v) => patchDef({ lotCenterX: v })} />
+                <NumField label="ЦЕНТР Z, М" value={def.lotCenterZ ?? 0} step={0.5} onChange={(v) => patchDef({ lotCenterZ: v })} />
               </div>
             )}
             <div className="grid grid-cols-4 gap-2">
