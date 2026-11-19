@@ -233,6 +233,8 @@ export type RoadSegment = {
   name?: string;
   hasSolidCenter?: boolean;
   speedLimitKmh?: number;
+  /** Радиус скругления углов осевой линии дороги, м; 0/undefined — острые углы. */
+  cornerRadiusM?: number;
 };
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
