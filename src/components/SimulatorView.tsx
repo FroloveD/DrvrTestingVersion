@@ -80,7 +80,7 @@ const COLD_START = false;
 function loadControls(): { steerKeyRate: number; mouseSteerEnabled: boolean; mouseGasEnabled: boolean } {
   try {
     const raw = localStorage.getItem(CONTROLS_KEY);
-    const parsed = raw ? (JSON.parse(raw) as { steerKeyRate?: number }) : {};
+    const parsed = raw ? (JSON.parse(raw) as { steerKeyRate?: number; mouseSteerEnabled?: boolean; mouseGasEnabled?: boolean }) : {};
     const rate = Number(parsed.steerKeyRate);
     return {
       steerKeyRate: Number.isFinite(rate) ? clamp(rate, 60, 900) : DEFAULT_STEER_KEY_RATE,
