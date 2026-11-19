@@ -32,7 +32,7 @@ export type RoadSignSpec = {
   borderColor: string;
   textColor: string;
   defaultLimitKmh?: number;
-  defaultZoneRadius?: number;
+  defaultZoneLength?: number;
   /** Описание того, как знак влияет на симуляцию. */
   effectNote: string;
   /** Можно ли в один клик создать связанную контрольную точку маршрута. */
@@ -56,8 +56,8 @@ export const ROAD_SIGN_CATALOG: readonly RoadSignSpec[] = [
     borderColor: "#dc2626",
     textColor: "#0f172a",
     defaultLimitKmh: 40,
-    defaultZoneRadius: 24,
-    effectNote: "Создаёт активную зону ограничения скорости (speed_limit в ядре).",
+    defaultZoneLength: 250,
+    effectNote: "Ограничение действует по отрезку от знака до заданной длины или ближайшего перекрёстка.",
     checkpointPreset: {
       instruction: "Снизьте скорость по знаку ограничения и продолжайте движение.",
       radius: 7,
@@ -210,8 +210,8 @@ export const ROAD_SIGN_CATALOG: readonly RoadSignSpec[] = [
     borderColor: "#f8fafc",
     textColor: "#ffffff",
     defaultLimitKmh: 20,
-    defaultZoneRadius: 28,
-    effectNote: "2D/3D-знак жилой зоны и активная зона ограничения скорости 20 км/ч.",
+    defaultZoneLength: 250,
+    effectNote: "Ограничение действует по отрезку от знака до заданной длины или ближайшего перекрёстка.",
     checkpointPreset: {
       instruction: "Въезд в жилую зону (знак 5.21): соблюдайте скорость не более 20 км/ч.",
       radius: 7,
@@ -250,10 +250,9 @@ export function createDefaultSign(
   const rh = Number(h.toFixed(3));
   if (isSpeedSignKind(kind)) {
     const limitKmh = limitOverride ?? spec.defaultLimitKmh ?? 40;
-    const zoneRadius = spec.defaultZoneRadius ?? 24;
-    // Центр зоны действия смещаем чуть влево к оси полосы (+left) и вперёд по ходу потока
-    const zx = Number((rx + Math.cos(rh) * 3.2 + Math.sin(rh) * 8).toFixed(2));
-    const zz = Number((rz - Math.sin(rh) * 3.2 + Math.cos(rh) * 8).toFixed(2));
+    const zoneLength = spec.defaultZoneLength ?? 250;
+    const zx = Number((rx + Math.cos(rh) * 3.2).toFixed(2));
+    const zz = Number((rz - Math.sin(rh) * 3.2).toFixed(2));
     return {
       id,
       kind,
@@ -261,7 +260,7 @@ export function createDefaultSign(
       z: rz,
       h: rh,
       limitKmh,
-      zoneRadius,
+      zoneLength,
       zoneX: zx,
       zoneZ: zz,
       label:
@@ -286,18 +285,19 @@ export const SIGN_SPEED_ZONE_PREFIX = "sz-sign-";
 /** Конвертирует скоростной знак в активную SpeedZone ядра (null — если знак не ограничивает скорость). */
 export function signToSpeedZone(sign: RoadSignDef): SpeedZone | null {
   if (!isSpeedSignKind(sign.kind)) return null;
-  const radius = sign.zoneRadius ?? 0;
+  const length = sign.zoneLength ?? sign.zoneRadius ?? 250;
   const limitKmh = sign.limitKmh ?? (sign.kind === "living_zone" ? 20 : 40);
-  if (!(radius > 0) || !(limitKmh > 0)) return null;
-  const zx = Number.isFinite(sign.zoneX) ? (sign.zoneX as number) : sign.x;
-  const zz = Number.isFinite(sign.zoneZ) ? (sign.zoneZ as number) : sign.z;
+  if (!(length > 0) || !(limitKmh > 0)) return null;
+  const h = sign.h;
   return {
     id: `${SIGN_SPEED_ZONE_PREFIX}${sign.id}`,
-    x: zx,
-    z: zz,
+    x: Number((sign.x + Math.cos(h) * 3.2).toFixed(2)),
+    z: Number((sign.z - Math.sin(h) * 3.2).toFixed(2)),
     signX: sign.x,
     signZ: sign.z,
-    radius,
+    h,
+    length,
+    halfWidth: 4.5,
     limitKmh,
     label: sign.label || `Знак «${limitKmh} км/ч»`,
   };
