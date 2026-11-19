@@ -594,8 +594,8 @@ export const extraCases: SelfTestCase[] = [
       assert(roadGeometryPoints(sharp, 0).length === sharp.length, "Нулевой радиус должен сохранять острые углы");
       const curvedDef = { ...emptyCustomScenario(), roads: [{ id: "rounded", points: sharp, width: 1.5, lanes: 1, highway: "service", cornerRadiusM: 5 }] };
       const curvedWorld = buildCustomWorld(curvedDef);
-      assert(curvedWorld.roads.find((road) => road.id === "rounded")?.points.length === rounded.length,
-        "3D-мир должен получать сглаженную осевую линию дороги");
+      assert(curvedWorld.roads.find((road) => road.id === "rounded")?.points.length === sharp.length,
+        "WorldData должен сохранять исходные контрольные точки без повторного сглаживания");
       assert(validateCustomScenario(curvedDef).errors.length === 0, "Ширина 1,5 м должна проходить валидацию");
 
       // Клон встроенного города переносит дороги, светофоры, переход, знак 40 и ODbL
