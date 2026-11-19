@@ -600,7 +600,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               <input aria-label="Ширина новой дороги" type="number" min="1.5" max="60" step="0.25" value={roadWidth} onChange={(e) => setRoadWidth(Math.max(1.5, Math.min(60, Number(e.target.value) || 1.5)))} className="w-20 rounded bg-[#111c26] border hairline px-2 py-1 text-white" />
             </label>
             <label className="flex items-center gap-2 text-[11px] text-[#c3d2dc]">
-              <input type="checkbox" checked={roundRoadCorners} onChange={(e) => setRoundRoadCorners(e.target.checked)} className="accent-[#f5b942]" />
+              <input data-testid="editor-round-road-corners" type="checkbox" checked={roundRoadCorners} onChange={(e) => setRoundRoadCorners(e.target.checked)} className="accent-[#f5b942]" />
               Скруглять углы
             </label>
             {roundRoadCorners && <label className="flex items-center gap-2 text-[11px] text-[#c3d2dc]">

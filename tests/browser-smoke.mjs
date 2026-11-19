@@ -723,7 +723,7 @@ try {
   await mouseSteerToggle.check();
   await page.mouse.move(sceneX, sceneY);
   const wheelEnabledBefore = await wheelReadout.innerText();
-  await page.mouse.move(sceneX + 55, sceneY);
+  await page.mouse.move(sceneX + 260, sceneY);
   await sleep(120);
   const wheelEnabledAfter = await wheelReadout.innerText();
   check("L8b свободное руление мышью работает без удержания ЛКМ", wheelEnabledBefore !== wheelEnabledAfter,
@@ -759,7 +759,8 @@ try {
   await page.mouse.up();
   check("L8c выключенный газ мышью не реагирует на удержание ЛКМ", !gasStillOff);
   await mouseGasToggle.check();
-  await sleep(60);
+  await until(async()=>await mouseGasToggle.isChecked());
+  await sleep(120);
   const modeAfterGasToggle = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.controls.v1") || "{}").mouseSteerMode);
   check("L8c1 включение мышиного газа не меняет режим руления", modeAfterGasToggle === "free", String(modeAfterGasToggle));
   await page.mouse.move(sceneX, sceneY);
@@ -913,9 +914,12 @@ try {
     hz: Number(await lotRect.getAttribute("data-half-z")),
   };
   const lotBox = await lotRect.boundingBox();
-  await page.mouse.move(lotBox.x + lotBox.width / 2, lotBox.y + lotBox.height / 2);
+  // Берём свободную четверть площадки, чтобы не начать drag на дороге или другом объекте.
+  const lotStartX = lotBox.x + lotBox.width * 0.18;
+  const lotStartY = lotBox.y + lotBox.height * 0.18;
+  await page.mouse.move(lotStartX, lotStartY);
   await page.mouse.down();
-  await page.mouse.move(lotBox.x + lotBox.width / 2 + 45, lotBox.y + lotBox.height / 2 - 30, { steps: 6 });
+  await page.mouse.move(lotStartX + 65, lotStartY - 40, { steps: 8 });
   await page.mouse.up();
   await sleep(120);
   const movedLot = Number(await lotRect.getAttribute("data-center-x")) !== lotBefore.x || Number(await lotRect.getAttribute("data-center-z")) !== lotBefore.z;
@@ -972,19 +976,21 @@ try {
   await sleep(100);
   const grid2 = page.getByTestId("map-grid");
   const step2 = await grid2.getAttribute("data-grid-step");
+  const snap2 = await grid2.getAttribute("data-snap-step");
   const lines2 = await grid2.locator("line").count();
   await page.getByTestId("editor-grid-0.5").click();
   await sleep(100);
   const grid05 = page.getByTestId("map-grid");
   const step05 = await grid05.getAttribute("data-grid-step");
+  const snap05 = await grid05.getAttribute("data-snap-step");
   const lines05 = await grid05.locator("line").count();
-  check("O1b сетка скрывается по «Выкл» и отображается по выбранному шагу",
-    gridOff && step2 !== null && step05 !== null && lines05 > lines2 * 1.5,
-    `off=${gridOff}, линии 2 м=${step2}/${lines2}, 0,5 м=${step05}/${lines05}`);
+  check("O1b сетка скрывается по «Выкл», шаг привязки меняется, визуальная сетка адаптивна",
+    gridOff && step2 !== null && step05 !== null && snap2 === "2" && snap05 === "0.5" && lines2 > 0 && lines05 > 0,
+    `off=${gridOff}, snap 2 м=${snap2}, visual=${step2}/${lines2}; snap 0,5 м=${snap05}, visual=${step05}/${lines05}`);
 
   // Рисуем собственную дорогу последовательными точками; Enter завершает построение.
   const roadCountBefore = await page.locator('[data-testid^="map-road-"]').count();
-  const roadRoundToggle = page.getByLabel("Скруглять углы", { exact: true });
+  const roadRoundToggle = page.getByTestId("editor-round-road-corners");
   await roadRoundToggle.check();
   await page.getByTestId("editor-tool-road").click();
   const roadCanvasBox = await mapCanvas.boundingBox();

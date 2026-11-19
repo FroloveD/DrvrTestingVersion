@@ -824,6 +824,18 @@ export function SimulatorView({
     setPedalVisual({ ...touchPedalRef.current });
   };
 
+  // React может подключать wheel как passive listener; для preventDefault нужен native listener.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.cancelable) e.preventDefault();
+      sceneCtrlRef.current?.adjustZoom(e.deltaY);
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, []);
+
   const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType !== "mouse" || !mouseSteerEnabled || mouseSteerMode !== "free") return;
     mouseSteerXRef.current = e.clientX;
@@ -1154,10 +1166,6 @@ export function SimulatorView({
           onPointerUp={handleCanvasPointerEnd}
           onPointerCancel={handleCanvasPointerEnd}
           onLostPointerCapture={handleCanvasPointerEnd}
-          onWheel={(e) => {
-            e.preventDefault();
-            sceneCtrlRef.current?.adjustZoom(e.deltaY);
-          }}
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
 
