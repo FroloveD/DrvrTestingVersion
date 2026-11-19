@@ -927,7 +927,7 @@ export const extraCases: SelfTestCase[] = [
         "2026-11-19T00:00:00.000Z",
         45
       );
-      assert(result.ok, result.ok ? "" : result.error);
+      if (!result.ok) throw new Error(result.error);
       const record = result.record;
       assert(record.lengthM > 25 && record.path.length >= 3, "Маршрут должен пройти по обеим улицам и быть длиннее 25 м");
       assert(record.roadNames.includes("Улица Сетевая") && record.roadNames.includes("Переулок Связной"),
