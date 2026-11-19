@@ -114,7 +114,7 @@ L.push("| `src/sim/types.ts` | контракты: InputState, SimState, WorldDa
 L.push("| `src/sim/vehicle.ts` | Kia Ceed: база 2,65 м, колея 1,57 м, Аккерман, выворот 33–42°, АКПП, фазы светофора, пешеход |");
 L.push("| `src/sim/controls.ts` | чистые блокировки АКПП (`checkGearChange`) и стартера (`checkEngineToggle`) |");
 L.push("| `src/sim/spatialGrid.ts` | сетка 10 м, OBB через SAT, insideBay, findBayLineCross, правый борт |");
-L.push("| `src/sim/step.ts` | единственный шаг физики и детекторов; чистая функция, dt = 1/60 |");
+L.push("| `src/sim/step.ts` | единственный шаг физики, детекторов и скоростных отрезков до перекрёстков; чистая функция, dt = 1/60 |");
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
