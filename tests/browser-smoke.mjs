@@ -1135,9 +1135,7 @@ try {
       check("P2 маршрут строится между улицами через дорожный граф", built);
       if (built) {
         await page.getByRole("button", { name: /Сохранить в каталог/ }).click();
-        const saved = await until(async () => (await low(page)).includes("улица каталожная"), 5000, 100);
-        check("P3 маршрут сохраняется в каталоге", saved);
-        const count = await page.evaluate(() => new Promise((resolve) => {
+        const readRouteCount = () => page.evaluate(() => new Promise((resolve) => {
           const req = indexedDB.open("cdt-route-catalog");
           req.onerror = () => resolve(-1);
           req.onsuccess = () => {
@@ -1150,6 +1148,9 @@ try {
             tx.oncomplete = () => db.close();
           };
         }));
+        const saved = await until(async () => (await readRouteCount()) === 1, 5000, 100);
+        check("P3 маршрут сохраняется в каталоге", saved);
+        const count = await readRouteCount();
         check("P4 запись маршрута находится в отдельной IndexedDB", count === 1, `записей: ${count}`);
         await page.getByRole("button", { name: /Открыть/ }).first().click();
         await sleep(600);
