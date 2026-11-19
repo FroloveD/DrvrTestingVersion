@@ -692,6 +692,33 @@ try {
   await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
   check("L7 предел 42° применяется без сброса заезда или руля",Boolean(at42) && await page.getByRole('button',{name:'Быстрый старт'}).count()===0);
 
+  // Движение мыши рулит без зажатой кнопки; ЛКМ включает газ только после 400 мс.
+  const scene = page.getByTestId("sim-canvas");
+  const sceneBox = await scene.boundingBox();
+  const sceneX = sceneBox.x + sceneBox.width / 2;
+  const sceneY = sceneBox.y + sceneBox.height / 2;
+  const wheelReadout = page.locator(".wheel-readout");
+  await page.mouse.move(sceneX, sceneY);
+  const wheelBeforeMouse = await wheelReadout.innerText();
+  await page.mouse.move(sceneX + 55, sceneY);
+  await sleep(120);
+  const wheelAfterMouse = await wheelReadout.innerText();
+  check("L8a мышь рулит горизонтальным движением без удержания ЛКМ", wheelBeforeMouse !== wheelAfterMouse,
+    `${wheelBeforeMouse} -> ${wheelAfterMouse}`);
+
+  await page.mouse.move(sceneX, sceneY);
+  await page.mouse.down();
+  await sleep(300);
+  const gasBeforeThreshold = (await gas.getAttribute("aria-pressed")) === "true";
+  await sleep(180);
+  const gasAfterThreshold = (await gas.getAttribute("aria-pressed")) === "true";
+  await page.mouse.up();
+  await sleep(80);
+  const gasAfterRelease = (await gas.getAttribute("aria-pressed")) === "true";
+  check("L8b удержание ЛКМ >0,4 с включает газ, отпускание выключает его",
+    !gasBeforeThreshold && gasAfterThreshold && !gasAfterRelease,
+    `до порога=${gasBeforeThreshold}, после=${gasAfterThreshold}, после отпускания=${gasAfterRelease}`);
+
   const press = async (button) => {const r=await button.boundingBox();await page.mouse.move(r.x+r.width/2, r.y+r.height/2);await page.mouse.down();};
   await press(gas); const drives=await until(async()=> (await speedOf(page))>=2); await page.mouse.up();
   await press(brake); const stopped=await until(async()=> (await speedOf(page))===0); await page.mouse.up();
@@ -791,6 +818,14 @@ try {
   const { page, errors } = await open(ctx, httpUrl);
   await tab(page, "Свой сценарий");
   await sleep(400);
+
+  const lotSurface = page.getByTestId("editor-lot-surface-toggle");
+  const lotInitiallyEnabled = await lotSurface.isChecked();
+  await lotSurface.uncheck();
+  const lotRemoved = !(await lotSurface.isChecked());
+  await lotSurface.check();
+  check("O0 стартовую асфальтовую площадку можно отключить и вернуть из параметров карты",
+    lotInitiallyEnabled && lotRemoved && await lotSurface.isChecked());
 
   // 1. Импортируем локальный .osm XML с дорогой, светофором, знаком STOP, забором и деревом
   const osmXml = `<?xml version="1.0" encoding="UTF-8"?>
