@@ -76,6 +76,8 @@ export async function loadRouteCatalog(): Promise<RouteCatalogLoad> {
       request.onerror = () => reject(request.error ?? new Error("Не удалось прочитать каталог"));
     });
     await transactionDone(tx);
+    memory.clear();
+    for (const record of records) memory.set(record.id, record);
     memoryFallback = false;
     return { records: sortRoutes(records), backend: "indexeddb", warning: null };
   } catch (error) {
@@ -99,6 +101,7 @@ export async function saveRouteRecord(record: ExamRouteRecord): Promise<"indexed
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put(record);
     await transactionDone(tx);
+    memory.set(record.id, record);
     return "indexeddb";
   } catch {
     memoryFallback = true;
@@ -117,6 +120,7 @@ export async function deleteRouteRecord(id: string): Promise<"indexeddb" | "memo
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).delete(id);
     await transactionDone(tx);
+    memory.delete(id);
     return "indexeddb";
   } catch {
     memoryFallback = true;

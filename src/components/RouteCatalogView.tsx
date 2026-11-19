@@ -263,10 +263,10 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                   <>
                     <div className="flex flex-wrap justify-between gap-2">
                       <div className="font-bold text-[#52d6bd]">Маршрут построен по дорожному графу</div>
-                      <div className="mono text-sm">{(preview.record.lengthM / 1000).toFixed(2)} км · {preview.record.checkpoints.length} КТ</div>
+                      <div className="mono text-sm">{(preview.record.lengthM / 1000).toFixed(2)} км · {preview.record.checkpoints.length} КТ · {(preview.record.maneuvers ?? []).length} ман.</div>
                     </div>
                     <div className="text-xs text-[#b9c9d3] mt-2">Улицы: {preview.record.roadNames.join(" → ") || "названия отсутствуют в OSM"}</div>
-                    <div className="text-[10px] text-[#8fa2ae] mt-1">One-way и уровни мостов/тоннелей учитываются существующим маршрутизатором.</div>
+                    <div className="text-[10px] text-[#8fa2ae] mt-1">One-way и уровни мостов/тоннелей учитываются маршрутизатором; повороты становятся отдельными заданиями с указателями.</div>
                     <button type="button" className="btn btn-primary mt-3" onClick={() => void handleSave()}><Icon name="check" size={14} /> Сохранить в каталог</button>
                   </>
                 ) : (
@@ -293,7 +293,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                     <h4 className="font-bold truncate">{route.title}</h4>
                     {currentMapMismatch(route) && <ChipFallback>другая версия карты</ChipFallback>}
                   </div>
-                  <div className="text-xs text-[#8fa2ae] mt-1">{route.mapTitle} · {(route.lengthM / 1000).toFixed(2)} км · {route.checkpoints.length} КТ</div>
+                  <div className="text-xs text-[#8fa2ae] mt-1">{route.mapTitle} · {(route.lengthM / 1000).toFixed(2)} км · {route.checkpoints.length} КТ · {(route.maneuvers ?? []).length} манёвров</div>
                   <div className="text-xs text-[#b9c9d3] mt-2">{route.roadNames.join(" → ") || "Названия улиц не указаны"}</div>
                   <div className="text-[10px] mono text-[#6e8492] mt-2">ODbL 1.0 · {route.mapFingerprint} · {new Date(route.updatedAt).toLocaleDateString("ru-RU")}</div>
                 </div>

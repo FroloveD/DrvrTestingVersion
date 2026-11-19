@@ -7,8 +7,19 @@
  */
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "./boundary";
 import { findRoadNetworkPath, nearestRoadPoint, polylineLength, samplePolyline } from "./route";
+import { SpatialGrid } from "../sim/spatialGrid";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import type { RouteCheckpoint, Vec2 } from "../sim/types";
+
+export type ExamRouteManeuver = {
+  id: string;
+  kind: "left" | "right";
+  distanceM: number;
+  x: number;
+  z: number;
+  angleDeg: number;
+  roadName?: string;
+};
 
 export type ExamRouteRecord = {
   schema: "cdt.route.v1";
@@ -25,6 +36,8 @@ export type ExamRouteRecord = {
   lengthM: number;
   roadNames: string[];
   checkpoints: RouteCheckpoint[];
+  /** Необязательное поле для обратной совместимости с уже сохранёнными cdt.route.v1. */
+  maneuvers?: ExamRouteManeuver[];
   /** Полный снимок пользовательского мира для офлайн-запуска и точного реплея. */
   scenarioSnapshot: CustomScenarioDef;
 };
@@ -73,35 +86,145 @@ export function fingerprintOsmScenario(source: CustomScenarioDef): string {
   return `osm-${fnv1a(JSON.stringify(stableValue(payload)))}`;
 }
 
+function normalizeAngle(angle: number): number {
+  let value = (angle + Math.PI) % (Math.PI * 2);
+  if (value < 0) value += Math.PI * 2;
+  return value - Math.PI;
+}
+
+function makeManeuvers(path: readonly Vec2[], roads: NonNullable<CustomScenarioDef["roads"]>, id: string): ExamRouteManeuver[] {
+  const length = polylineLength(path), lookAhead = 7;
+  const minAngle = (38 * Math.PI) / 180, maxAngle = (150 * Math.PI) / 180;
+  const result: ExamRouteManeuver[] = [];
+  let lastDistance = -Infinity;
+  for (let distance = lookAhead; distance < length - lookAhead; distance += 4) {
+    const before = samplePolyline(path, distance - lookAhead);
+    const after = samplePolyline(path, distance + lookAhead);
+    const delta = normalizeAngle(after.h - before.h), absDelta = Math.abs(delta);
+    if (absDelta < minAngle || absDelta > maxAngle || distance - lastDistance < 24) continue;
+    const point = samplePolyline(path, distance);
+    const roadName = nearestRoadPoint(point.x, point.z, roads)?.road.name?.trim();
+    result.push({
+      id: "maneuver-" + id + "-" + (result.length + 1),
+      kind: delta > 0 ? "left" : "right",
+      distanceM: Number(distance.toFixed(1)),
+      x: Number(point.x.toFixed(2)),
+      z: Number(point.z.toFixed(2)),
+      angleDeg: Number(((delta * 180) / Math.PI).toFixed(1)),
+      ...(roadName ? { roadName } : {}),
+    });
+    lastDistance = distance;
+    if (result.length >= 10) break;
+  }
+  return result;
+}
+
+type CheckpointCandidate = { distanceM: number; maneuver?: ExamRouteManeuver; final?: boolean };
+
 function makeCheckpoints(
   path: readonly Vec2[],
   roads: NonNullable<CustomScenarioDef["roads"]>,
   id: string,
-  spacingM: number
+  spacingM: number,
+  maneuvers: readonly ExamRouteManeuver[]
 ): RouteCheckpoint[] {
   const length = polylineLength(path);
   const count = Math.max(2, Math.min(12, Math.ceil(length / spacingM)));
-  const checkpoints: RouteCheckpoint[] = [];
-  for (let i = 0; i < count; i++) {
-    const final = i === count - 1;
-    const distance = final ? Math.max(0, length - 1.5) : (length * (i + 1)) / count;
-    const point = samplePolyline(path, distance);
-    const nearest = nearestRoadPoint(point.x, point.z, roads);
-    const roadName = nearest?.road.name?.trim();
-    checkpoints.push({
-      id: `route-${id}-${i + 1}`,
-      x: Number(point.x.toFixed(2)),
-      z: Number(point.z.toFixed(2)),
-      radius: final ? 8 : 7,
-      instruction: final
-        ? "Финиш маршрута: остановитесь в безопасном месте."
-        : roadName
-          ? `Продолжайте движение по улице «${roadName}» согласно маршруту.`
-          : `Продолжайте движение по маршруту, контрольная точка ${i + 1}.`,
-      ...(final ? { requireStop: true } : {}),
-    });
+  const candidates: CheckpointCandidate[] = [];
+  for (let i = 0; i < count - 1; i++) candidates.push({ distanceM: (length * (i + 1)) / count });
+  candidates.push({ distanceM: Math.max(0, length - 1.5), final: true });
+
+  for (const maneuver of maneuvers) {
+    let nearestIndex = -1, nearestDistance = Infinity;
+    for (let i = 0; i < candidates.length - 1; i++) {
+      const delta = Math.abs(candidates[i].distanceM - maneuver.distanceM);
+      if (delta < nearestDistance) { nearestDistance = delta; nearestIndex = i; }
+    }
+    if (nearestIndex >= 0 && nearestDistance <= 20) candidates[nearestIndex] = { distanceM: maneuver.distanceM, maneuver };
+    else candidates.push({ distanceM: maneuver.distanceM, maneuver });
   }
-  return checkpoints;
+
+  candidates.sort((x, y) => x.distanceM - y.distanceM);
+  const compact: CheckpointCandidate[] = [];
+  for (const item of candidates) {
+    const previous = compact[compact.length - 1];
+    if (previous && item.distanceM - previous.distanceM < 10) {
+      if (item.final || item.maneuver) compact[compact.length - 1] = item;
+    } else compact.push(item);
+  }
+
+  let selected = compact;
+  if (compact.length > 16) {
+    const priority = compact.filter((item) => item.final || item.maneuver);
+    const regular = compact.filter((item) => !item.final && !item.maneuver);
+    const room = Math.max(0, 16 - priority.length);
+    const sampled: CheckpointCandidate[] = [];
+    for (let i = 0; i < room && regular.length > 0; i++) {
+      const index = room === 1 ? Math.floor((regular.length - 1) / 2) : Math.round((i * (regular.length - 1)) / (room - 1));
+      sampled.push(regular[index]);
+    }
+    selected = [...priority, ...sampled].sort((x, y) => x.distanceM - y.distanceM);
+  }
+
+  return selected.map((item, index) => {
+    const point = samplePolyline(path, item.distanceM);
+    const roadName = item.maneuver?.roadName ?? nearestRoadPoint(point.x, point.z, roads)?.road.name?.trim();
+    if (item.final) return {
+      id: "route-" + id + "-" + (index + 1),
+      x: Number(point.x.toFixed(2)), z: Number(point.z.toFixed(2)), radius: 8,
+      instruction: "Финиш маршрута: остановитесь в безопасном месте.", requireStop: true,
+    };
+    if (item.maneuver) {
+      const turn = item.maneuver.kind === "left" ? "налево" : "направо";
+      return {
+        id: "route-" + id + "-" + (index + 1),
+        x: Number(point.x.toFixed(2)), z: Number(point.z.toFixed(2)), radius: 9,
+        instruction: "На следующем повороте поверните " + turn +
+          (roadName ? " на улице «" + roadName + "»." : ".") +
+          " Заблаговременно включите указатель поворота.",
+        requireSignal: item.maneuver.kind,
+      };
+    }
+    return {
+      id: "route-" + id + "-" + (index + 1),
+      x: Number(point.x.toFixed(2)), z: Number(point.z.toFixed(2)), radius: 7,
+      instruction: roadName
+        ? "Продолжайте движение по улице «" + roadName + "» согласно маршруту."
+        : "Продолжайте движение по маршруту, контрольная точка " + (index + 1) + ".",
+    };
+  });
+}
+
+function findSafeStartPose(
+  source: CustomScenarioDef,
+  path: readonly Vec2[],
+  roads: NonNullable<CustomScenarioDef["roads"]>
+): { x: number; z: number; h: number } | null {
+  const length = polylineLength(path);
+  if (length < 1 || path.length < 2) return null;
+  const nearest = nearestRoadPoint(path[0].x, path[0].z, roads);
+  const width = nearest?.road.width ?? 6.5;
+  const rightOffset = nearest?.road.oneway && width < 5.6 ? 0 : Math.min(2.4, Math.max(0.9, width * 0.22));
+  const grid = new SpatialGrid(source.obstacles ?? [], 10);
+  const polygon = isValidBoundaryPolygon(source.boundaryPolygon) ? source.boundaryPolygon : undefined;
+  for (const along of [0, 3, 6, 9]) {
+    const distance = Math.min(Math.max(0, length - 1), along);
+    const at = samplePolyline(path, distance);
+    const ahead = samplePolyline(path, Math.min(length, distance + 6));
+    const h = Math.hypot(ahead.x - at.x, ahead.z - at.z) > 0.5
+      ? Math.atan2(ahead.x - at.x, ahead.z - at.z) : at.h;
+    for (const lateral of [rightOffset, rightOffset * 0.55, 0]) {
+      const pose = {
+        x: Number((at.x - Math.cos(h) * lateral).toFixed(2)),
+        z: Number((at.z + Math.sin(h) * lateral).toFixed(2)),
+        h: Number(h.toFixed(4)),
+      };
+      if (!isInsideWorldBoundary(pose.x, pose.z, source.bounds, polygon)) continue;
+      if (grid.queryCarHit(pose.x, pose.z, pose.h).hit) continue;
+      return pose;
+    }
+  }
+  return null;
 }
 
 /**
@@ -159,17 +282,15 @@ export function buildExamRouteRecord(
     }
   }
 
-  let heading = Math.atan2(network.path[1].x - network.path[0].x, network.path[1].z - network.path[0].z);
-  if (!Number.isFinite(heading)) heading = startSnap.h;
-  const startPose = {
-    x: Number(network.path[0].x.toFixed(2)),
-    z: Number(network.path[0].z.toFixed(2)),
-    h: Number(heading.toFixed(4)),
-  };
+  const startPose = findSafeStartPose(source, network.path, roads);
+  if (!startPose) {
+    return { ok: false, error: "Не удалось выбрать безопасную стартовую позицию на правой стороне дороги. Проверьте границы и препятствия." };
+  }
   const routeId = id.trim();
   if (!routeId) return { ok: false, error: "Не удалось сформировать идентификатор маршрута." };
 
-  const checkpoints = makeCheckpoints(network.path, roads, routeId, Math.max(35, Math.min(250, checkpointSpacingM)));
+  const maneuvers = makeManeuvers(network.path, roads, routeId);
+  const checkpoints = makeCheckpoints(network.path, roads, routeId, Math.max(35, Math.min(250, checkpointSpacingM)), maneuvers);
   const speedLimit = startSnap.road.speedLimitKmh ?? source.defaultSpeedLimitKmh;
   const scenarioSnapshot: CustomScenarioDef = {
     ...source,
@@ -208,6 +329,7 @@ export function buildExamRouteRecord(
       lengthM: network.lengthM,
       roadNames: network.roadNames,
       checkpoints,
+      maneuvers,
       scenarioSnapshot,
     },
   };
@@ -245,7 +367,13 @@ export function isExamRouteRecord(value: unknown): value is ExamRouteRecord {
       Number.isFinite(point.z) &&
       Number.isFinite(point.radius) &&
       point.radius > 0
-    )
+    ) ||
+    (route.maneuvers !== undefined && (!Array.isArray(route.maneuvers) || !route.maneuvers.every((item) =>
+      item && typeof item.id === "string" &&
+      (item.kind === "left" || item.kind === "right") &&
+      Number.isFinite(item.distanceM) && Number.isFinite(item.x) &&
+      Number.isFinite(item.z) && Number.isFinite(item.angleDeg)
+    )))
   ) return false;
   return fingerprintOsmScenario(snapshot as CustomScenarioDef) === route.mapFingerprint;
 }

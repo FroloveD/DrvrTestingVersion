@@ -932,6 +932,8 @@ export const extraCases: SelfTestCase[] = [
       assert(record.lengthM > 25 && record.path.length >= 3, "Маршрут должен пройти по обеим улицам и быть длиннее 25 м");
       assert(record.roadNames.includes("Улица Сетевая") && record.roadNames.includes("Переулок Связной"),
         `В пути потерялись улицы: ${record.roadNames.join(", ")}`);
+      assert(record.roadNames[0] === "Улица Сетевая" && record.roadNames[1] === "Переулок Связной",
+        "Названия улиц должны идти в порядке прохождения маршрута");
       const reverse = buildExamRouteRecord(
         source,
         sideRoad.points[sideRoad.points.length - 1],
@@ -946,8 +948,12 @@ export const extraCases: SelfTestCase[] = [
         "Нужны промежуточные КТ и финальная КТ с остановкой");
       assert(record.scenarioSnapshot.mapMeta?.attribution === "© OpenStreetMap contributors",
         "Снимок должен сохранять атрибуцию OSM");
-      assert(record.scenarioSnapshot.start.x === record.path[0].x && record.scenarioSnapshot.start.z === record.path[0].z,
-        "Стартовая поза должна совпадать с привязкой к дорожному графу");
+      assert(Math.hypot(record.scenarioSnapshot.start.x - record.path[0].x, record.scenarioSnapshot.start.z - record.path[0].z) >= 0.7,
+        "Стартовая поза должна быть смещена с оси в правую полосу");
+      assert(record.scenarioSnapshot.start.x < record.path[0].x,
+        "На прямом участке с курсом +Z старт должен находиться справа от осевой линии");
+      assert((record.maneuvers?.length ?? 0) >= 1 && record.checkpoints.some((checkpoint) => Boolean(checkpoint.requireSignal)),
+        "Поворот должен выделяться отдельной контрольной точкой с требованием указателя");
       assert(isExamRouteRecord(record), "Корректная запись должна проходить проверку формата");
       assert(!isExamRouteRecord({ ...record, path: [] }), "Повреждённый путь должен отклоняться");
       const changed = {

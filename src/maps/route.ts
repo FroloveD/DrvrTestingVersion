@@ -909,20 +909,25 @@ export function findRoadNetworkPath(
   }
 
   const path: Vec2[] = [];
-  const nameSet = new Set<string>();
+  const reverseRoadNames: string[] = [];
   let cur = dst;
   while (cur !== -1) {
     path.push({ x: nodes[cur].x, z: nodes[cur].z });
     const rn = prevRoad[cur]?.trim();
-    if (rn) nameSet.add(rn);
+    if (rn) reverseRoadNames.push(rn);
     cur = prev[cur];
   }
   path.reverse();
+  reverseRoadNames.reverse();
+  const roadNames: string[] = [];
+  for (const name of reverseRoadNames) {
+    if (roadNames[roadNames.length - 1] !== name) roadNames.push(name);
+  }
   return {
     connected: true,
     path,
     lengthM: Number(polylineLength(path).toFixed(1)),
-    roadNames: Array.from(nameSet),
+    roadNames,
   };
 }
 
