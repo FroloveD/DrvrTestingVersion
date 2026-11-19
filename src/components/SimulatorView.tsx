@@ -77,20 +77,22 @@ const DEFAULT_STEER_KEY_RATE = 340;
 /** Старт и сброс попытки всегда «холодные»: ДВС заглушен, КПП P. */
 const COLD_START = false;
 
-function loadControls(): { steerKeyRate: number } {
+function loadControls(): { steerKeyRate: number; mouseSteerEnabled: boolean; mouseGasEnabled: boolean } {
   try {
     const raw = localStorage.getItem(CONTROLS_KEY);
     const parsed = raw ? (JSON.parse(raw) as { steerKeyRate?: number }) : {};
     const rate = Number(parsed.steerKeyRate);
     return {
       steerKeyRate: Number.isFinite(rate) ? clamp(rate, 60, 900) : DEFAULT_STEER_KEY_RATE,
+      mouseSteerEnabled: parsed.mouseSteerEnabled === true,
+      mouseGasEnabled: parsed.mouseGasEnabled === true,
     };
   } catch {
-    return { steerKeyRate: DEFAULT_STEER_KEY_RATE };
+    return { steerKeyRate: DEFAULT_STEER_KEY_RATE, mouseSteerEnabled: false, mouseGasEnabled: false };
   }
 }
 
-function saveControls(c: { steerKeyRate: number }): void {
+function saveControls(c: { steerKeyRate: number; mouseSteerEnabled: boolean; mouseGasEnabled: boolean }): void {
   try {
     localStorage.setItem(CONTROLS_KEY, JSON.stringify(c));
   } catch {
@@ -209,6 +211,8 @@ export function SimulatorView({
 
   // Настраиваемая скорость руления клавишами A/D (°/с руля) и раскладка плавающих окон
   const [steerKeyRate, setSteerKeyRate] = useState<number>(() => loadControls().steerKeyRate);
+  const [mouseSteerEnabled, setMouseSteerEnabled] = useState<boolean>(() => loadControls().mouseSteerEnabled);
+  const [mouseGasEnabled, setMouseGasEnabled] = useState<boolean>(() => loadControls().mouseGasEnabled);
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
@@ -232,8 +236,8 @@ export function SimulatorView({
 
   useEffect(() => {
     steerRateRef.current = steerKeyRate;
-    saveControls({ steerKeyRate });
-  }, [steerKeyRate]);
+    saveControls({ steerKeyRate, mouseSteerEnabled, mouseGasEnabled });
+  }, [steerKeyRate, mouseSteerEnabled, mouseGasEnabled]);
 
   useEffect(() => {
     saveLayout(layout);
@@ -308,6 +312,7 @@ export function SimulatorView({
   const holdingSteerRef = useRef(false);
   const pointerDragRef = useRef<{ id: number; btn: number; lastX: number; lastY: number } | null>(null);
   const mouseSteerXRef = useRef<number | null>(null);
+  const throttleBoostRef = useRef<number>(1);
   const releasePedals = useCallback(() => {
     if (canvasGasHoldTimerRef.current !== null) {
       window.clearTimeout(canvasGasHoldTimerRef.current);
@@ -527,6 +532,9 @@ export function SimulatorView({
         const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
         inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
+        const boostTarget = (keys.ShiftLeft || keys.ShiftRight) && inp.throttle > 0 ? 2 : 1;
+        throttleBoostRef.current += (boostTarget - throttleBoostRef.current) * Math.min(1, FIXED_DT * 3.5);
+        inp.throttleMultiplier = throttleBoostRef.current;
 
         // Руль: отклонённое USB-устройство перехватывает управление у клавиатуры
         const steerL = Boolean(keys.KeyA || keys.ArrowLeft);
@@ -791,7 +799,7 @@ export function SimulatorView({
   }, [resetAttempt, releasePedals, setTurnSignal, setGear, toggleEngine, onNotify]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
-  // Горизонтальное движение мыши над сценой управляет рулём; ЛКМ >400 мс включает газ.
+  // Управление мышью включается отдельно в панели «Управление»; по умолчанию выключено.
   // ПКМ вращает камеру, колесо масштабирует её.
   const pressPedal = (which: "gas" | "brake", owner: number) => {
     if (pedalOwner.current[which] !== null) return;
@@ -807,7 +815,7 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType !== "mouse") return;
+    if (e.pointerType !== "mouse" || !mouseSteerEnabled) return;
     mouseSteerXRef.current = e.clientX;
     holdingSteerRef.current = true;
   };
@@ -827,23 +835,27 @@ export function SimulatorView({
     e.currentTarget.setPointerCapture(e.pointerId);
     pointerDragRef.current = { id: e.pointerId, btn: e.button, lastX: e.clientX, lastY: e.clientY };
     if (e.button === 0 && e.pointerType === "mouse") {
-      holdingSteerRef.current = true;
-      mouseSteerXRef.current = e.clientX;
-      if (canvasGasHoldTimerRef.current !== null) window.clearTimeout(canvasGasHoldTimerRef.current);
-      const owner = e.pointerId;
-      canvasGasHoldTimerRef.current = window.setTimeout(() => {
-        const drag = pointerDragRef.current;
-        if (drag?.id === owner && drag.btn === 0 && pedalOwner.current.gas === null) {
-          canvasGasOwnerRef.current = owner;
-          pressPedal("gas", owner);
-        }
-        canvasGasHoldTimerRef.current = null;
-      }, 400);
+      if (mouseSteerEnabled) {
+        holdingSteerRef.current = true;
+        mouseSteerXRef.current = e.clientX;
+      }
+      if (mouseGasEnabled) {
+        if (canvasGasHoldTimerRef.current !== null) window.clearTimeout(canvasGasHoldTimerRef.current);
+        const owner = e.pointerId;
+        canvasGasHoldTimerRef.current = window.setTimeout(() => {
+          const drag = pointerDragRef.current;
+          if (drag?.id === owner && drag.btn === 0 && pedalOwner.current.gas === null) {
+            canvasGasOwnerRef.current = owner;
+            pressPedal("gas", owner);
+          }
+          canvasGasHoldTimerRef.current = null;
+        }, 400);
+      }
     }
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === "mouse") {
+    if (e.pointerType === "mouse" && mouseSteerEnabled) {
       const prevX = mouseSteerXRef.current;
       const activeDrag = pointerDragRef.current;
       const orbiting = activeDrag?.id === e.pointerId && activeDrag.btn === 2;
@@ -884,8 +896,8 @@ export function SimulatorView({
     pointerDragRef.current = null;
     const rect = e.currentTarget.getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-    if (!inside) mouseSteerXRef.current = null;
-    holdingSteerRef.current = mouseSteerXRef.current !== null;
+    if (!inside || !mouseSteerEnabled) mouseSteerXRef.current = null;
+    holdingSteerRef.current = mouseSteerEnabled && mouseSteerXRef.current !== null;
   };
 
   // Экранный SVG-руль (±540°, круговое вращение)
@@ -1384,6 +1396,28 @@ export function SimulatorView({
               </button>
             </div>
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
+            <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
+              <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
+              <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7] mb-2">
+                <span>Руление движением мыши</span>
+                <input data-testid="mouse-steer-toggle" type="checkbox" checked={mouseSteerEnabled} onChange={(e) => {
+                  const enabled = e.target.checked; setMouseSteerEnabled(enabled);
+                  if (!enabled) { mouseSteerXRef.current = null; holdingSteerRef.current = false; }
+                }} className="accent-[#f5b942]" />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7]">
+                <span>Газ удержанием ЛКМ (&gt;0,4 с)</span>
+                <input data-testid="mouse-gas-toggle" type="checkbox" checked={mouseGasEnabled} onChange={(e) => {
+                  const enabled = e.target.checked; setMouseGasEnabled(enabled);
+                  if (!enabled) {
+                    if (canvasGasHoldTimerRef.current !== null) window.clearTimeout(canvasGasHoldTimerRef.current);
+                    canvasGasHoldTimerRef.current = null;
+                    if (canvasGasOwnerRef.current !== null) releasePedal("gas", canvasGasOwnerRef.current);
+                    canvasGasOwnerRef.current = null;
+                  }
+                }} className="accent-[#f5b942]" />
+              </label>
+            </div>
             <label className="block text-[11px] text-[#d3e0e7] mb-1.5" htmlFor="key-steer-rate">
               Скорость руления клавишами A / D:{" "}
               <b className="mono text-[#f5b942]">{steerKeyRate}°/с</b>
