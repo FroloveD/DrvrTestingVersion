@@ -649,8 +649,8 @@ export function SimulatorView({
     const ctrl = sceneCtrlRef.current;
     if (!ctrl) return;
     if (optsRef.current.cameraMode !== "cockpit") {
+      optsRef.current.cameraMode = "cockpit";
       setCameraMode("cockpit");
-      // Если ещё не смотрели на рычаг — сразу направляем взгляд на кулису АКПП
       if (!ctrl.isCockpitShifterView()) {
         setShifterGlance(ctrl.toggleCockpitShifterView());
       } else {

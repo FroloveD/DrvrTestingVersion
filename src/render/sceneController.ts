@@ -1174,7 +1174,14 @@ export class SceneController {
     }
 
     // 6. Камера (обновляем матрицу кузова заранее, чтобы салон и физические зеркала не дрожали относительно головы)
+    const prevCameraMode = this.lastCameraMode;
     this.lastCameraMode = opts.cameraMode;
+    if (prevCameraMode === "cockpit" && opts.cameraMode !== "cockpit" && this.savedHeadBeforeShifter) {
+      this.orbitYaw = this.savedHeadBeforeShifter.yaw;
+      this.orbitPitch = this.savedHeadBeforeShifter.pitch;
+      this.cockpitFov = this.savedHeadBeforeShifter.fov;
+      this.savedHeadBeforeShifter = null;
+    }
     this.playerRig.chassis.updateWorldMatrix(true, false);
     this.updateCamera(state, opts.cameraMode);
 
@@ -1375,14 +1382,6 @@ export class SceneController {
       this.camera.up.set(0, 1, 0).transformDirection(pose);
       this.camera.lookAt(this.cockpitLookWorld);
       return;
-    }
-
-    // При выходе из салона возвращаем нормальные углы внешней камеры, если был включён взгляд на КПП (G)
-    if (this.savedHeadBeforeShifter) {
-      this.orbitYaw = this.savedHeadBeforeShifter.yaw;
-      this.orbitPitch = this.savedHeadBeforeShifter.pitch;
-      this.cockpitFov = this.savedHeadBeforeShifter.fov;
-      this.savedHeadBeforeShifter = null;
     }
 
     this.camera.up.set(0, 1, 0);

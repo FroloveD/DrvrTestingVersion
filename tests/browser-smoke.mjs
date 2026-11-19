@@ -715,8 +715,11 @@ try {
   // Убираем фокус с кнопки HUD, переходим к 3D-рычагу АКПП в салоне (G) и заводим ДВС (I)
   await page.mouse.move(20, 20);
   await page.keyboard.press("KeyG");
+  await page.locator('[data-testid="cockpit-look-shifter"]').waitFor({ timeout: 5000 });
   await page.keyboard.press("KeyI");
-  await sleep(450);
+  // Дожидаемся хотя бы двух кадров rAF после переключения камеры в салон под SwiftShader
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await sleep(160);
   const cvBox = await page.locator("canvas").first().boundingBox();
   const knobPx = { x: cvBox.x + cvBox.width * 0.488, y: cvBox.y + cvBox.height * 0.489 };
   const slotDPx = { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
