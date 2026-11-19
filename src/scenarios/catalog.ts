@@ -542,11 +542,14 @@ export function buildCityOsmScenario(
     speedZones: [
       {
         id: "zone-school-40",
-        x: 0,
-        z: 38,
+        x: -2.2,
+        z: 18,
         signX: -5.4,
         signZ: 18,
-        radius: 24,
+        h: 0,
+        length: 250,
+        endDistance: 46,
+        halfWidth: 4.5,
         limitKmh: 40,
         label: "Знак 3.24 «40 км/ч» (Школа №17)",
       },
