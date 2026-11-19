@@ -406,7 +406,7 @@ export const extraCases: SelfTestCase[] = [
         rejected = error instanceof RangeError;
       }
       assert(rejected, "Короткий буфер должен отклоняться с RangeError");
-      return "240 тиков: 33° → 42° → 37,5° · 3 блока RLE · поза совпала точно";
+      return "240 тиков: 33° → 42° → 37,5° · 3 блока RLE · реплей точен · буферная дуга совпала с эталоном";
     },
   },
   {
@@ -899,4 +899,4 @@ export const extraCases: SelfTestCase[] = [
       return `oneway=-1 · roundabout · service/lanes/width · courtyard=${pack.buildings.length} корп. · crop OK`;
     },
   },
- ];
+];
