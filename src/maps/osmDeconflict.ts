@@ -1496,12 +1496,15 @@ export function filterConflictingSpeedZones(
     const near = index.queryPoint(z.x, z.z, 2);
     const roadW = near.nearest?.road.width ?? 7;
     const roadName = near.nearest?.road.name;
-    const safeR = fitSpeedZoneRadius(z.x, z.z, z.limitKmh, z.radius, roadW, roadName, index);
+    // В активной схеме скоростная зона может быть направленной и не иметь радиуса.
+    // Для геометрического согласования используем 0 как исходный радиус, не теряя length/endDistance.
+    const currentRadius = z.radius ?? 0;
+    const safeR = fitSpeedZoneRadius(z.x, z.z, z.limitKmh, currentRadius, roadW, roadName, index);
     if (safeR === null) {
       trimmed += 1;
       continue;
     }
-    if (safeR < z.radius - 0.1) trimmed += 1;
+    if (safeR < currentRadius - 0.1) trimmed += 1;
     out.push({ ...z, radius: safeR });
   }
   return { zones: out, trimmed };
