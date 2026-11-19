@@ -6,7 +6,7 @@
  * @tests Смоук A, G, O (`tests/browser-smoke.mjs`); логика — T28, T29
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CustomScenarioDef } from "../scenarios/custom";
+import { fitBoundsToContent, nextRoadId, roundRoadPolyline, type CustomScenarioDef } from "../scenarios/custom";
 import {
   getSelectionAnchor,
   moveSelected,
@@ -19,7 +19,7 @@ import {
   type EditorTool,
   type PlaceOptions,
 } from "../scenarios/editorOps";
-import { formatSignBadge, getObstacleSpec, getRoadSignSpec, isSpeedSignKind } from "../scenarios/signs";
+import { createDefaultRoad, formatSignBadge, getObstacleSpec, getRoadSignSpec, isSpeedSignKind } from "../scenarios/signs";
 import type { RoadSignDef } from "../sim/types";
 
 export type LayerVisibility = {
@@ -231,7 +231,7 @@ const TOOL_HINTS: Record<EditorTool, string> = {
   sign: "Кликните по карте, чтобы установить выбранный дорожный знак (затем можно сразу перетащить)",
   signal: "Кликните по карте, чтобы поставить светофор со стоп-линией 1.12",
   crosswalk: "Кликните по карте, чтобы добавить пешеходный переход «зебра» с пешеходом",
-  road: "Кликните по карте, чтобы добавить сегмент дороги (узлы перетаскиваются мышью)",
+  road: "Кликайте по карте, чтобы последовательно добавить узлы дороги · двойной клик или Enter — завершить · Esc — отменить",
   bay: "Кликните по карте, чтобы разместить парковочный бокс или параллельный карман",
   obstacle: "Кликните по карте, чтобы поставить выбранное препятствие или объект окружения",
   checkpoint: "Кликните по карте, чтобы добавить очередную контрольную точку маршрута (КТ)",
@@ -257,6 +257,7 @@ export function MapCanvasEditor({
   const [vb, setVb] = useState<ViewBox>(() => computeFitViewBox(def.bounds));
   const [cursor, setCursor] = useState<{ x: number; z: number } | null>(null);
   const [lotSelected, setLotSelected] = useState(false);
+  const [roadDraftPoints, setRoadDraftPoints] = useState<Array<{ x: number; z: number }>>([]);
 
   useEffect(() => {
     setVb(computeFitViewBox(def.bounds));
@@ -409,7 +410,43 @@ export function MapCanvasEditor({
     };
   };
 
+  const finishRoadDraft = useCallback(() => {
+    const points = roadDraftPoints;
+    if (points.length < 2) return;
+    const before = defRef.current;
+    const id = nextRoadId(before);
+    const base = createDefaultRoad(id, points[0].x, points[0].z);
+    const road = { ...base, points: points.map((p) => ({ ...p })), width: placeOptions.roadWidth ?? 7.5, cornerRadiusM: placeOptions.cornerRadiusM ?? 0 };
+    const next = fitBoundsToContent({ ...before, roads: [...(before.roads ?? []), road] });
+    onCommitChange(next, before);
+    onSelect({ kind: "road", id });
+    setRoadDraftPoints([]);
+  }, [onCommitChange, onSelect, placeOptions.cornerRadiusM, placeOptions.roadWidth, roadDraftPoints]);
+
+  useEffect(() => {
+    if (tool !== "road" || roadDraftPoints.length === 0) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter") { e.preventDefault(); finishRoadDraft(); }
+      if (e.key === "Escape") { e.preventDefault(); setRoadDraftPoints([]); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [finishRoadDraft, roadDraftPoints.length, tool]);
+
+  const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (tool !== "road") return;
+    const pt = clientToWorld(e.clientX, e.clientY);
+    if (!pt) return;
+    const next = { x: snapCoord(pt.x, snapStep), z: snapCoord(pt.z, snapStep) };
+    setRoadDraftPoints((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && Math.hypot(last.x - next.x, last.z - next.z) < 0.5) return prev;
+      return [...prev, next];
+    });
+  };
+
   const handleCanvasPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (tool === "road") return;
     const pt = clientToWorld(e.clientX, e.clientY);
     if (!pt) return;
 
@@ -675,6 +712,8 @@ export function MapCanvasEditor({
           data-testid="map-editor-canvas"
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
           onPointerDown={handleCanvasPointerDown}
+          onClick={handleCanvasClick}
+          onDoubleClick={() => finishRoadDraft()}
           onPointerMove={handlePointerMove}
           onPointerUp={endPointerDrag}
           onPointerCancel={endPointerDrag}
@@ -771,11 +810,18 @@ export function MapCanvasEditor({
             </g>
           )}
 
+          {tool === "road" && roadDraftPoints.length > 0 && (
+            <g data-testid="map-road-draft" pointerEvents="none">
+              <polyline points={roundRoadPolyline(roadDraftPoints, placeOptions.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#52d6bd" strokeWidth={placeOptions.roadWidth ?? 7.5} strokeLinecap="round" strokeLinejoin="round" strokeOpacity={0.55} />
+              {roadDraftPoints.map((p, i) => <circle key={i} cx={-p.x} cy={-p.z} r={Math.max(0.55, signUnit * 0.55)} fill="#52d6bd" stroke="#0b1118" strokeWidth={thin} />)}
+            </g>
+          )}
+
           {/* Сегменты дорог (импорт OSM и собственные) */}
           {layers.roads &&
             roads.map((r) => {
               const sel = isSelected("road", r.id);
-              const pts = r.points.map((p) => `${-p.x},${-p.z}`).join(" ");
+              const pts = roundRoadPolyline(r.points, r.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ");
               return (
                 <g key={r.id}>
                   <polyline
