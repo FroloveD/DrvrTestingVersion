@@ -6,6 +6,7 @@
  * @tests Смоук A, G, O (`tests/browser-smoke.mjs`); логика — T28, T29
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isSimplePolygon, polygonArea } from "../maps/boundary";
 import { nextRoadId, type CustomScenarioDef } from "../scenarios/custom";
 import { roadGeometryPoints } from "../maps/route";
 import {
@@ -22,7 +23,7 @@ import {
   type PlaceOptions,
 } from "../scenarios/editorOps";
 import { createDefaultRoad, formatSignBadge, getObstacleSpec, getRoadSignSpec, isSpeedSignKind } from "../scenarios/signs";
-import type { RoadSignDef } from "../sim/types";
+import type { RoadSignDef, Vec2 } from "../sim/types";
 
 export type LayerVisibility = {
   roads: boolean;
@@ -93,6 +94,10 @@ type Props = {
   snapStep: number;
   layers: LayerVisibility;
   placeOptions: PlaceOptions;
+  draftBoundary: Vec2[];
+  onDraftBoundaryChange: (points: Vec2[]) => void;
+  onFinishBoundary: (points: Vec2[]) => void;
+  onCancelBoundary: () => void;
   /** Счётчик внешнего запроса «Вписать карту в экран» (при импорте или смене шаблона). */
   fitSignal: number;
   onSelect: (sel: EditorSelection | null) => void;
@@ -436,6 +441,7 @@ export function MapCanvasEditor({
   }, [finishRoadDraft, roadDraftPoints.length, tool]);
 
   const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (tool === "boundary") return;
     if (tool !== "road") return;
     const pt = clientToWorld(e.clientX, e.clientY);
     if (!pt) return;
@@ -466,6 +472,17 @@ export function MapCanvasEditor({
     }
 
     if (e.button !== 0) return;
+
+    if (tool === "boundary") {
+      const bx = snapStep > 0 ? snapCoord(pt.x, snapStep) : Number(pt.x.toFixed(2));
+      const bz = snapStep > 0 ? snapCoord(pt.z, snapStep) : Number(pt.z.toFixed(2));
+      if (draftBoundary.length >= 3 && Math.hypot(bx - draftBoundary[0].x, bz - draftBoundary[0].z) <= Math.max(1.8, signUnit * 1.45)) {
+        onFinishBoundary(draftBoundary); return;
+      }
+      const last = draftBoundary[draftBoundary.length - 1];
+      if (!last || Math.hypot(bx - last.x, bz - last.z) >= 0.4) onDraftBoundaryChange([...draftBoundary, { x: bx, z: bz }]);
+      return;
+    }
 
     if (tool === "select") {
       setLotSelected(false);
@@ -652,6 +669,8 @@ export function MapCanvasEditor({
     return "id" in primary && primary.id === id;
   };
 
+  const boundaryPoly = def.boundaryPolygon && def.boundaryPolygon.length >= 3 ? def.boundaryPolygon : null;
+  const boundaryValid = boundaryPoly ? isSimplePolygon(boundaryPoly) && polygonArea(boundaryPoly) >= 25 : true;
   const roads = def.roads ?? [];
   const signs = def.signs ?? [];
   const signals = def.signals ?? [];
@@ -715,7 +734,7 @@ export function MapCanvasEditor({
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
           onPointerDown={handleCanvasPointerDown}
           onClick={handleCanvasClick}
-          onDoubleClick={() => finishRoadDraft()}
+          onDoubleClick={handleCanvasDoubleClick}
           onPointerMove={handlePointerMove}
           onPointerUp={endPointerDrag}
           onPointerCancel={endPointerDrag}
@@ -819,6 +838,11 @@ export function MapCanvasEditor({
             </g>
           )}
 
+          {/* Граница мира и асфальтовая площадка */}
+          {boundaryPoly ? <polygon data-testid="map-boundary-polygon" points={boundaryPoly.map(p => `${-p.x},${-p.z}`).join(" ")} fill={def.useLotSurface !== false ? "#19232e" : "rgba(15,28,39,0.52)"} stroke="#f5b942" strokeWidth={thin * 1.5} /> : <rect x={-def.bounds.maxX} y={-def.bounds.maxZ} width={def.bounds.maxX-def.bounds.minX} height={def.bounds.maxZ-def.bounds.minZ} fill="rgba(15,25,35,0.32)" stroke="#2b3c4d" strokeDasharray={`${scale} ${scale*0.7}`} strokeWidth={thin} />}
+          {def.useLotSurface !== false && !boundaryPoly && <rect data-testid="map-lot-rect" x={-(def.lotCenterX ?? 0)-def.lotHalfX} y={-(def.lotCenterZ ?? 0)-def.lotHalfZ} width={def.lotHalfX*2} height={def.lotHalfZ*2} fill="#19232e" stroke="#2a3948" strokeWidth={thin} />}
+          {boundaryPoly && <g data-testid="map-boundary-overlay"><polygon points={boundaryPoly.map(p => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke={boundaryValid ? "#f5b942" : "#ff6b6b"} strokeDasharray={`${scale} ${scale*0.6}`} strokeWidth={Math.max(0.24,thin*1.8)} />{boundaryPoly.map((p,i)=><circle key={i} cx={-p.x} cy={-p.z} r={Math.max(0.5,signUnit*0.45)} fill="#f5b942" stroke="#071018" strokeWidth={thin} className="cursor-move" onPointerDown={e=>beginObjectDrag(e,{kind:"boundary_point",index:i})} />)}</g>}
+          {tool === "boundary" && draftBoundary.length > 0 && <polyline points={draftBoundary.map(p=>`${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#52d6bd" strokeWidth={Math.max(0.25,thin*2)} strokeDasharray={`${scale} ${scale*0.5}`} />}
           {/* Сегменты дорог (импорт OSM и собственные) */}
           {layers.roads &&
             roads.map((r) => {
