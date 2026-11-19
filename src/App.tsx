@@ -13,6 +13,7 @@ import { DebriefView } from "./components/DebriefView";
 import { Icon } from "./components/Icons";
 import { InstructorEditorView } from "./components/InstructorEditorView";
 import { PrivacyLegalView } from "./components/PrivacyLegalView";
+import { RouteCatalogView } from "./components/RouteCatalogView";
 import { SimulatorView } from "./components/SimulatorView";
 import { StrategyView } from "./components/StrategyView";
 import { TestsAndModulesView } from "./components/TestsAndModulesView";
@@ -44,7 +45,7 @@ import {
   type JournalBackend,
 } from "./storage/journalStore";
 
-type TabId = "sim" | "custom" | "debrief" | "analytics" | "instructor" | "tests" | "audit";
+type TabId = "sim" | "custom" | "routes" | "debrief" | "analytics" | "instructor" | "tests" | "audit";
 
 const RULES_STORAGE = "cdt.ruleset.v1";
 const CAL_STORAGE = "cdt.calibration.v1";
@@ -303,6 +304,7 @@ export default function App() {
   const navItems: Array<{ id: TabId; label: string; short: string; icon: string; badge?: string; badgeTone?: "ok" | "bad" }> = [
     { id: "sim", label: "3D-Тренажёр", short: "Тренажёр", icon: "car" },
     { id: "custom", label: "Свой сценарий", short: "Сценарий", icon: "file" },
+    { id: "routes", label: "Каталог маршрутов", short: "Маршруты", icon: "route" },
     {
       id: "debrief",
       label: "Разбор и Реплей", short: "Разбор",
@@ -425,6 +427,19 @@ export default function App() {
               setScenarioId("custom");
               setTab("sim");
               notify("Свой сценарий открыт в 3D-тренажёре (пункт 4)");
+            }}
+            onNotify={notify}
+          />
+        )}
+
+        {tab === "routes" && (
+          <RouteCatalogView
+            sourceDef={customDef}
+            onOpenRoute={(scenario) => {
+              setCustomDef(scenario);
+              setScenarioId("custom");
+              setTab("sim");
+              notify(`Маршрут «${scenario.title}» открыт в 3D-тренажёре`);
             }}
             onNotify={notify}
           />
