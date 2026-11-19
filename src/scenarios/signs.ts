@@ -283,20 +283,38 @@ export function createDefaultSign(
 export const SIGN_SPEED_ZONE_PREFIX = "sz-sign-";
 
 /** Конвертирует скоростной знак в активную SpeedZone ядра (null — если знак не ограничивает скорость). */
-export function signToSpeedZone(sign: RoadSignDef): SpeedZone | null {
+export function signToSpeedZone(sign: RoadSignDef, roads: readonly RoadSegment[] = []): SpeedZone | null {
   if (!isSpeedSignKind(sign.kind)) return null;
   const length = sign.zoneLength ?? sign.zoneRadius ?? 250;
   const limitKmh = sign.limitKmh ?? (sign.kind === "living_zone" ? 20 : 40);
   if (!(length > 0) || !(limitKmh > 0)) return null;
   const h = sign.h;
+  const x = Number((sign.x + Math.cos(h) * 3.2).toFixed(2));
+  const z = Number((sign.z - Math.sin(h) * 3.2).toFixed(2));
+  const rx = Math.sin(h), rz = Math.cos(h);
+  let endDistance = length;
+  for (const road of roads) {
+    for (let i = 1; i < road.points.length; i++) {
+      const a = road.points[i - 1], b = road.points[i];
+      const sx = b.x - a.x, sz = b.z - a.z;
+      const segmentLength = Math.hypot(sx, sz);
+      const denom = rx * sz - rz * sx;
+      if (segmentLength < 0.01 || Math.abs(denom) < segmentLength * 0.12) continue;
+      const qx = a.x - x, qz = a.z - z;
+      const along = (qx * sz - qz * sx) / denom;
+      const across = (qx * rz - qz * rx) / denom;
+      if (along > 2.5 && along < endDistance && across >= -0.0001 && across <= 1.0001) endDistance = along;
+    }
+  }
   return {
     id: `${SIGN_SPEED_ZONE_PREFIX}${sign.id}`,
-    x: Number((sign.x + Math.cos(h) * 3.2).toFixed(2)),
-    z: Number((sign.z - Math.sin(h) * 3.2).toFixed(2)),
+    x,
+    z,
     signX: sign.x,
     signZ: sign.z,
     h,
     length,
+    endDistance,
     halfWidth: 4.5,
     limitKmh,
     label: sign.label || `Знак «${limitKmh} км/ч»`,
