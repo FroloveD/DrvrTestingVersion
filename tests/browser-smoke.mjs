@@ -900,6 +900,8 @@ try {
 
   // Рисуем собственную дорогу последовательными точками; Enter завершает построение.
   const roadCountBefore = await page.locator('[data-testid^="map-road-"]').count();
+  const roadRoundToggle = page.getByLabel("Скруглять углы", { exact: true });
+  await roadRoundToggle.check();
   await page.getByTestId("editor-tool-road").click();
   const roadCanvasBox = await mapCanvas.boundingBox();
   await page.mouse.click(roadCanvasBox.x + roadCanvasBox.width * 0.34, roadCanvasBox.y + roadCanvasBox.height * 0.34);
@@ -911,13 +913,11 @@ try {
   const roadCountAfter = await page.locator('[data-testid^="map-road-"]').count();
   const newRoad = page.locator('[data-testid^="map-road-"]').last();
   const newRoadWidth = await page.getByLabel("Ширина новой дороги").inputValue();
-  const roadRoundToggle = page.getByLabel("Скруглять углы", { exact: true });
-  await roadRoundToggle.check();
+  const newRoadRadius = await newRoad.getAttribute("data-corner-radius");
   await page.getByTestId("editor-tool-select").click();
-  await newRoad.click({ position: { x: 3, y: 3 }, force: true }).catch(() => {});
-  check("O1c дорога строится по последовательным точкам, Enter завершает, ширина и скругление доступны",
-    draftShown && roadCountAfter === roadCountBefore + 1 && newRoadWidth === "7.5",
-    `draft=${draftShown}, roads=${roadCountBefore}->${roadCountAfter}, width=${newRoadWidth}`);
+  check("O1c дорога строится по последовательным точкам, Enter завершает, ширина и скругление применяются",
+    draftShown && roadCountAfter === roadCountBefore + 1 && newRoadWidth === "7.5" && newRoadRadius === "8",
+    `draft=${draftShown}, roads=${roadCountBefore}->${roadCountAfter}, width=${newRoadWidth}, radius=${newRoadRadius}`);
   await roadRoundToggle.uncheck();
 
   // 2. Выбираем инструмент «Дорожный знак» -> «Уступите дорогу» и ставим кликом по 2D-карте
