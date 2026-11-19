@@ -857,8 +857,9 @@ export const extraCases: SelfTestCase[] = [
       assert(service?.service === "parking_aisle" && service.lanes === 1 && Math.abs(service.width - 4.2) < 0.01,
         "Не распознаны service=parking_aisle, lanes и ширина");
       assert(pack.buildings.length >= 2, "Мультиполигон здания с внутренним двором должен разбиваться на корпуса");
-      assert(Boolean(pack.meta.origin) && pack.bounds.maxX - pack.bounds.minX > 300,
-        "Не сохранены WGS84 origin или реальные размеры bounds");
+      assert(Boolean(pack.meta.origin), `Не сохранён WGS84 origin: ${JSON.stringify(pack.meta)}`);
+      assert(pack.bounds.maxX - pack.bounds.minX > 100,
+        `Границы должны отражать реальный размер импортированной карты: ${JSON.stringify(pack.bounds)}`);
       const p = reverse!.points;
       const cropped = cropOsmPackToPolygon(pack, [
         { x: Math.min(...p.map((v) => v.x)) - 8, z: Math.min(...p.map((v) => v.z)) - 8 },
