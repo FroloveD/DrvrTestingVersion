@@ -121,9 +121,10 @@ export type RoadSignDef = {
   label?: string;
   /** Значение ограничения скорости (км/ч) для speed_limit и living_zone. */
   limitKmh?: number;
-  /** Радиус зоны действия ограничения скорости (м); 0 или undefined — без активной зоны. */
+  /** Длина участка ограничения вперёд от знака (м). */
+  zoneLength?: number;
+  /** Устаревшие поля старых сценариев; zoneRadius мигрирует в zoneLength. */
   zoneRadius?: number;
-  /** Центр зоны действия ограничения (м); если не задан, берётся точка на полосе рядом со знаком. */
   zoneX?: number;
   zoneZ?: number;
 };
@@ -183,7 +184,10 @@ export type SpeedZone = {
   z: number;
   signX: number;
   signZ: number;
-  radius: number;
+  h?: number;
+  length?: number;
+  halfWidth?: number;
+  radius?: number;
   limitKmh: number;
   label: string;
 };
