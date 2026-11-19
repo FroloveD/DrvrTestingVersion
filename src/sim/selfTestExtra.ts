@@ -2099,7 +2099,32 @@ export const extraCases: SelfTestCase[] = [
       // При 20° поворота: Picanto ≈ 7,4 м против Sorento ≈ 8,7 м — разница ровно из баз и колеи
       assert(radius(pic) < radius(sor) * 0.9, "Picanto обязан разворачиваться заметно круче Sorento");
 
-      return `Ceed ${ceed.length.toFixed(2)}×${ceed.width.toFixed(2)} м · Picanto влезает в карман 1,75 м, Ceed/Sorento нет · Аккерман ${(picInner * 57.3).toFixed(1)}° против ${(sorInner * 57.3).toFixed(1)}°`;
+      // Попытка обязана запомнить машину: дебриф и реплей строят контур кузова по ней, а не по Ceed
+      const rideWith = (carId: "xceed" | undefined, ticks: number) => {
+        const w = carId
+          ? { ...buildScenarioWorld("bay_90", DEFAULT_CALIBRATION), playerCarId: carId }
+          : buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+        const g = new SpatialGrid(w.obstacles, 10);
+        let st = createInitialState(w, true);
+        const rec = new AttemptRecorder(st, true);
+        const inp = createReadyInput();
+        for (let i = 0; i < ticks; i++) {
+          const out = stepSimulation(st, inp, w, g, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+          st = out.state;
+          rec.recordTick(inp, st, out.newEvents);
+        }
+        return { state: st, attempt: rec.snapshot(st, w, DEFAULT_CALIBRATION, DEFAULT_RULESET) };
+      };
+      const xceedRide = rideWith("xceed", 90);
+      const attempt = xceedRide.attempt;
+      assert(xceedRide.state.carId === "xceed", "Состояние заезда должно нести машину мира");
+      assert(attempt.playerCarId === "xceed", "Попытка обязана сохранить машину заезда для дебриифа и реплея");
+      assert(
+        rideWith(undefined, 30).attempt.playerCarId === undefined,
+        "Заезд на Ceed не добавляет поле машины — старые записи совместимы"
+      );
+
+      return `Ceed ${ceed.length.toFixed(2)}×${ceed.width.toFixed(2)} м · Picanto влезает в карман 1,75 м, Ceed/Sorento нет · Аккерман ${(picInner * 57.3).toFixed(1)}° против ${(sorInner * 57.3).toFixed(1)}° · попытка запомнила ${attempt.playerCarId}`;
     },
   },
 ];

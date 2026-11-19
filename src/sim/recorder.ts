@@ -11,6 +11,7 @@ import { createInitialState, stepSimulation } from "./step";
 import type {
   CalibrationConfig,
   InputState,
+  PlayerCarId,
   ScenarioId,
   SimEvent,
   SimState,
@@ -71,6 +72,11 @@ export type RecordedAttempt = {
   finalPose: { x: number; z: number; h: number };
   /** Снимок мира — только для scenarioId "custom", чтобы реплей не зависел от текущего редактора. */
   customWorld?: WorldData;
+  /**
+   * Машина заезда: нужна дебриифу и реплею, когда мир встроенного сценария не встраивается
+   * в попытку (у Ceed поле отсутствует и это совместимо со старыми записями).
+   */
+  playerCarId?: PlayerCarId;
   /**
    * Правила, действовавшие во время заезда. Нужны реплею: строгий режим
    * (остановка на первой грубой ошибке) влияет на само движение, а не только на баллы.
@@ -216,6 +222,7 @@ export class AttemptRecorder {
       // Без округления: проверка детерминизма сравнивает позу реплея с этой точно
       finalPose: { x: state.x, z: state.z, h: state.h },
       rulesAtRide: JSON.parse(JSON.stringify(ruleSet)) as RuleSet,
+      ...(world.playerCarId ? { playerCarId: world.playerCarId } : {}),
       ...(world.embedInAttempt || world.scenarioId === "custom"
         ? { customWorld: JSON.parse(JSON.stringify(world)) as WorldData }
         : {}),
