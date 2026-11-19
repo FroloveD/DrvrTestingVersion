@@ -19,6 +19,7 @@ import {
 import { cropOsmPackToPolygon, parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import { roadGeometryPoints } from "../maps/route";
+import { buildExamRouteRecord, fingerprintOsmScenario, isExamRouteRecord } from "../maps/routeCatalog";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
@@ -897,6 +898,57 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(cropped.boundaryPolygon) && cropped.roads.length >= 1,
         "Обрезка OSM-пакета по полигону должна сохранять границу и дорогу");
       return `oneway=-1 · roundabout · service/lanes/width · courtyard=${pack.buildings.length} корп. · crop OK`;
+    },
+  },
+  {
+    id: "T32",
+    suite: "maps",
+    name: "Каталог OSM-маршрутов: связность, one-way, контрольные точки и снимок карты",
+    fn: () => {
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7480" minlon="37.6080" maxlat="55.7540" maxlon="37.6160"/>
+  <node id="1" lat="55.7500" lon="37.6100"/>
+  <node id="2" lat="55.7510" lon="37.6100"/>
+  <node id="3" lat="55.7520" lon="37.6100"/>
+  <node id="4" lat="55.7510" lon="37.6110"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><tag k="highway" v="secondary"/><tag k="name" v="Улица Сетевая"/></way>
+  <way id="11"><nd ref="2"/><nd ref="4"/><tag k="highway" v="residential"/><tag k="name" v="Переулок Связной"/></way>
+</osm>`;
+      const source = customFromOsmPack(parseOsmXml(xml, "Тестовый квартал"));
+      const mainRoad = source.roads![0];
+      const sideRoad = source.roads![1];
+      const result = buildExamRouteRecord(
+        source,
+        mainRoad.points[0],
+        sideRoad.points[sideRoad.points.length - 1],
+        "Маршрут через перекрёсток",
+        "route-test-32",
+        "2026-11-19T00:00:00.000Z",
+        45
+      );
+      assert(result.ok, result.ok ? "" : result.error);
+      const record = result.record;
+      assert(record.lengthM > 25 && record.path.length >= 3, "Маршрут должен пройти по обеим улицам и быть длиннее 25 м");
+      assert(record.roadNames.includes("Улица Сетевая") && record.roadNames.includes("Переулок Связной"),
+        `В пути потерялись улицы: ${record.roadNames.join(", ")}`);
+      assert(record.checkpoints.length >= 2 && record.checkpoints.at(-1)?.requireStop,
+        "Нужны промежуточные КТ и финальная КТ с остановкой");
+      assert(record.scenarioSnapshot.mapMeta?.attribution === "© OpenStreetMap contributors",
+        "Снимок должен сохранять атрибуцию OSM");
+      assert(record.scenarioSnapshot.start.x === record.path[0].x && record.scenarioSnapshot.start.z === record.path[0].z,
+        "Стартовая поза должна совпадать с привязкой к дорожному графу");
+      assert(isExamRouteRecord(record), "Корректная запись должна проходить проверку формата");
+      assert(!isExamRouteRecord({ ...record, path: [] }), "Повреждённый путь должен отклоняться");
+      const changed = {
+        ...source,
+        roads: source.roads!.map((road, index) => index === 0
+          ? { ...road, points: road.points.map((point, i) => i === 0 ? { x: point.x + 1, z: point.z } : point) }
+          : road),
+      };
+      assert(fingerprintOsmScenario(source) !== fingerprintOsmScenario(changed),
+        "Изменение геометрии карты должно менять fingerprint");
+      return `${(record.lengthM / 1000).toFixed(2)} км · ${record.roadNames.length} улицы · ${record.checkpoints.length} КТ · снимок OSM и fingerprint OK`;
     },
   },
 ];
