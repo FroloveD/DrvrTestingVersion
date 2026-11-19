@@ -590,9 +590,9 @@ try {
   const scoreRect = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
   await page.mouse.move(scoreRect.x + 24, scoreRect.y + 18);
   await page.mouse.down();
-  await sleep(520);
+  await sleep(700);
   await page.mouse.up();
-  await sleep(150);
+  await sleep(200);
   const scoreFront = await page.evaluate(() => ({
     scoreZ: Number(document.querySelector('[data-hud-panel="scorePanel"]')?.style.zIndex || 0),
     statusZ: Number(document.querySelector('[data-hud-panel="statusBar"]')?.style.zIndex || 0),
@@ -1029,12 +1029,16 @@ try {
     restoredOk && vtxCount === 4, `restored=${restoredOk}, vertices=${vtxCount}`);
 
   // 6. Сброс к прямоугольнику + ввод отрицательной координаты в NumField + автопочинка маршрута
+  await page.getByTestId("editor-tool-boundary").click();
+  await sleep(150);
   const resetPolyBtn = page.getByTestId("editor-reset-boundary-btn");
   await resetPolyBtn.scrollIntoViewIfNeeded();
   await resetPolyBtn.click();
   await sleep(150);
   await page.getByTestId("editor-tool-select").click();
-  await page.getByTestId("map-start").click({ force: true });
+  const startMarker = page.getByTestId("map-start");
+  await startMarker.scrollIntoViewIfNeeded();
+  await startMarker.click({ force: true });
   await sleep(150);
   const startXInput = page.getByTestId("editor-inspector").locator('input[type="number"]').first();
   await startXInput.scrollIntoViewIfNeeded();
@@ -1052,8 +1056,10 @@ try {
     `${brokenStatus} -> ${repairedStatus}`);
 
   // 7. Проверка сетки редактора (Выкл / 0,5 м / 2 м / 5 м) и Г-образной площадки с 3D-бордюром в тренажёре
-  await page.getByRole("button", { name: "Площадка", exact: true }).click();
-  await sleep(200);
+  const lotTplBtn = page.getByRole("button", { name: "Площадка", exact: true });
+  await lotTplBtn.scrollIntoViewIfNeeded();
+  await lotTplBtn.click();
+  await sleep(250);
   await page.getByTestId("editor-grid-0").click();
   await sleep(100);
   const gridOff = (await page.locator('[data-testid="map-grid"]').count()) === 0
