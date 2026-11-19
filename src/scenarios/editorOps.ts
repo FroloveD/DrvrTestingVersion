@@ -5,6 +5,7 @@
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
  * @tests T29
  */
+import { boundsToPolygon, boundingBoxOfPolygon, buildPresetBoundaryPolygon, clampPointToWorldBoundary, insertBoundaryVertex, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
 import { buildRouteFromRoads } from "../maps/route";
 import type {
   CalibrationConfig,
@@ -38,6 +39,7 @@ import {
 export type EditorTool =
   | "select"
   | "pan"
+  | "boundary"
   | "start"
   | "sign"
   | "signal"
@@ -59,7 +61,8 @@ export type EditorSelection =
   | { kind: "road_point"; id: string; index: number }
   | { kind: "bay"; id: number }
   | { kind: "obstacle"; id: string }
-  | { kind: "checkpoint"; id: string };
+  | { kind: "checkpoint"; id: string }
+  | { kind: "boundary_point"; index: number };
 
 export type PlaceOptions = {
   signKind: RoadSignKind;
@@ -99,6 +102,10 @@ export function getSelectionAnchor(
   switch (sel.kind) {
     case "start":
       return { x: def.start.x, z: def.start.z, h: def.start.h, label: "Старт автомобиля" };
+    case "boundary_point": {
+      const p = def.boundaryPolygon?.[sel.index];
+      return p ? { x: p.x, z: p.z, h: null, label: `Граница · вершина #${sel.index + 1}` } : null;
+    }
     case "sign": {
       const sn = (def.signs ?? []).find((s) => s.id === sel.id);
       return sn ? { x: sn.x, z: sn.z, h: sn.h, label: sn.label || sn.id } : null;
@@ -294,6 +301,12 @@ export function moveSelected(
   rawZ: number,
   snapStep = 0
 ): CustomScenarioDef {
+  if (sel.kind === "boundary_point") {
+    if (!def.boundaryPolygon || sel.index < 0 || sel.index >= def.boundaryPolygon.length) return def;
+    const next = def.boundaryPolygon.map((p, i) => i === sel.index ? { x: round2(snapCoord(rawX, snapStep)), z: round2(snapCoord(rawZ, snapStep)) } : p);
+    return { ...def, boundaryPolygon: next, bounds: boundingBoxOfPolygon(next, 0) };
+  }
+
   const clampX = Math.max(def.bounds.minX, Math.min(def.bounds.maxX, snapCoord(rawX, snapStep)));
   const clampZ = Math.max(def.bounds.minZ, Math.min(def.bounds.maxZ, snapCoord(rawZ, snapStep)));
 
@@ -669,6 +682,13 @@ export function deleteSelected(
   sel: EditorSelection
 ): { def: CustomScenarioDef; selection: EditorSelection | null } {
   if (sel.kind === "start") return { def, selection: sel };
+  if (sel.kind === "boundary_point") {
+    if (!def.boundaryPolygon) return { def, selection: null };
+    const next = removeBoundaryVertex(def.boundaryPolygon, sel.index);
+    return next
+      ? { def: { ...def, boundaryPolygon: next, bounds: boundingBoxOfPolygon(next, 0) }, selection: { kind: "boundary_point", index: Math.min(sel.index, next.length - 1) } }
+      : { def: { ...def, boundaryPolygon: undefined }, selection: null };
+  }
 
   if (sel.kind === "road_point") {
     const road = (def.roads ?? []).find((r) => r.id === sel.id);
@@ -789,6 +809,33 @@ export function fitBoundsToContent(def: CustomScenarioDef, pad = 12): CustomScen
       maxZ: Math.min(600, Math.ceil(maxZ + pad)),
     },
   };
+}
+
+/** Устанавливает произвольный контур площадки/границы мира после проверки геометрии. */
+export function setCustomBoundaryPolygon(def: CustomScenarioDef, points: readonly Vec2[]): { def: CustomScenarioDef; ok: boolean; error?: string } {
+  const polygon = sanitizeBoundaryPolygon(points);
+  if (!polygon) return { def, ok: false, error: "Нужно минимум 3 несовпадающие вершины площадью не менее 25 м²." };
+  return { def: { ...def, boundaryPolygon: polygon, bounds: boundingBoxOfPolygon(polygon, 0) }, ok: true };
+}
+
+/** Вставляет вершину в середину выбранного ребра. */
+export function insertBoundaryPoint(def: CustomScenarioDef, edgeIndex: number): { def: CustomScenarioDef; selection: EditorSelection } | null {
+  const base = isValidBoundaryPolygon(def.boundaryPolygon) ? def.boundaryPolygon : boundsToPolygon(def.bounds);
+  const { polygon, insertedIndex } = insertBoundaryVertex(base, edgeIndex);
+  return { def: { ...def, boundaryPolygon: polygon, bounds: boundingBoxOfPolygon(polygon, 0) }, selection: { kind: "boundary_point", index: insertedIndex } };
+}
+
+/** Применяет один из готовых шаблонов произвольной формы. */
+export function applyPresetBoundaryShape(def: CustomScenarioDef, preset: BoundaryShapePreset): { def: CustomScenarioDef; vertices: number } {
+  const polygon = buildPresetBoundaryPolygon(preset, def.bounds);
+  const bounds = boundingBoxOfPolygon(polygon, 0);
+  const start = clampPointToWorldBoundary(def.start.x, def.start.z, bounds, polygon);
+  return { vertices: polygon.length, def: { ...def, boundaryPolygon: polygon, bounds, start: { ...def.start, x: round2(start.x), z: round2(start.z) } } };
+}
+
+/** Сбрасывает полигональную границу к прямоугольным границам содержимого карты. */
+export function clearBoundaryPolygon(def: CustomScenarioDef, pad = 12): CustomScenarioDef {
+  return fitBoundsToContent({ ...def, boundaryPolygon: undefined }, pad);
 }
 
 /** Ограниченный стек истории отмен/повторов (`Ctrl+Z` / `Ctrl+Y`) без мутаций. */
