@@ -305,13 +305,17 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           e.preventDefault();
           handleDelete();
         }
+      } else if (tool === "boundary" && e.code === "Enter" && draftBoundary.length >= 3) {
+        e.preventDefault(); handleFinishBoundary(draftBoundary);
+      } else if (tool === "boundary" && e.code === "Escape") {
+        e.preventDefault(); handleCancelBoundary();
       } else if (e.code === "Escape") {
         setTool("select");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleDelete, handleDuplicate, handleRedo, handleUndo, selection]);
+  }, [draftBoundary, handleCancelBoundary, handleDelete, handleDuplicate, handleFinishBoundary, handleRedo, handleUndo, selection, tool]);
 
   const applyImportedScenario = (next: CustomScenarioDef, message: string) => {
     commitChange(next, def);
