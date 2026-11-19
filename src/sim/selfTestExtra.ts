@@ -594,8 +594,12 @@ export const extraCases: SelfTestCase[] = [
         ...def,
         start: { x: 0, z: 0, h: 0 },
         defaultSpeedLimitKmh: 60,
+        roads: [
+          { id: "road-main", points: [{ x: 0, z: -20 }, { x: 0, z: 80 }], width: 8, lanes: 2, highway: "primary" },
+          { id: "road-cross", points: [{ x: -20, z: 12 }, { x: 20, z: 12 }], width: 8, lanes: 2, highway: "secondary" },
+        ],
         signs: [
-          { id: "s-30", kind: "speed_limit", x: -3, z: 2, h: 0, limitKmh: 30, zoneRadius: 10, zoneX: 0, zoneZ: 2 },
+          { id: "s-30", kind: "speed_limit", x: -3, z: 2, h: 0, limitKmh: 30, zoneRadius: 100, zoneX: 0, zoneZ: 2 },
           { id: "s-lz", kind: "living_zone", x: -3, z: 25, h: 0, limitKmh: 20, zoneRadius: 8, zoneX: 0, zoneZ: 25 },
           { id: "s-stop", kind: "stop", x: -3, z: 5, h: 0 },
         ],
@@ -612,7 +616,9 @@ export const extraCases: SelfTestCase[] = [
 
       const world = buildCustomWorld(def);
       assert(getActiveSpeedLimit(0, 2, world) === 30, "Знак 3.24 должен снижать лимит до 30 км/ч");
-      assert(getActiveSpeedLimit(0, 25, world) === 20, "Знак 5.21 должен снижать лимит до 20 км/ч");
+      assert(getActiveSpeedLimit(0, 11, world) === 30, "Ограничение должно действовать до перекрёстка");
+      assert(getActiveSpeedLimit(0, 14, world) === 60, "Перекрёсток должен отменять ограничение скорости");
+      assert(getActiveSpeedLimit(0, 25, world) === 20, "Знак 5.21 должен задавать новый участок ограничения");
       assert(getActiveSpeedLimit(-20, -20, world) === 60, "Вне зон должен действовать базовый лимит 60 км/ч");
 
       const grid = new SpatialGrid(world.obstacles, 10);
@@ -662,7 +668,7 @@ export const extraCases: SelfTestCase[] = [
       );
       assert(validateCustomScenario(osmDef).errors.length === 0, "Импортированная OSM-карта должна быть валидна");
 
-      return "12 знаков · 8 препятствий · лимиты 30/20 км/ч · КТ STOP ждёт остановки · реплей бит-в-бит";
+      return "12 знаков · 8 препятствий · отрезки 30/20 км/ч · перекрёсток отменяет лимит · КТ STOP · реплей бит-в-бит";
     },
   },
   {
