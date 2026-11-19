@@ -3,7 +3,7 @@
  * @layer pure-core
  * @role Построение и валидация сохраняемых экзаменационных маршрутов поверх дорожного графа OSM.
  * @invariants #1 (метрические координаты), #7 (чистое ядро), #8 (офлайн), #9 (атрибуция ODbL), #15 (снимок мира для реплея).
- * @tests T34
+ * @tests T32
  */
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "./boundary";
 import { findRoadNetworkPath, nearestRoadPoint, polylineLength, samplePolyline } from "./route";
