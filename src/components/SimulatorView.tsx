@@ -43,6 +43,7 @@ import {
   type HeadUnitMode,
   type HeadUnitState,
 } from "../render/cockpitDisplays";
+import { detentLabel, type HeadDetentId } from "../render/headLook";
 import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 import { buildScenarioWorld } from "../scenarios/catalog";
@@ -299,6 +300,11 @@ export function SimulatorView({
   const wheelLimit = normalizeWheelLock(calibration.maxInnerWheelDeg);
 
   const [cameraMode, setCameraMode] = useState<CameraMode>("chase");
+  /**
+   * Точка внимания водителя в салоне: слева/справа — боковые зеркала, по центру — дорога
+   * с салонным зеркалом в верхней трети кадра. Стрелки ←/→ переключают её по кругу.
+   */
+  const [headDetentUi, setHeadDetentUi] = useState<HeadDetentId>("road");
   const [quality, setQuality] = useState<QualityPreset>("medium");
   const [showTrajectory, setShowTrajectory] = useState(true);
   const [showMirrors, setShowMirrors] = useState(true);
@@ -1156,6 +1162,15 @@ export function SimulatorView({
       gear: () => inputRef.current.gear,
       engineOn: () => inputRef.current.engineOn,
       signal: () => inputRef.current.signal,
+      /** Взгляд водителя: текущий детент и фактический угол головы (с инерцией шеи). */
+      look: () => ({
+        detent: sceneCtrlRef.current?.getHeadDetent() ?? 0,
+        yawDeg: sceneCtrlRef.current?.getHeadYawDeg() ?? 0,
+      }),
+      setHeadDetent: (detent: -1 | 0 | 1) => {
+        sceneCtrlRef.current?.setHeadDetent(detent);
+        setHeadDetentUi(detent === 0 ? "road" : detent > 0 ? "left" : "right");
+      },
       audio: () => ({
         enabled: soundEnabledRef.current,
         engineCreated: Boolean(engineSoundRef.current),
@@ -1300,10 +1315,13 @@ export function SimulatorView({
         const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
         inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
+        // Shift вместе с тормозом = энергичное нажатие: быстрый набор давления и +18 % замедления
+        inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.05);
 
         // Руль: отклонённое USB-устройство перехватывает управление у клавиатуры
-        const steerL = Boolean(keys.KeyA || keys.ArrowLeft);
-        const steerR = Boolean(keys.KeyD || keys.ArrowRight);
+        // A/D — руль; ←/→ — переключение точек внимания (зеркало/дорога), они не крутят руль
+        const steerL = Boolean(keys.KeyA);
+        const steerR = Boolean(keys.KeyD);
         if (pad.steering) {
           inp.steerWheelDeg = pad.steerWheelDeg;
         } else if (steerL && !steerR) {
@@ -1490,6 +1508,17 @@ export function SimulatorView({
       if (e.repeat) return;
 
       const inp = inputRef.current;
+      // ←/→ — три точки внимания водителя: левое зеркало → дорога (+ салонное зеркало) → правое.
+      // Шаг дискретный, на каждое нажатие; довод идёт с инерцией шеи в кадре (sceneController).
+      if (code === "ArrowLeft" || code === "ArrowRight") {
+        const ctrl = sceneCtrlRef.current;
+        if (ctrl) {
+          const detent = ctrl.stepHeadDetent(code === "ArrowLeft" ? 1 : -1);
+          setHeadDetentUi(detent === 0 ? "road" : detent > 0 ? "left" : "right");
+          onNotify(`Взгляд: ${detentLabel(detent)}`);
+        }
+        return;
+      }
       switch (code) {
         case "KeyI":
           toggleEngine();
@@ -3170,7 +3199,8 @@ export function SimulatorView({
                   ["S / ↓", "Тормоз (в D не даёт реверс)"],
                   ["A / D", "Руль влево (+X) / вправо (−X)"],
                   ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
-                  ["ПКМ + колесо", "Вращение и зум камеры"],
+                  ["← / →", "Взгляд: левое зеркало → дорога → правое зеркало"],
+                  ["ПКМ + колесо", "Свободный обзор головой (не возвращается) · зум камеры"],
                   ["Shift / RShift·X", "Ручной режим M1–M6 (▲ / ▼)"],
                   ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
                   ["G · 3D-рычаг", "Взгляд на АКПП и переключение мышью"],
@@ -3236,6 +3266,64 @@ export function SimulatorView({
             ))}
             {cameraMode === "cockpit" && (
               <>
+              {/* Три точки внимания: ← левое зеркало · дорога + салонное зеркало · правое зеркало → */}
+              <div
+                data-testid="head-detents"
+                className="flex items-center gap-0.5 rounded-lg border border-[rgba(148,176,194,.18)] bg-[#091017]/80 p-0.5"
+                title="Точки внимания водителя: ←/→ переключают левое зеркало → дорогу → правое зеркало"
+              >
+                <button
+                  type="button"
+                  data-testid="head-detent-left"
+                  aria-pressed={headDetentUi === "left"}
+                  onClick={() => {
+                    sceneCtrlRef.current?.setHeadDetent(1);
+                    setHeadDetentUi("left");
+                    onNotify("Взгляд: левое зеркало");
+                  }}
+                  className={`px-1.5 py-1 rounded text-[10px] font-bold border transition ${
+                    headDetentUi === "left"
+                      ? "bg-[#52d6bd]/25 border-[#52d6bd]/70 text-[#52d6bd]"
+                      : "border-transparent text-[#9bafbc] hover:text-white"
+                  }`}
+                >
+                  ◀ ЛЗ
+                </button>
+                <button
+                  type="button"
+                  data-testid="head-detent-road"
+                  aria-pressed={headDetentUi === "road"}
+                  onClick={() => {
+                    sceneCtrlRef.current?.setHeadDetent(0);
+                    setHeadDetentUi("road");
+                    onNotify("Взгляд: дорога + салонное зеркало");
+                  }}
+                  className={`px-1.5 py-1 rounded text-[10px] font-bold border transition ${
+                    headDetentUi === "road"
+                      ? "bg-[#f5b942]/25 border-[#f5b942]/70 text-[#f5b942]"
+                      : "border-transparent text-[#9bafbc] hover:text-white"
+                  }`}
+                >
+                  Дорога
+                </button>
+                <button
+                  type="button"
+                  data-testid="head-detent-right"
+                  aria-pressed={headDetentUi === "right"}
+                  onClick={() => {
+                    sceneCtrlRef.current?.setHeadDetent(-1);
+                    setHeadDetentUi("right");
+                    onNotify("Взгляд: правое зеркало");
+                  }}
+                  className={`px-1.5 py-1 rounded text-[10px] font-bold border transition ${
+                    headDetentUi === "right"
+                      ? "bg-[#52d6bd]/25 border-[#52d6bd]/70 text-[#52d6bd]"
+                      : "border-transparent text-[#9bafbc] hover:text-white"
+                  }`}
+                >
+                  ПЗ ▶
+                </button>
+              </div>
               <button
                 type="button"
                 data-testid="cockpit-look-shifter"

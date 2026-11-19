@@ -117,8 +117,16 @@ export const AUTO_SHIFT_DURATION_S = 0.24;
 export const MANUAL_SHIFT_DURATION_S = 0.18;
 
 /** Установившаяся скорость плавного самохода (creep) гидротрансформатора на D1/M1 на холостых оборотах (км/ч). */
-export const IDLE_CREEP_MAX_KMH = 6.5;
+export const IDLE_CREEP_MAX_KMH = 5;
 /** Максимальное установившееся замедление дисковых тормозов Kia Ceed JD на сухом асфальте с АБС (м/с²). */
+/**
+ * Постоянная времени нарастания давления в гидроприводе тормозов, с: педаль не даёт мгновенной
+ * полки — жидкость перетекает по магистрали, колодки выбирают зазор.
+ */
+export const BRAKE_BUILD_UP_TAU_S = 0.34;
+/** Постоянная времени отпускания тормоза (колодки отходят быстрее, чем нажимаются), с. */
+export const BRAKE_RELEASE_TAU_S = 0.13;
+
 export const SERVICE_BRAKE_MAX_DECEL = 8.4;
 
 export const FIXED_DT = 1 / 60;
@@ -225,6 +233,13 @@ export function engineTorqueFactor(rpm: number): number {
  * Калибровано по паспорту Kia Ceed JD 1.6 MPI: 0–100 км/ч ≈ 10.8 с, Vmax = 180 км/ч,
  * реалистичный выбег в `N` до полной остановки и ступенчатое торможение двигателем в `D`/`M`/`R`.
  */
+/**
+ * Относительная сила компрессии (торможения двигателем) по передачам 1..6.
+ * Обратно пропорциональна передаточному числу: на 1-й ступени мотор тормозит в ~5 раз сильнее,
+ * чем на 6-й, — именно так машина «сама останавливается» на передаче, если отпустить газ.
+ */
+export const ENGINE_BRAKE_GEAR_RATIO = [0, 5.6, 3.1, 1.95, 1.4, 1.08, 0.86] as const;
+
 export function computeRoadDragDecel(
   absV: number,
   throttlePos = 0,
@@ -251,7 +266,9 @@ export function computeRoadDragDecel(
     // Вакуумное (насосное) торможение двигателем сильнее на пониженных передачах и высоких оборотах;
     // на 1-й ступени плавно сходит к нулю у порога холостого хода IDLE_CREEP_MAX_KMH (~6,5 км/ч),
     // где ЭБУ возобновляет подачу топлива и гидротрансформатор поддерживает плавный самоход D1.
-    const gearLoss = 0.14 + (MAX_FORWARD_GEAR + 1 - activeForwardGear) * 0.068;
+    // Компрессия по передаче: 0,16 базово + до 1,06 на 1-й. На 60 км/ч машина на M1 гасит
+    // скорость до самохода за ~11 с (в N — за минуту), как настоящий мотор на низшей ступени.
+    const gearLoss = 0.16 + 0.19 * ENGINE_BRAKE_GEAR_RATIO[activeForwardGear];
     const rpmFactor = 0.58 + 0.82 * clamp((wheelRpm - 1050) / 3600, 0, 1);
     const dfcoFade =
       activeForwardGear === 1
@@ -270,14 +287,18 @@ export function computeRoadDragDecel(
  * Учитывает нелинейную модуляцию педали, лёгкое тепловое снижение на высоких скоростях и мягкий
  * довод колодок в последние ~2 км/ч для реалистичной плавной остановки без рывка.
  */
-export function computeServiceBrakeDecel(brakePos: number, absV: number): number {
+export function computeServiceBrakeDecel(brakePos: number, absV: number, shiftBoost = 0): number {
   const b = clamp(brakePos, 0, 1);
   if (b <= 0.001) return 0;
   const kmh = absV * 3.6;
-  const pedalCurve = Math.pow(b, 1.15);
+  // Мягкая S-кривая педали: первые проценты хода лишь выбирают зазор колодок (символическое
+  // замедление), к 60 % выхода — уверенное торможение, к 100 % — полка АБС.
+  const pedalCurve = 0.06 + 0.94 * Math.pow(b, 1.9);
   const highSpeedFactor = 1 - 0.06 * clamp((kmh - 90) / 90, 0, 1);
   const finalStopSettle = 0.58 + 0.42 * clamp(absV / 0.6, 0, 1);
-  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle;
+  // Shift (энергичный ход педали) даёт до +18 % к замедлению
+  const boost = 1 + 0.18 * clamp(shiftBoost, 0, 1);
+  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle * boost;
 }
 
 /**
@@ -304,9 +325,13 @@ export function computeIdleCreepAccel(
   if (throttleHandoff <= 0) return 0;
   const fwdKmh = Math.max(0, v * 3.6);
   if (fwdKmh >= IDLE_CREEP_MAX_KMH) return 0;
-  const speedReserve = Math.pow(1 - fwdKmh / IDLE_CREEP_MAX_KMH, 1.12);
+  // Резерв тяги затухает плавно: к равновесным 5 км/ч подходим без обрыва, но неохотно
+  const speedReserve = Math.pow(1 - fwdKmh / IDLE_CREEP_MAX_KMH, 0.62);
   // 0.155 м/с² уравновешивает сопротивление качения на ~6,4 км/ч; +0.46 м/с² даёт мягкий старт с места
-  return brakeRelease * throttleHandoff * (0.155 + 0.46 * speedReserve);
+  // Самоход намеренно ленивый: тяга всего на 0,005 м/с² превышает сопротивление качения,
+  // поэтому с места машина ползёт ~1,5 км/ч за первые 6 с и подходит к 5 км/ч за ~30 с:
+  // отпустил газ на ровном — машина почти не едет, как настоящий автомат на холостых.
+  return brakeRelease * throttleHandoff * (0.153 + 0.09 * speedReserve);
 }
 
 /** Экспоненциальный фильтр с ограничением скорости нарастания/спада (инерция маховика ДВС без скачков). */

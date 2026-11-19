@@ -49,6 +49,7 @@ import {
   type DetailedPedestrianVisual,
   type ShifterHitId,
 } from "./vehiclesAndPeds";
+import { HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
   CameraMode,
@@ -203,11 +204,25 @@ export class SceneController {
   private frameCounter = 0;
   private qualityPreset: QualityPreset = "high";
 
-  // Управление орбитальной камерой и обзором головы в салоне
+  // Управление орбитальной камерой (внешние виды) и обзором головы водителя (салон)
   private orbitYaw = 0;
   private orbitPitch = 0.36;
   private orbitDist = 9.2;
   private cockpitFov = 68;
+  /**
+   * Взгляд водителя в салоне — независимое от орбиты состояние. `headYawTarget`/`headPitchTarget`
+   * задают, куда водитель поворачивает голову (детент зеркала/дороги или свободный обзор ПКМ),
+   * а `headYaw`/`headPitch` догоняют их с инерцией шеи. Отделение от `orbitYaw` — принципиальное:
+   * раньше голова и внешняя камера делили одну переменную, поэтому переключение вида
+   * (`1/2/3/4/C`) «сбивало» взгляд, а поворот головы уводил орбиту вокруг машины.
+   */
+  private headYaw = 0;
+  private headYawTarget = 0;
+  private headPitch = 0;
+  private headPitchTarget = 0;
+  /** Текущий детент внимания: 0 — дорога (+ салонное зеркало), +1 — левое зеркало, −1 — правое. */
+  private headDetent: -1 | 0 | 1 = 0;
+
   private lastCameraMode: CameraMode = "chase";
   private camLookTarget = new THREE.Vector3();
 
@@ -398,10 +413,71 @@ export class SceneController {
     this.renderer.setSize(width, height, false);
   }
 
+  /**
+   * Свободный обзор правой кнопкой мыши.
+   * В салоне двигает голову водителя (плавно, с инерцией, и НЕ возвращает её назад после отпускания —
+   * «как повернул, так и смотришь»; к детенту дороги возвращает только стрелка). Снаружи — орбиту.
+   */
   adjustOrbit(deltaX: number, deltaY: number): void {
+    if (this.lastCameraMode === "cockpit") {
+      // 0,0042 рад/пиксель ≈ 0,24°/пиксель: полный обзор ±95° за ~400 px, без «дёрганья»
+      this.headDetent = 0;
+      this.headYawTarget = clamp(this.headYawTarget - deltaX * 0.0042, -HEAD_TURN.maxRad, HEAD_TURN.maxRad);
+      this.headPitchTarget = clamp(this.headPitchTarget - deltaY * 0.0032, HEAD_TURN.minPitchRad, HEAD_TURN.maxPitchRad);
+      return;
+    }
     this.savedHeadBeforeShifter = null;
     this.orbitYaw -= deltaX * 0.0065;
     this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.42);
+  }
+
+  /** Индекс детента внимания: −1 правое зеркало, 0 дорога, +1 левое зеркало. */
+  getHeadDetent(): -1 | 0 | 1 {
+    return this.headDetent;
+  }
+
+  /** Текущий угол головы в градусах (фактический, с учётом инерции). */
+  getHeadYawDeg(): number {
+    return (this.headYaw * 180) / Math.PI;
+  }
+
+  /**
+   * Переключение точки внимания стрелками ←/→: шаг по детентам «левое зеркало → дорога → правое зеркало».
+   * Возвращает новый детент. Довод идёт с инерцией в кадре, поэтому глаз «доезжает» за ~0,18 с.
+   */
+  stepHeadDetent(dir: -1 | 1): -1 | 0 | 1 {
+    const next = clamp(this.headDetent + dir, -1, 1) as -1 | 0 | 1;
+    this.setHeadDetent(next);
+    return next;
+  }
+
+  /** Прямая установка детента (клик по кнопке, клавиша ↓ — «дорога»). */
+  setHeadDetent(detent: -1 | 0 | 1): void {
+    this.headDetent = detent;
+    this.headYawTarget = detentYawRad(detent);
+    this.headPitchTarget = 0;
+    this.savedHeadBeforeShifter = null;
+  }
+
+  /** Мгновенно вернуть взгляд на дорогу (сброс попытки, переключение сценария, выход из салона). */
+  resetHeadLook(): void {
+    this.headDetent = 0;
+    this.headYaw = 0;
+    this.headYawTarget = 0;
+    this.headPitch = 0;
+    this.headPitchTarget = 0;
+  }
+
+  /**
+   * Инерция шеи: цель детента или свободного обзора догоняется экспоненциально (τ ≈ 0,055 с),
+   * поэтому даже мгновенный клик стрелкой выглядит как живой поворот головы, а не телепорт.
+   */
+  private stepHeadInertia(dt: number): void {
+    const k = Math.min(1, dt / HEAD_TURN.TAU_S);
+    this.headYaw += (this.headYawTarget - this.headYaw) * k;
+    this.headPitch += (this.headPitchTarget - this.headPitch) * k;
+    if (Math.abs(this.headYawTarget - this.headYaw) < 1e-4) this.headYaw = this.headYawTarget;
+    if (Math.abs(this.headPitchTarget - this.headPitch) < 1e-4) this.headPitch = this.headPitchTarget;
   }
 
   adjustZoom(wheelDelta: number): void {
@@ -419,6 +495,7 @@ export class SceneController {
     this.orbitPitch = 0.36;
     this.orbitDist = 9.2;
     this.cockpitFov = 68;
+    this.resetHeadLook();
   }
 
   /** Быстрый перевод взгляда водителя в салоне на 3D-рычаг 6АКПП Shiftronic и обратно на дорогу (клавиша G). */
@@ -426,21 +503,23 @@ export class SceneController {
     if (this.isCockpitShifterView()) {
       const prev = this.savedHeadBeforeShifter;
       this.savedHeadBeforeShifter = null;
-      this.orbitYaw = prev ? prev.yaw : 0;
-      this.orbitPitch = prev ? prev.pitch : 0.36;
+      // Возвращаемся туда, куда смотрел водитель до взгляда на рычаг (детент или свободный обзор)
+      this.headYawTarget = prev ? prev.yaw : detentYawRad(this.headDetent);
+      this.headPitchTarget = prev ? prev.pitch : 0;
       this.cockpitFov = prev ? prev.fov : 68;
       return false;
     }
-    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
-    this.orbitYaw = -0.82;
-    this.orbitPitch = 1.34;
+    this.savedHeadBeforeShifter = { yaw: this.headYawTarget, pitch: this.headPitchTarget, fov: this.cockpitFov };
+    // Взгляд вниз-вправо на консоль: цель головы, а не орбиты — после возврата взгляд восстанавливается
+    this.headYawTarget = -HEAD_TURN.SHIFTER_RAD;
+    this.headPitchTarget = -HEAD_TURN.SHIFTER_PITCH_RAD;
     this.cockpitFov = 62;
     return true;
   }
 
   /** Смотрит ли сейчас камера салона вниз-вправо на консоль рычага АКПП. */
   isCockpitShifterView(): boolean {
-    return this.orbitPitch > 1.05 && this.orbitYaw < -0.45 && this.orbitYaw > -1.35;
+    return this.headPitchTarget < -0.5 && this.headYawTarget < -0.4;
   }
 
   /** Сохраняет состояние 7" ШГУ (режим, станция, клип, промо-слот) для 3D-экрана и подсветки. */
@@ -497,10 +576,11 @@ export class SceneController {
   /** Переводит взгляд водителя в салоне на центральную консоль с 7" ШГУ (клик по экрану в HUD). */
   lookAtHeadUnit(): boolean {
     if (this.lastCameraMode !== "cockpit") return false;
-    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
-    // Центральная консоль с 7" ШГУ — ниже и правее глаз водителя: взгляд вниз-вправо, но выше кулисы АКПП
-    this.orbitYaw = -0.86;
-    this.orbitPitch = 0.86;
+    // Центральная консоль с 7" ШГУ — ниже и правее глаз водителя: взгляд вниз-вправо, но выше кулисы АКПП.
+    // Запоминаем детент/свободный обзор, чтобы после возврата взгляд встал обратно на дорогу или зеркало.
+    this.savedHeadBeforeShifter = { yaw: this.headYawTarget, pitch: this.headPitchTarget, fov: this.cockpitFov };
+    this.headYawTarget = -0.62;
+    this.headPitchTarget = -0.34;
     this.cockpitFov = 66;
     return true;
   }
@@ -1300,12 +1380,16 @@ export class SceneController {
     const prevCameraMode = this.lastCameraMode;
     this.lastCameraMode = opts.cameraMode;
     if (prevCameraMode === "cockpit" && opts.cameraMode !== "cockpit" && this.savedHeadBeforeShifter) {
-      this.orbitYaw = this.savedHeadBeforeShifter.yaw;
-      this.orbitPitch = this.savedHeadBeforeShifter.pitch;
+      // Взгляд «сохранён» мышью/кнопкой G — возвращаем цель головы, а не орбиту:
+      // после возврата в салон (2) водитель смотрит туда же, куда смотрел до переключения вида.
+      this.headYawTarget = this.savedHeadBeforeShifter.yaw;
+      this.headPitchTarget = this.savedHeadBeforeShifter.pitch;
       this.cockpitFov = this.savedHeadBeforeShifter.fov;
       this.savedHeadBeforeShifter = null;
     }
     this.playerRig.chassis.updateWorldMatrix(true, false);
+    // Инерция шеи: голова плавно догоняет цель (детент зеркала/дороги или свободный обзор ПКМ)
+    this.stepHeadInertia(1 / 60);
     this.updateCamera(state, opts.cameraMode);
 
     // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели.
@@ -1484,10 +1568,10 @@ export class SceneController {
       const localEyeX = CAR.width * 0.225;
       const localEyeY = 1.195;
       const localEyeZ = -0.06;
-      const headYaw = clamp(this.orbitYaw * 0.72, -1.55, 1.55);
-      // При базовом orbitPitch = 0.36 наклон равен -0.02 рад (вперёд на дорогу), а ПКМ вниз или G открывает обзор рычага АКПП
-      const pitchDelta = this.orbitPitch - 0.36;
-      const headPitch = clamp(-0.02 - pitchDelta * (pitchDelta > 0 ? 0.66 : 0.45), -0.74, 0.34);
+      // Взгляд берётся из собственного состояния головы: детенты зеркал/дороги (стрелки) или
+      // свободный обзор ПКМ, который остаётся там, где его отпустили.
+      const headYaw = this.headYaw;
+      const headPitch = clamp(HEAD_TURN.PITCH_RAD + this.headPitch, -0.74, 0.34);
       const cosP = Math.cos(headPitch);
       if (this.camera.fov !== this.cockpitFov) {
         this.camera.fov = this.cockpitFov;

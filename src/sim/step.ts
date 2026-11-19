@@ -23,6 +23,8 @@ import {
   AUTO_SHIFT_DURATION_S,
   AUTO_UP,
   AUTO_UP_SPORT,
+  BRAKE_BUILD_UP_TAU_S,
+  BRAKE_RELEASE_TAU_S,
   CAR,
   clamp,
   computeEngineAccel,
@@ -267,12 +269,12 @@ export function stepSimulation(
   // Плавный гидропривод тормозов (ВУТ + АБС), электронная заслонка Kefico ETC (с Brake Override) и пауза КПП
   const brake = clamp(input.brake, 0, 1);
   const prevBrakePos = s.brakePos ?? 0;
-  const brRate = brake > prevBrakePos ? 9.5 : 15.0;
-  s.brakePos = clamp(
-    prevBrakePos + (brake - prevBrakePos) * Math.min(1, dt * brRate),
-    0,
-    1
-  );
+  // Мягкая кривая гидропривода: давление набирается с постоянной времени ВУТ, а не мгновенно.
+  // Shift (энергичное нажатие) ускоряет набор вдвое и добавляет 14 % хода педали.
+  const boost = input.shiftBoost ? 1 : 0;
+  const tau = brake > prevBrakePos ? BRAKE_BUILD_UP_TAU_S / (1 + boost) : BRAKE_RELEASE_TAU_S;
+  const targetBrake = clamp(brake * (1 + 0.14 * boost), 0, 1);
+  s.brakePos = clamp(prevBrakePos + (targetBrake - prevBrakePos) * Math.min(1, dt / tau), 0, 1);
   if (s.brakePos < 0.001 && brake === 0) s.brakePos = 0;
 
   // Brake Override System: нажатая педаль тормоза перекрывает подачу газа (как в реальном ЭБУ Kia Ceed JD)
@@ -364,7 +366,7 @@ export function stepSimulation(
 
   // Рабочий дисковый тормоз S (прогрессивный гидропривод + плавный довод к 0 км/ч без отката назад)
   if (s.brakePos > 0) {
-    const dv = computeServiceBrakeDecel(s.brakePos, Math.abs(s.v)) * dt;
+    const dv = computeServiceBrakeDecel(s.brakePos, Math.abs(s.v), input.shiftBoost ? 1 : 0) * dt;
     if (Math.abs(s.v) <= dv) s.v = 0;
     else s.v -= Math.sign(s.v) * dv;
   }

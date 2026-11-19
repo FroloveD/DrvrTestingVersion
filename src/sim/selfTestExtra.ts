@@ -97,6 +97,7 @@ import {
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
+import { HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { Gear, SimEvent } from "./types";
 import {
@@ -1538,7 +1539,7 @@ export const extraCases: SelfTestCase[] = [
       };
       const grid = new SpatialGrid([], 10);
 
-      // 1. Самоход гидротрансформатора на D1 на минимальных оборотах (~800–880 об/мин, ~6,4 км/ч):
+      // 1. Самоход гидротрансформатора на D1 на минимальных оборотах (~800–880 об/мин, ровно 5 км/ч):
       // при нажатом тормозе S — 0 км/ч; при отпускании S — плавно трогается сам; на ручнике и в P/N/R — 0 км/ч
       let creepS = createInitialState(track, true);
       const rec = new AttemptRecorder(creepS, true);
@@ -1551,11 +1552,11 @@ export const extraCases: SelfTestCase[] = [
       // Удерживаем тормоз в D1 1,5 с — машина стоит неподвижно
       for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
       assert(creepS.v === 0, `В D1 с нажатым тормозом скорость обязана быть 0, получено ${creepS.v}`);
-      // Отпускаем тормоз и НЕ нажимаем газ — машина плавно разгоняется сама до ~6,2–6,5 км/ч на ХХ
-      for (let i = 0; i < 12 * 60; i++) runTick({ ...createReadyInput("D"), throttle: 0, brake: 0 });
+      // Отпускаем тормоз и НЕ нажимаем газ: машина лениво (не «прыгает») подходит к 5 км/ч за ~35 с
+      for (let i = 0; i < 45 * 60; i++) runTick({ ...createReadyInput("D"), throttle: 0, brake: 0 });
       const creepKmh = creepS.v * 3.6;
       assert(
-        creepKmh >= 5.6 && creepKmh <= IDLE_CREEP_MAX_KMH + 0.05 && creepS.autoSubGear === 1,
+        creepKmh >= IDLE_CREEP_MAX_KMH - 0.6 && creepKmh <= IDLE_CREEP_MAX_KMH + 0.05 && creepS.autoSubGear === 1,
         `Неверная скорость самохода D1: ${creepKmh.toFixed(2)} км/ч (передача D${creepS.autoSubGear})`
       );
       assert(
@@ -1565,7 +1566,8 @@ export const extraCases: SelfTestCase[] = [
       // Нажимаем тормоз S — плавная полная остановка в 0 без отката назад; отпускаем — снова едет сама
       for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
       assert(creepS.v === 0, `Тормоз S должен остановить самоход D1 в 0, получено ${creepS.v}`);
-      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 0 });
+      // С 5 км/ч машина вновь «раскатывается» неохотно: за 12 с успевает вернуться к самоходу
+      for (let i = 0; i < 12 * 60; i++) runTick({ ...createReadyInput("D"), brake: 0 });
       assert(creepS.v * 3.6 > 1.5, "После отпускания тормоза самоход D1 должен плавно возобновиться");
       // В N, R и с ручником без газа самохода нет
       for (const idleInp of [
@@ -1580,27 +1582,49 @@ export const extraCases: SelfTestCase[] = [
         assert(st.v === 0, `Без газа в режиме ${idleInp.gear} (hb=${idleInp.handbrake}) машина должна стоять`);
       }
 
-      // 2. Реалистичное экстренное торможение 100–0 км/ч (паспорт Kia Ceed JD: ~38–44 м) + клевок кузова
-      let brakeS = { ...createInitialState(track, true), v: 100 / 3.6, prevV: 100 / 3.6, autoSubGear: 4, rpm: 4160 };
-      const z0 = brakeS.z;
-      let maxDivePitch = 0;
-      for (let i = 0; i < 6 * 60; i++) {
-        brakeS = stepSimulation(
-          brakeS,
-          { ...createReadyInput("D"), brake: 1 },
-          track,
-          grid,
-          DEFAULT_CALIBRATION,
-          DEFAULT_RULESET,
-          FIXED_DT
-        ).state;
-        maxDivePitch = Math.max(maxDivePitch, brakeS.pitch);
-        assert(brakeS.v >= 0, "Тормоз S никогда не должен давать откат назад");
-      }
-      const stopDist100 = brakeS.z - z0;
+      // 2. Реалистичное экстренное торможение 100–0 км/ч (паспорт Kia Ceed JD: ~38–44 м) + клевок кузова.
+      // Мягкое нажатие без Shift идёт по гидравлической кривой и чуть длиннее; с Shift (энергичное
+      // нажатие) гидропривод набирает давление вдвое быстрее — путь короче.
+      const brakeFrom100 = (shift: boolean) => {
+        let st = { ...createInitialState(track, true), v: 100 / 3.6, prevV: 100 / 3.6, autoSubGear: 4, rpm: 4160 };
+        const z0 = st.z;
+        let dive = 0;
+        for (let i = 0; i < 9 * 60; i++) {
+          st = stepSimulation(
+            st,
+            { ...createReadyInput("D"), brake: 1, shiftBoost: shift },
+            track,
+            grid,
+            DEFAULT_CALIBRATION,
+            DEFAULT_RULESET,
+            FIXED_DT
+          ).state;
+          dive = Math.max(dive, st.pitch);
+          assert(st.v >= 0, "Тормоз S никогда не должен давать откат назад");
+        }
+        return { st, dist: st.z - z0, dive };
+      };
+      const soft100 = brakeFrom100(false);
+      const hard100 = brakeFrom100(true);
+      const brakeS = hard100.st;
+      const maxDivePitch = hard100.dive;
+      const stopDist100 = hard100.dist;
       assert(
-        brakeS.v === 0 && stopDist100 >= 38 && stopDist100 <= 52,
-        `Тормозной путь 100–0 км/ч вне реалистичного диапазона (38–52 м): ${stopDist100.toFixed(1)} м`
+        brakeS.v === 0 && stopDist100 >= 38 && stopDist100 <= 54,
+        `Тормозной путь 100–0 км/ч с Shift вне диапазона (38–54 м): ${stopDist100.toFixed(1)} м`
+      );
+      assert(
+        hard100.dist < soft100.dist - 1.5,
+        `Shift обязан усиливать торможение: с Shift ${hard100.dist.toFixed(1)} м против ${soft100.dist.toFixed(1)} м`
+      );
+      // Мягкая кривая педали: за 1/3 с гидропривод не успевает выйти на полку
+      let softPedal = { ...createInitialState(track, true), v: 60 / 3.6, prevV: 60 / 3.6, autoSubGear: 3 };
+      for (let i = 0; i < 20; i++) {
+        softPedal = stepSimulation(softPedal, { ...createReadyInput("D"), brake: 1 }, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        softPedal.brakePos > 0.2 && softPedal.brakePos < 0.78,
+        `Гидропривод обязан набирать давление плавно: за 1/3 с получено ${softPedal.brakePos.toFixed(2)}`
       );
       assert(maxDivePitch > 0.02 && Math.abs(brakeS.pitch) < 0.004, "Кузов должен клюнуть при торможении и выровняться в 0");
 
@@ -1621,6 +1645,26 @@ export const extraCases: SelfTestCase[] = [
         ebM2.v + 1.2 < ebN.v,
         `Торможение двигателем на M2 (${(ebM2.v * 3.6).toFixed(1)} км/ч) должно быть заметно сильнее выбега в N (${(ebN.v * 3.6).toFixed(1)} км/ч)`
       );
+
+      // «Как настоящая»: на передаче машина тормозит мотором, а не катится как в нейтрали.
+      // 60 км/ч без газа до порога самохода: M1 ≈ 12 с, M2 ≈ 19 с, N ≈ 62 с.
+      const coastToCreep = (gear: Gear, sub: number) => {
+        let st = { ...createInitialState(track, true), gear, prevGear: gear, autoSubGear: sub, v: 60 / 3.6, prevV: 60 / 3.6 };
+        let sec = 0;
+        while (st.v * 3.6 > 5.2 && sec < 80) {
+          st = stepSimulation(st, createReadyInput(gear), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+          sec += FIXED_DT;
+        }
+        return sec;
+      };
+      const tN = coastToCreep("N", 0);
+      const tM1 = coastToCreep("1", 1);
+      const tM2 = coastToCreep("2", 2);
+      assert(
+        tM1 < 16 && tM2 < tM1 + 8 && tN > tM1 * 3,
+        `Торможение двигателем должно быть сильным: 60→5 км/ч M1=${tM1.toFixed(1)} с, M2=${tM2.toFixed(1)} с, N=${tN.toFixed(1)} с`
+      );
+      assert(tM2 > tM1, `На низшей передаче торможение двигателем сильнее: M1=${tM1.toFixed(1)} с, M2=${tM2.toFixed(1)} с`);
 
       let coastD = { ...createInitialState(track, true), v: 50 / 3.6, prevV: 50 / 3.6, autoSubGear: 3 };
       for (let i = 0; i < 45 * 60; i++) {
@@ -1646,7 +1690,7 @@ export const extraCases: SelfTestCase[] = [
         "Реплей самохода D1 и прогрессивного тормоза разошёлся"
       );
 
-      return `D1 creep=${creepKmh.toFixed(1)} км/ч @ ${Math.round(creepS.rpm)} об/мин · 100–0=${stopDist100.toFixed(1)} м · M2<N · BTSI P OK`;
+      return `D1 creep=${creepKmh.toFixed(1)} км/ч · 100–0=${stopDist100.toFixed(1)} м (мягко ${soft100.dist.toFixed(1)} м) · M2<N · BTSI P OK`;
     },
   },
   {
@@ -1706,6 +1750,80 @@ export const extraCases: SelfTestCase[] = [
       assert(!driving.locked, "В движении в D селектор не заперт");
 
       return `станций=${INTERNET_RADIO_STATIONS.length} · WAV ${(wav.length / 1024).toFixed(0)} КБ/2 с · пик ${peak} · Shift Lock OK`;
+    },
+  },
+  {
+    id: "T37",
+    suite: "vehicle",
+    name: "Взгляд водителя: три точки внимания (зеркала/дорога), инерция шеи и свободный обзор ПКМ без возврата",
+    fn: () => {
+      // 1. Три детента внимания: дорога в центре, зеркала по краям, углы симметричны
+      assert(HEAD_DETENTS.length === 3, "Точек внимания должно быть ровно три: левое зеркало, дорога, правое зеркало");
+      assert(
+        HEAD_DETENTS.map((d) => d.id).join(",") === "left,road,right",
+        "Порядок точек внимания: левое зеркало → дорога → правое зеркало"
+      );
+      assert(HEAD_DETENTS.filter((d) => d.mirror).length === 2, "Две точки внимания обязаны быть зеркалами");
+      assert(detentYawRad(0) === 0, "Дорога — нулевой азимут головы");
+      assert(Math.abs(detentYawRad(1) + detentYawRad(-1)) < 1e-12, "Зеркала симметричны относительно дороги");
+      const mirrorDeg = (Math.abs(detentYawRad(1)) * 180) / Math.PI;
+      assert(
+        mirrorDeg > 30 && mirrorDeg < 50,
+        `Угол на боковое зеркало должен быть 30–50°, получено ${mirrorDeg.toFixed(1)}°`
+      );
+      assert(
+        Math.abs(mirrorDeg - HEAD_TURN.MIRROR_DEG) < 0.001,
+        "Детент зеркала обязан совпадать с геометрическим углом HEAD_TURN.MIRROR_DEG"
+      );
+      // Наклон на дорогу оставляет салонное зеркало в верхней трети кадра (взгляд чуть вниз)
+      assert(HEAD_TURN.PITCH_RAD < 0 && HEAD_TURN.PITCH_RAD > -0.12, "Взгляд на дорогу — лёгкий наклон вниз");
+      assert(
+        detentLabel(0).length > 0 && detentLabel(1).length > 0 && detentLabel(-1).length > 0 &&
+          detentLabel(1) !== detentLabel(-1),
+        "У каждой точки внимания должна быть своя подпись для HUD"
+      );
+
+      // 2. Инерция шеи: цель достигается за ~0,18 с (3τ), за один кадр — только часть пути
+      const dt = FIXED_DT;
+      const tau = HEAD_TURN.TAU_S;
+      const targetYaw = detentYawRad(1);
+      let yaw = 0;
+      let frames = 0;
+      while (Math.abs(targetYaw - yaw) > Math.abs(targetYaw) * 0.02 && frames < 300) {
+        yaw += (targetYaw - yaw) * Math.min(1, dt / tau);
+        frames++;
+      }
+      const travelSec = frames * dt;
+      assert(
+        travelSec > 0.05 && travelSec < 0.32,
+        `Довод головы до зеркала должен занимать 0,05–0,32 с, получено ${travelSec.toFixed(3)} с`
+      );
+      const afterOneFrame = targetYaw * Math.min(1, dt / tau);
+      assert(
+        Math.abs(afterOneFrame) < Math.abs(targetYaw) * 0.5,
+        "За один кадр голова не должна телепортироваться в зеркало — только часть пути"
+      );
+
+      // 3. Свободный обзор: пределы ±100° и наклон −52…+26°, цель НЕ сбрасывается сама
+      const freeYaw = HEAD_TURN.maxRad;
+      assert(Math.abs((freeYaw * 180) / Math.PI - 100) < 0.001, "Свободный обзор ограничен ±100°");
+      assert(HEAD_TURN.minPitchRad < 0 && HEAD_TURN.maxPitchRad > 0, "Свободный обзор работает вверх и вниз");
+      let free = 0;
+      const dragStep = -0.0042 * 40; // 40 px вправо за кадр
+      for (let i = 0; i < 30; i++) {
+        free = Math.max(-HEAD_TURN.maxRad, Math.min(HEAD_TURN.maxRad, free + dragStep));
+        free += (free - free) * Math.min(1, dt / tau); // «цель» = накопленное смещение, возврата нет
+      }
+      assert(free !== 0, "Свободный обзор ПКМ не должен сам возвращаться на дорогу");
+      assert(
+        Math.abs(free) > HEAD_TURN.MIRROR_RAD * 0.5,
+        `Смещение ПКМ должно реально поворачивать голову (получено ${((free * 180) / Math.PI).toFixed(1)}°)`
+      );
+
+      // 4. Взгляд на консоль ШГУ/рычаг — тоже цель головы: возврат идёт туда же, где были
+      assert(HEAD_TURN.SHIFTER_RAD > 0.4 && HEAD_TURN.SHIFTER_PITCH_RAD > 0.3, "Взгляд на консоль: вниз-вправо");
+
+      return `3 точки (${mirrorDeg.toFixed(0)}° зеркала) · довод ${travelSec.toFixed(2)} с · свободный обзор ±${HEAD_TURN.maxDeg}° без возврата`;
     },
   },
 ];

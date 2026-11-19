@@ -48,7 +48,7 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 36 автотестов ядра (T01–T36), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Тесты ядра | 37 автотестов ядра (T01–T37), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
 L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
@@ -126,6 +126,7 @@ L.push("| `src/maps/route.ts`, `src/maps/routeCheck.ts` | сшивка улиц 
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |");
+L.push("| `src/render/headLook.ts` | Три точки внимания водителя (левое зеркало 39° · дорога + салонное зеркало · правое зеркало), инерция шеи τ=0,055 с и пределы свободного обзора ПКМ |");
 L.push("| `src/render/sceneController.ts`, `src/render/staticBatcher.ts`, `src/render/cockpitDisplays.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts`, `src/render/cityBuildings.ts`, `src/render/vehiclesAndPeds.ts` | весь Three.js: чанковый батчинг статики, живые 3D-приборы Supervision и ШГУ/R-камера, 360°-небо + PBR IBL, ГОСТ-дороги/тротуары/разметка/светофоры/знаки, здания и деревья РФ/СНГ, Kia Ceed JD, 3D-зеркала, dispose (`[SEC:...]`) |");
 L.push("| `src/audio/radioCatalog.ts` | каталог реальных интернет-радиостанций (MP3/AAC-потоки), громкость, ключи кэша и детерминированный офлайн-рендер трека в WAV |");
 L.push("| `src/audio/trackStore.ts` | кэш сохранённых треков в IndexedDB `cdt-audio` с деградацией в память |");

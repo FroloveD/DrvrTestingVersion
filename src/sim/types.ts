@@ -32,6 +32,10 @@ export type InputState = {
   belt: boolean;
   lights: boolean;
   signal: TurnSignal;
+  /** Shift удерживается вместе с тормозом: педаль нажимается резче (быстрый набор давления). */
+  shiftBoost?: boolean;
+  /** Нажат сигнал (клаксон) — звуковой эффект, на физику не влияет. */
+  horn?: boolean;
 };
 
 export type Vec2 = { x: number; z: number };
