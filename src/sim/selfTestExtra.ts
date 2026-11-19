@@ -932,7 +932,7 @@ export const extraCases: SelfTestCase[] = [
       assert(record.lengthM > 25 && record.path.length >= 3, "Маршрут должен пройти по обеим улицам и быть длиннее 25 м");
       assert(record.roadNames.includes("Улица Сетевая") && record.roadNames.includes("Переулок Связной"),
         `В пути потерялись улицы: ${record.roadNames.join(", ")}`);
-      assert(record.checkpoints.length >= 2 && record.checkpoints.at(-1)?.requireStop,
+      assert(record.checkpoints.length >= 2 && record.checkpoints[record.checkpoints.length - 1]?.requireStop === true,
         "Нужны промежуточные КТ и финальная КТ с остановкой");
       assert(record.scenarioSnapshot.mapMeta?.attribution === "© OpenStreetMap contributors",
         "Снимок должен сохранять атрибуцию OSM");
