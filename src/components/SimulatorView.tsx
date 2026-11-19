@@ -1297,7 +1297,7 @@ export function SimulatorView({
       <div
         ref={containerRef}
         onContextMenu={(e) => e.preventDefault()}
-        className="relative w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"
+        className="relative isolate w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"
       >
         <canvas
           ref={canvasRef}

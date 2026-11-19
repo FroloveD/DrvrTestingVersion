@@ -592,20 +592,26 @@ try {
     `после перезагрузки ${restored ? restored.x + "," + restored.y : "н/д"} z=${frontRestored.z}`);
 
   // Длительный тап/клик без сдвига на scorePanel (baseZ=20) выводит её поверх statusBar
-  const scoreRect = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
-  await page.mouse.move(scoreRect.x + 24, scoreRect.y + 18);
+  const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
+  await scorePanel.scrollIntoViewIfNeeded();
+  const scoreRect = await scorePanel.boundingBox();
+  await page.mouse.move(scoreRect.x + 28, scoreRect.y + Math.min(22, scoreRect.height / 2));
   await page.mouse.down();
-  await sleep(700);
+  await until(async () => (await scorePanel.getAttribute("data-front")) === "true", 3000);
   await page.mouse.up();
-  await sleep(200);
+  await sleep(350);
+  const scoreAfter = await scorePanel.boundingBox();
   const scoreFront = await page.evaluate(() => ({
     scoreZ: Number(document.querySelector('[data-hud-panel="scorePanel"]')?.style.zIndex || 0),
     statusZ: Number(document.querySelector('[data-hud-panel="statusBar"]')?.style.zIndex || 0),
     front: document.querySelector('[data-hud-panel="scorePanel"]')?.getAttribute("data-front"),
   }));
+  const stayedInPlace = Boolean(scoreAfter)
+    && Math.abs(scoreAfter.x - scoreRect.x) < 2
+    && Math.abs(scoreAfter.y - scoreRect.y) < 2;
   check("K3b длительный клик без переноса выводит scorePanel поверх ранее поднятой панели",
-    scoreFront.scoreZ > scoreFront.statusZ && scoreFront.front === "true",
-    JSON.stringify(scoreFront));
+    scoreFront.scoreZ > scoreFront.statusZ && scoreFront.front === "true" && stayedInPlace,
+    JSON.stringify({ ...scoreFront, stayedInPlace }));
 
   // Обычный клик внутри той же панели не сломан длительным нажатием
   await page.getByRole("button", { name: "Быстрый старт" }).click({ timeout: 8000 });
