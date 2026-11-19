@@ -1108,7 +1108,7 @@ try {
       mimeType: "application/xml",
       buffer: Buffer.from(routeOsm),
     });
-    await sleep(350);
+    await sleep(600);
     await tab(page, "Каталог маршрутов");
     await page.getByLabel("Название маршрута").fill("Маршрут P");
     const svg = page.locator('svg[aria-label^="Схема дорожной сети OSM"]');
@@ -1153,14 +1153,16 @@ try {
         const count = await readRouteCount();
         check("P4 запись маршрута находится в отдельной IndexedDB", count === 1, `записей: ${count}`);
         await page.getByRole("button", { name: /Открыть/ }).first().click();
-        await sleep(600);
-        check("P5 сохранённый маршрут открывается в 3D-тренажёре",
-          (await low(page)).includes("маршрут p") && (await low(page)).includes("osm ·"));
+        const opened = await until(async () => {
+          const body = await low(page);
+          return body.includes("маршрут p") && body.includes("osm ·");
+        }, 5000, 100);
+        check("P5 сохранённый маршрут открывается в 3D-тренажёре", opened);
         await tab(page, "Каталог маршрутов");
         await page.reload();
-        await sleep(500);
         await tab(page, "Каталог маршрутов");
-        check("P6 маршрут сохраняется после перезагрузки", (await low(page)).includes("улица каталожная"));
+        const restored = await until(async () => (await low(page)).includes("улица каталожная"), 5000, 100);
+        check("P6 маршрут сохраняется после перезагрузки", restored);
       }
     }
     check("P7 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
