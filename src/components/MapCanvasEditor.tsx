@@ -6,8 +6,9 @@
  * @tests Смоук A, G, O (`tests/browser-smoke.mjs`); логика — T28, T29
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fitBoundsToContent, nextRoadId, roundRoadPolyline, type CustomScenarioDef } from "../scenarios/custom";
+import { nextRoadId, roundRoadPolyline, type CustomScenarioDef } from "../scenarios/custom";
 import {
+  fitBoundsToContent,
   getSelectionAnchor,
   moveSelected,
   normalizeAngleRad,
