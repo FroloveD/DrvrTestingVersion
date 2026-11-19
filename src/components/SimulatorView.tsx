@@ -778,7 +778,6 @@ export function SimulatorView({
     const onBlur = () => {
       keysRef.current = {};
       releasePedals();
-      releasePedals();
     };
 
     window.addEventListener("keydown", onKeyDown);
