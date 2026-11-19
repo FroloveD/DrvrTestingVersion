@@ -6,7 +6,8 @@
  * @tests Смоук A, G, O (`tests/browser-smoke.mjs`); логика — T28, T29
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { nextRoadId, roundRoadPolyline, type CustomScenarioDef } from "../scenarios/custom";
+import { nextRoadId, type CustomScenarioDef } from "../scenarios/custom";
+import { roadGeometryPoints } from "../maps/route";
 import {
   fitBoundsToContent,
   getSelectionAnchor,
@@ -813,7 +814,7 @@ export function MapCanvasEditor({
 
           {tool === "road" && roadDraftPoints.length > 0 && (
             <g data-testid="map-road-draft" pointerEvents="none">
-              <polyline points={roundRoadPolyline(roadDraftPoints, placeOptions.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#52d6bd" strokeWidth={placeOptions.roadWidth ?? 7.5} strokeLinecap="round" strokeLinejoin="round" strokeOpacity={0.55} />
+              <polyline points={roadGeometryPoints(roadDraftPoints, placeOptions.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#52d6bd" strokeWidth={placeOptions.roadWidth ?? 7.5} strokeLinecap="round" strokeLinejoin="round" strokeOpacity={0.55} />
               {roadDraftPoints.map((p, i) => <circle key={i} cx={-p.x} cy={-p.z} r={Math.max(0.55, signUnit * 0.55)} fill="#52d6bd" stroke="#0b1118" strokeWidth={thin} />)}
             </g>
           )}
@@ -822,7 +823,7 @@ export function MapCanvasEditor({
           {layers.roads &&
             roads.map((r) => {
               const sel = isSelected("road", r.id);
-              const pts = roundRoadPolyline(r.points, r.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ");
+              const pts = roadGeometryPoints(r.points, r.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ");
               return (
                 <g key={r.id} data-testid={`map-road-${r.id}`} data-corner-radius={r.cornerRadiusM ?? 0}>
                   <polyline
