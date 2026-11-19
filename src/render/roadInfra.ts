@@ -198,23 +198,77 @@ export function buildWorldRoadsAndSidewalks(
   );
   const surfaceStreets = world.roads.filter((r) => isStreet(r.id) && (r.layer ?? 0) === 0);
 
-  const inJunction = (px: number, pz: number, ownId: string, pad = 1.5): boolean => {
-    for (const other of surfaceStreets) {
-      if (other.id === ownId) continue;
-      const lim = other.width * 0.5 + pad;
-      const limSq = lim * lim;
-      const otherPoints = roadPointsById.get(other.id) ?? other.points;
-      for (let j = 0; j < otherPoints.length - 1; j++) {
-        const a = otherPoints[j];
-        const b = otherPoints[j + 1];
-        const abx = b.x - a.x;
-        const abz = b.z - a.z;
-        const lenSq = abx * abx + abz * abz;
-        const t = lenSq > 1e-6 ? Math.max(0, Math.min(1, ((px - a.x) * abx + (pz - a.z) * abz) / lenSq)) : 0;
-        const cx = a.x + abx * t;
-        const cz = a.z + abz * t;
-        if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= limSq) return true;
+  // Пространственный индекс сегментов для проверки перекрёстков. Длинные OSM-сегменты
+  // дробятся только для индексации: объединение частей геометрически совпадает с исходным сегментом.
+  const junctionCellSize = 32;
+  type JunctionSegment = {
+    roadId: string;
+    ax: number;
+    az: number;
+    bx: number;
+    bz: number;
+    limitSq: number;
+  };
+  const junctionSegmentsByCell = new Map<string, JunctionSegment[]>();
+  const junctionCellKey = (x: number, z: number) => `${x},${z}`;
+  const addJunctionSegment = (segment: JunctionSegment) => {
+    const margin = Math.sqrt(segment.limitSq);
+    const minCellX = Math.floor((Math.min(segment.ax, segment.bx) - margin) / junctionCellSize);
+    const maxCellX = Math.floor((Math.max(segment.ax, segment.bx) + margin) / junctionCellSize);
+    const minCellZ = Math.floor((Math.min(segment.az, segment.bz) - margin) / junctionCellSize);
+    const maxCellZ = Math.floor((Math.max(segment.az, segment.bz) + margin) / junctionCellSize);
+    for (let cx = minCellX; cx <= maxCellX; cx++) {
+      for (let cz = minCellZ; cz <= maxCellZ; cz++) {
+        const key = junctionCellKey(cx, cz);
+        const bucket = junctionSegmentsByCell.get(key);
+        if (bucket) bucket.push(segment);
+        else junctionSegmentsByCell.set(key, [segment]);
       }
+    }
+  };
+
+  for (const road of surfaceStreets) {
+    const points = roadPointsById.get(road.id) ?? road.points;
+    const margin = road.width * 0.5 + 2.3;
+    const limitSq = margin * margin;
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const length = Math.hypot(dx, dz);
+      const pieces = Math.max(1, Math.ceil(length / junctionCellSize));
+      for (let part = 0; part < pieces; part++) {
+        const t0 = part / pieces;
+        const t1 = (part + 1) / pieces;
+        addJunctionSegment({
+          roadId: road.id,
+          ax: a.x + dx * t0,
+          az: a.z + dz * t0,
+          bx: a.x + dx * t1,
+          bz: a.z + dz * t1,
+          limitSq,
+        });
+      }
+    }
+  }
+
+  const inJunction = (px: number, pz: number, ownId: string): boolean => {
+    const cellX = Math.floor(px / junctionCellSize);
+    const cellZ = Math.floor(pz / junctionCellSize);
+    const candidates = junctionSegmentsByCell.get(junctionCellKey(cellX, cellZ));
+    if (!candidates) return false;
+    for (const segment of candidates) {
+      if (segment.roadId === ownId) continue;
+      const abx = segment.bx - segment.ax;
+      const abz = segment.bz - segment.az;
+      const lenSq = abx * abx + abz * abz;
+      const t = lenSq > 1e-6
+        ? Math.max(0, Math.min(1, ((px - segment.ax) * abx + (pz - segment.az) * abz) / lenSq))
+        : 0;
+      const cx = segment.ax + abx * t;
+      const cz = segment.az + abz * t;
+      if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= segment.limitSq) return true;
     }
     return false;
   };
@@ -366,7 +420,7 @@ export function buildWorldRoadsAndSidewalks(
             const sx = p0.x + fx * d + lx * curbOff;
             const sz = p0.z + fz * d + lz * curbOff;
             return (
-              (layerVal === 0 && inJunction(sx, sz, road.id, 2.3)) ||
+              (layerVal === 0 && inJunction(sx, sz, road.id)) ||
               inCrosswalk(sx, sz, 1.1) ||
               inBayOpening(sx, sz)
             );
