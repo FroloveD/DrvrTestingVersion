@@ -592,8 +592,8 @@ export function DebriefView({
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div className="text-xs font-extrabold">2D-траектория и покадровый реплей</div>
             <div className="mono text-[11px] text-[#9bafbc]">
-              t = {sample.t.toFixed(1)} с · {Math.abs(sample.vKmh).toFixed(0)} км/ч · КПП {sample.gear} · руль{" "}
-              {Math.round(sample.swDeg)}°
+              t = {sample.t.toFixed(1)} с · {Math.abs(sample.vKmh).toFixed(0)} км/ч · КПП{" "}
+              {/^[1-6]$/.test(sample.gear) ? `M${sample.gear}` : sample.gear} · руль {Math.round(sample.swDeg)}°
             </div>
           </div>
 

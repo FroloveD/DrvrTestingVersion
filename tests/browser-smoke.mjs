@@ -148,6 +148,19 @@ try {
   await page.keyboard.up("KeyS");
   check("A4  тормоз S останавливает машину", Boolean(stopped));
 
+  await page.keyboard.press("ShiftLeft");
+  await page.keyboard.press("ShiftLeft");
+  await page.keyboard.press("ShiftLeft");
+  await sleep(160);
+  const m2Shown = /\bM2\b/.test(await page.evaluate(() => document.body.innerText));
+  await page.keyboard.press("ShiftRight");
+  await sleep(160);
+  const m1Shown = /\bM1\b/.test(await page.evaluate(() => document.body.innerText));
+  await page.keyboard.press("KeyF");
+  await sleep(160);
+  const d1Shown = /\bD1\b/.test(await page.evaluate(() => document.body.innerText));
+  check("A4b клавиши Shift / Right Shift переключают КПП (R→N→M1→M2→M1), F возвращает D1", m2Shown && m1Shown && d1Shown, `M2=${m2Shown} M1=${m1Shown} D1=${d1Shown}`);
+
   await page.keyboard.press("KeyH");
   await sleep(500);
   text = await low(page);

@@ -7,7 +7,7 @@
  */
 import * as THREE from "three";
 import type { Gear, SimState, WorldData } from "../sim/types";
-import { clamp } from "../sim/vehicle";
+import { clamp, formatGearLabel, isManualGear, MAX_FORWARD_GEAR, SHIFT_HINT_RPM } from "../sim/vehicle";
 
 export type ClusterSnapshot = {
   engineOn: boolean;
@@ -137,9 +137,9 @@ export class CockpitDisplayController {
   update(state: SimState, world: WorldData, leftLit: boolean, rightLit: boolean): void {
     const speedKmh = Math.abs(state.v) * 3.6;
     const speedQ = Math.round(speedKmh);
-    const rpmQ = state.engineOn ? Math.round(state.rpm / 50) * 50 : 0;
+    const rpmQ = state.rpm > 10 ? Math.round(state.rpm / 25) * 25 : 0;
     const limit = resolveActiveSpeedLimit(state, world);
-    const gearLabel = state.gear === "D" && state.engineOn ? `D${clamp(state.autoSubGear || 1, 1, 5)}` : state.gear;
+    const gearLabel = formatGearLabel(state.gear, state.autoSubGear, state.engineOn);
     const distQ = Math.floor((state.distanceTraveled || 0) / 10) / 100; // шаг 0.01 км
 
     const cp = world.checkpoints[state.currentCheckpointIndex];
@@ -410,15 +410,18 @@ export class CockpitDisplayController {
     g.lineWidth = 1.5;
     g.strokeRect(bx, by, bw, bh);
 
-    // Крупный индикатор передачи АКПП (P, R, N, D1..D5, L/1)
+    // Крупный индикатор передачи 6-ст. КПП Shiftronic (P, R, N, D1..D6, M1..M6) + подсказка GSI ▲
+    const manual = isManualGear(s.gearKind);
     const gearBg =
       s.gearKind === "R"
         ? "#991b1b"
-        : s.gearKind === "D" || s.gearKind === "1"
-          ? "#0f766e"
-          : s.gearKind === "N"
-            ? "#92400e"
-            : "#1e293b";
+        : manual
+          ? "#b45309"
+          : s.gearKind === "D"
+            ? "#0f766e"
+            : s.gearKind === "N"
+              ? "#92400e"
+              : "#1e293b";
     g.fillStyle = s.engineOn ? gearBg : "#161f2c";
     g.fillRect(bx + 8, by + 7, 46, 26);
     g.fillStyle = s.engineOn ? "#f8fafc" : "#64748b";
@@ -426,6 +429,14 @@ export class CockpitDisplayController {
     g.textAlign = "center";
     g.textBaseline = "middle";
     g.fillText(s.gearLabel, bx + 31, by + 20.5);
+
+    // Индикатор переключения передачи Kia GSI (SHIFT ▲2..▲6) в ручном режиме
+    if (s.engineOn && manual && Number(s.gearKind) < MAX_FORWARD_GEAR && s.rpm >= SHIFT_HINT_RPM) {
+      g.fillStyle = "#22c55e";
+      g.font = "800 12px system-ui, sans-serif";
+      g.textAlign = "center";
+      g.fillText(`▲${Number(s.gearKind) + 1}`, bx + 72, by + 20.5);
+    }
 
     // Мини-знак 3.24 ограничения скорости в углу БК
     const sx = bx + bw - 22;
@@ -487,7 +498,7 @@ export class CockpitDisplayController {
       g.fillText("KIA  ·  УЧЕБНЫЙ", w * 0.5, h * 0.45);
       g.fillStyle = "#475569";
       g.font = "600 13px system-ui, sans-serif";
-      g.fillText("Запустите двигатель (F)", w * 0.5, h * 0.62);
+      g.fillText("Запустите ДВС (I) · КПП Shift / F", w * 0.5, h * 0.62);
       return;
     }
 

@@ -19,13 +19,24 @@ import type {
 import {
   ackermannAngle,
   AUTO_DOWN,
+  AUTO_DOWN_KICK,
+  AUTO_SHIFT_DURATION_S,
   AUTO_UP,
+  AUTO_UP_SPORT,
   CAR,
   clamp,
   computeEngineAccel,
+  computeRoadDragDecel,
+  ENGINE_IDLE_RPM,
   FIXED_DT,
   getPedestrianPose,
   getTrafficLightPhase,
+  isManualGear,
+  MANUAL_SHIFT_DURATION_S,
+  MAX_FORWARD_GEAR,
+  MAX_REVERSE_KMH,
+  MAX_SPEED_MS,
+  stepEngineRpm,
   wheelDegToSteerRad,
   normalizeWheelLock,
 } from "./vehicle";
@@ -94,7 +105,9 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     gear: readyStart ? defaultGear : "P",
     prevGear: readyStart ? defaultGear : "P",
     autoSubGear: 1,
-    rpm: readyStart ? 800 : 0,
+    rpm: readyStart ? ENGINE_IDLE_RPM : 0,
+    throttlePos: 0,
+    shiftTimer: 0,
     engineOn: readyStart,
     handbrake: !readyStart,
     belt: readyStart,
@@ -218,7 +231,9 @@ export function stepSimulation(
   // Если экзамен прекращён мгновенно в строгом режиме — машина остановлена
   if (s.finished && s.finishedReason === "immediate_fail") {
     s.v = 0;
-    s.rpm = s.engineOn ? 800 : 0;
+    s.throttlePos = 0;
+    s.shiftTimer = 0;
+    s.rpm = s.engineOn ? ENGINE_IDLE_RPM : 0;
     s.statusText = "Экзамен прекращён: допущена критическая ошибка (5 баллов). Откройте «Разбор и Реплей».";
     return {
       state: s,
@@ -245,28 +260,82 @@ export function stepSimulation(
     s.reverseCount = 1;
   }
 
-  // АКПП: переключение подпередач 1..5 с гистерезисом
-  if (s.gear === "D") {
-    const kmh = Math.abs(s.v) * 3.6;
-    if (s.autoSubGear < 5 && kmh > AUTO_UP[s.autoSubGear]) s.autoSubGear += 1;
-    else if (s.autoSubGear > 1 && kmh < AUTO_DOWN[s.autoSubGear]) s.autoSubGear -= 1;
+  // Плавная электронная дроссельная заслонка (ETC) и пауза переключения 6-ст. КПП Shiftronic
+  const throttleCmd = s.engineOn ? clamp(input.throttle, 0, 1) : 0;
+  const brake = clamp(input.brake, 0, 1);
+  const thRate = throttleCmd > s.throttlePos ? 4.0 : 6.2;
+  s.throttlePos = clamp(
+    s.throttlePos + (throttleCmd - s.throttlePos) * Math.min(1, dt * thRate),
+    0,
+    1
+  );
+  if (s.throttlePos < 0.001 && throttleCmd === 0) s.throttlePos = 0;
+
+  if (s.shiftTimer > 0) {
+    s.shiftTimer = Math.max(0, s.shiftTimer - dt);
+  }
+
+  // Ручное переключение (Shift: M1..M6) и адаптивный 6-ступенчатый автомат (D1..D6)
+  if (isManualGear(s.gear)) {
+    const manualNum = Number(s.gear);
+    if (isManualGear(s.prevGear) && s.prevGear !== s.gear) {
+      s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    } else if (s.prevGear === "D" && s.autoSubGear !== manualNum) {
+      s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    }
+    s.autoSubGear = manualNum;
+  } else if (s.gear === "D") {
+    const fwdKmh = Math.max(0, s.v * 3.6);
+    const sport = clamp((s.throttlePos - 0.35) / 0.55, 0, 1);
+    const upKmh = AUTO_UP[s.autoSubGear] + (AUTO_UP_SPORT[s.autoSubGear] - AUTO_UP[s.autoSubGear]) * sport;
+    const downKmh =
+      AUTO_DOWN[s.autoSubGear] + (AUTO_DOWN_KICK[s.autoSubGear] - AUTO_DOWN[s.autoSubGear]) * (sport * sport);
+    if (s.shiftTimer <= 0 && s.autoSubGear < MAX_FORWARD_GEAR && fwdKmh >= upKmh) {
+      s.autoSubGear += 1;
+      s.shiftTimer = AUTO_SHIFT_DURATION_S;
+    } else if (s.shiftTimer <= 0 && s.autoSubGear > 1 && fwdKmh < downKmh) {
+      s.autoSubGear -= 1;
+      s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    }
+  } else {
+    s.autoSubGear = 1;
+    s.shiftTimer = 0;
   }
 
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
-  const throttle = clamp(input.throttle, 0, 1);
-  const brake = clamp(input.brake, 0, 1);
-  let accel = computeEngineAccel(throttle, s.gear, s.autoSubGear, s.v, s.engineOn, s.handbrake);
+  const isForwardGear = s.gear === "D" || isManualGear(s.gear);
+  const activeForwardGear = isForwardGear ? s.autoSubGear : 0;
+  let accel = computeEngineAccel(
+    s.throttlePos,
+    s.gear,
+    s.autoSubGear,
+    s.v,
+    s.engineOn,
+    s.handbrake,
+    s.shiftTimer
+  );
 
+  const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear);
   if (s.v !== 0) {
-    const drag = CAR.rollRes + 0.0018 * s.v * s.v + 0.015 * Math.abs(s.v);
     accel -= Math.sign(s.v) * drag;
+  } else if (accel !== 0) {
+    // Преодоление покоя: исключает микроколебания у 0 м/с при отпускании газа
+    if (Math.abs(accel) <= drag) accel = 0;
+    else accel -= Math.sign(accel) * drag;
   }
 
   const vBefore = s.v;
   s.v += accel * dt;
-  if (throttle <= 0.01 && vBefore !== 0 && Math.sign(s.v) !== Math.sign(vBefore)) {
-    s.v = 0;
+  // Сопротивление дороги никогда не разворачивает знак скорости против выбранной передачи
+  if (vBefore !== 0 && Math.sign(s.v) !== Math.sign(vBefore)) {
+    const wantsForward = isForwardGear && throttleCmd > 0.01 && s.engineOn && !s.handbrake;
+    const wantsReverse = s.gear === "R" && throttleCmd > 0.01 && s.engineOn && !s.handbrake;
+    if (!((wantsForward && s.v > 0) || (wantsReverse && s.v < 0))) {
+      s.v = 0;
+    }
   }
+  // Жёсткий потолок скорости: ровно 180 км/ч (50.0 м/с) вперёд и 14 км/ч назад
+  s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, MAX_SPEED_MS);
 
   // Рабочий тормоз S
   if (brake > 0) {
@@ -282,15 +351,17 @@ export function stepSimulation(
     else s.v -= Math.sign(s.v) * dv;
   }
 
-  // Обороты двигателя (800..6500, как в v8)
-  if (!s.engineOn) {
-    s.rpm = Math.max(0, s.rpm - 3500 * dt);
-  } else {
-    const speedRpm = Math.abs(s.v) * 3.6 * (s.gear === "R" ? 165 : 95 / Math.max(1, s.autoSubGear * 0.55));
-    const targetRpm = clamp(800 + throttle * 3600 + speedRpm, 800, 6500);
-    const rate = targetRpm > s.rpm ? 2.6 : 3.8;
-    s.rpm += (targetRpm - s.rpm) * Math.min(1, dt * rate);
-  }
+  // Плавные обороты ДВС (800..6450 об/мин, инерция маховика, ступени 1..6 и перегазовка в P/N)
+  s.rpm = stepEngineRpm(
+    s.rpm,
+    s.throttlePos,
+    s.gear,
+    s.autoSubGear,
+    s.v,
+    s.engineOn,
+    s.shiftTimer,
+    dt
+  );
 
   // Перемещение с дроблением шага (защита от проскакивания тонких бордюров)
   const subSteps = Math.min(12, Math.max(1, Math.ceil((Math.abs(s.v) * dt) / 0.12)));
@@ -533,7 +604,7 @@ export function stepSimulation(
   if (!s.engineOn) {
     s.statusText = `Двигатель заглушен, КПП — ${s.gear === "P" ? "P (Parking)" : s.gear}. Нажмите I для запуска (или «Быстрый старт»).`;
   } else if (s.gear === "P" && !s.finished) {
-    s.statusText = "Двигатель работает, КПП в P (Parking). Выберите R (клавиша R) или D (клавиша F), затем снимите ручник (Space).";
+    s.statusText = "Двигатель работает, КПП в P (Parking). Переключите передачу на Shift (или R / F) и снимите ручник (Space).";
   } else if (s.handbrake && !s.finished) {
     s.statusText = "Стояночный тормоз активен — снимите ручник (Space).";
   } else if (!s.belt) {

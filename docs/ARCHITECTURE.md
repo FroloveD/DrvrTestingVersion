@@ -231,6 +231,7 @@ requestAnimationFrame(now)
 | `T31` | `boundary` | Произвольные границы (`src/maps/boundary.ts`): вогнутый полигон, детектор самопересечения, коридор маршрута, обрезка дорог/объектов OSM и удержание авто в `stepSimulation` |
 | `T32` | `route` | Проверка маршрута (`src/maps/routeCheck.ts`): связность по графу дорог (Дейкстра), выбор/реверс улицы, `autoFixScenarioRoute` и финиш `isFinalPark` без боксов |
 | `T33` | `osm` | Бесконфликтный двухпроходный импорт (`src/maps/osmDeconflict.ts` + `osmLoader.ts`): мультиполигоны/дворы, навесы `building=roof`, проемы в заборах, `oneway`/`layer`, единицы `RU:*`/`mph`/`ft` и WGS84-слияние |
+| `T34` | `vehicle` | 6-ст. КПП Shiftronic (`stepGearSequential` на `Shift`), плавная инерция оборотов ДВС (800–6450 об/мин, перегазовка в `P`/`N`), паспортный разгон `0–100 км/ч ≈ 10,8 с`, потолок `Vmax = 180 км/ч` и 1:1 RLE-реплей |
 
 ### 7.2. Браузерный смоук (`tests/browser-smoke.mjs`, сценарии `A–P`)
 

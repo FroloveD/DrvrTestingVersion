@@ -842,10 +842,26 @@ export class SceneController {
       rig.headSpotR.intensity = inten;
     }
 
-    // Живые органы управления и 3D-дисплеи салона Kia Ceed JD (АКПП, ручник, подрулевой, аварийка, педали, ремень, Supervision, ШГУ)
+    // Живые органы управления и 3D-дисплеи салона Kia Ceed JD (6-ст. Shiftronic, ручник, подрулевой, педали, Supervision, ШГУ)
     if (rig.gearLeverPivot) {
       const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + 0.44;
-      const gOff = state.gear === "P" ? 0.05 : state.gear === "R" ? 0.017 : state.gear === "N" ? -0.017 : -0.05;
+      const inManualGate =
+        state.gear === "1" ||
+        state.gear === "2" ||
+        state.gear === "3" ||
+        state.gear === "4" ||
+        state.gear === "5" ||
+        state.gear === "6";
+      const shiftPulse = inManualGate && state.shiftTimer > 0 ? 0.014 : 0;
+      const gOff =
+        state.gear === "P"
+          ? 0.05
+          : state.gear === "R"
+            ? 0.017
+            : state.gear === "N"
+              ? -0.017
+              : -0.05 + shiftPulse;
+      rig.gearLeverPivot.position.x = inManualGate ? 0.058 : 0.042;
       rig.gearLeverPivot.position.z = gateBaseZ + gOff;
       if (rig.gearGateDot) rig.gearGateDot.position.z = gateBaseZ + gOff;
       if (rig.gearGateDotMat) {
@@ -871,7 +887,7 @@ export class SceneController {
       rig.brakePedalPivot.rotation.x = isBraking ? -0.22 : 0;
     }
     if (rig.gasPedalPivot) {
-      const throttleFrac = state.engineOn && !isBraking ? clamp((state.rpm - 820) / 3600, 0, 1) : 0;
+      const throttleFrac = state.engineOn && !isBraking ? clamp(state.throttlePos, 0, 1) : 0;
       rig.gasPedalPivot.rotation.x = -throttleFrac * 0.24;
     }
     if (rig.seatbeltStrap) {

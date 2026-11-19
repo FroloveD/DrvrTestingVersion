@@ -29,7 +29,7 @@ import { buildScenarioWorld } from "../scenarios/catalog";
 import { customFromOsmPack, type CustomScenarioDef } from "../scenarios/custom";
 import { autoFixScenarioRoute } from "../scenarios/editorOps";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange } from "../sim/controls";
+import { checkEngineToggle, checkGearChange, stepGearSequential } from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
@@ -47,11 +47,17 @@ import type {
 import {
   CAR,
   clamp,
+  ENGINE_REDLINE_RPM,
   FIXED_DT,
+  formatGearLabel,
   getCarCorners,
   getTrafficLightPhase,
   getTurnSignalFlash,
+  isManualGear,
+  MANUAL_STALL_DOWN_KMH,
+  MAX_FORWARD_GEAR,
   normalizeWheelLock,
+  SHIFT_HINT_RPM,
   STEER_WHEEL,
 } from "../sim/vehicle";
 import { Chip, Icon } from "./Icons";
@@ -410,6 +416,27 @@ export function SimulatorView({
     [onNotify]
   );
 
+  /** Секвентальное переключение 6-ст. КПП Shiftronic по клавише Shift (+1 вверх, −1 вниз). */
+  const shiftGear = useCallback(
+    (dir: 1 | -1) => {
+      const inp = inputRef.current;
+      const st = stateRef.current;
+      const { next, blockedReason } = stepGearSequential(inp, st.v, st.autoSubGear, dir);
+      if (blockedReason) {
+        onNotify(blockedReason);
+        return;
+      }
+      if (!next) return;
+      inp.gear = next;
+      const nextSub = isManualGear(next) ? Number(next) : st.autoSubGear;
+      setHud((current) => ({
+        ...current,
+        state: { ...current.state, gear: next, autoSubGear: nextSub },
+      }));
+    },
+    [onNotify]
+  );
+
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
     const inp = inputRef.current;
@@ -573,6 +600,20 @@ export function SimulatorView({
           else inp.steerWheelDeg -= Math.sign(inp.steerWheelDeg) * returnStep;
         }
 
+        // Защита от заглохания в ручном режиме M2..M6 (Shiftronic): при торможении или остановке
+        // передача мягко сбрасывается вниз до записи тика — реплей остаётся побитно идентичным.
+        if (isManualGear(inp.gear)) {
+          const g = Number(inp.gear);
+          const curV = stateRef.current.v;
+          const prevV = stateRef.current.prevV;
+          const fwdKmh = Math.max(0, curV * 3.6);
+          if (g > 1 && prevV > 0.05 && curV <= 0.05) {
+            inp.gear = "1";
+          } else if (g > 1 && inp.brake > 0.15 && fwdKmh < MANUAL_STALL_DOWN_KMH[g]) {
+            inp.gear = String(g - 1) as Gear;
+          }
+        }
+
         // Ядро и запись получают одни и те же значения ввода — иначе реплей расходится с заездом
         quantizeInput(inp);
 
@@ -706,8 +747,11 @@ export function SimulatorView({
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (!activeRef.current || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      // Слайдеру оставляем стрелки, Home и End. Клавиши вождения работают и после настройки.
-      const drivingFromSlider = e.target instanceof HTMLInputElement && e.target.type === "range" && /^Key[A-Z]$/.test(e.code);
+      // Слайдеру оставляем стрелки, Home и End. Клавиши вождения и Shift работают и после настройки.
+      const drivingFromSlider =
+        e.target instanceof HTMLInputElement &&
+        e.target.type === "range" &&
+        (/^Key[A-Z]$/.test(e.code) || e.code === "ShiftLeft" || e.code === "ShiftRight");
       if (isEditable(e.target) && !drivingFromSlider) return;
       const code = e.code;
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
@@ -752,6 +796,13 @@ export function SimulatorView({
           break;
         case "KeyF":
           setGear("D");
+          break;
+        case "ShiftLeft":
+          shiftGear(1);
+          break;
+        case "ShiftRight":
+        case "KeyX":
+          shiftGear(-1);
           break;
         case "KeyH":
           setShowHelp(false);
@@ -809,7 +860,7 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, toggleEngine, onNotify]);
+  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
   // Инвариант #12: ЛКМ — руль (вправо уменьшает swDeg), ПКМ — орбита, колесо — зум.
@@ -1085,7 +1136,10 @@ export function SimulatorView({
     [s.x, s.z, world.roads]
   );
   const kmh = Math.round(Math.abs(s.v) * 3.6);
-  const gearDisplay = s.gear === "D" ? `D${s.autoSubGear}` : s.gear;
+  const manualMode = isManualGear(s.gear);
+  const gearDisplay = formatGearLabel(s.gear, s.autoSubGear, s.engineOn);
+  const shiftUpCue =
+    s.engineOn && manualMode && Number(s.gear) < MAX_FORWARD_GEAR && s.rpm >= SHIFT_HINT_RPM;
   const { leftLit: leftBlink, rightLit: rightBlink } = getTurnSignalFlash(s.signal, s.time);
   const needsPrep = !s.engineOn || s.handbrake || !s.belt || s.gear === "P";
 
@@ -1700,7 +1754,8 @@ export function SimulatorView({
                 ["A / D", "Руль влево (+X) / вправо (−X)"],
                 ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
                 ["ПКМ + колесо", "Вращение и зум камеры"],
-                ["P / R / N / F", "Паркинг / Задний / Нейтраль / Drive"],
+                ["Shift / RShift·X", "КПП вверх ▲ / вниз ▼ (M1–M6)"],
+                ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
                 ["I (в P/N)", "Запуск ДВС только из P или N"],
                 ["Q / E / Z", "Поворотники лев. / прав. / аварийка"],
                 ["I / Space / B", "Двигатель / Ручник / Ремень"],
@@ -1848,12 +1903,26 @@ export function SimulatorView({
                 </div>
                 <div className="h-1.5 w-20 mx-auto mt-1.5 rounded bg-[rgba(148,176,194,.14)] overflow-hidden">
                   <div
-                    className={`h-full transition-all ${s.rpm > 5200 ? "bg-[#ff6b6b]" : "bg-[#52d6bd]"}`}
-                    style={{ width: `${Math.min(100, (s.rpm / 6500) * 100)}%` }}
+                    className={`h-full transition-[width,background-color] duration-75 ease-out ${
+                      s.rpm >= SHIFT_HINT_RPM
+                        ? "bg-[#ff6b6b]"
+                        : s.rpm >= 4400
+                          ? "bg-[#f5b942]"
+                          : "bg-[#52d6bd]"
+                    }`}
+                    style={{ width: `${Math.min(100, (s.rpm / ENGINE_REDLINE_RPM) * 100)}%` }}
                   />
                 </div>
                 <div className="mono text-[9px] text-[#6e8492] mt-0.5">
-                  {s.engineOn ? `${Math.round(s.rpm)} об` : "ЗАГЛУШЕН"}
+                  {!s.engineOn && s.rpm < 20 ? (
+                    "ЗАГЛУШЕН"
+                  ) : shiftUpCue ? (
+                    <span className="text-[#f5b942] font-bold">
+                      {Math.round(s.rpm)} SHIFT▲
+                    </span>
+                  ) : (
+                    `${Math.round(s.rpm)} об`
+                  )}
                 </div>
               </div>
 
@@ -1892,10 +1961,11 @@ export function SimulatorView({
                 <Icon name="alert" size={14} />
               </button>
 
-              {/* Селектор АКПП: P (Parking) / R / N / D */}
+              {/* Селектор 6-ст. КПП Shiftronic: P / R / N / D (D1–D6) + ручной Shift (M1–M6) */}
               <div className="flex items-center gap-1 border-l hairline pl-2.5">
                 {(["P", "R", "N", "D"] as const).map((g) => {
-                  const active = s.gear === g;
+                  const isDriveSlot = g === "D";
+                  const active = s.gear === g || (isDriveSlot && manualMode);
                   return (
                     <button
                       key={g}
@@ -1908,22 +1978,43 @@ export function SimulatorView({
                             ? "Задний ход (R)"
                             : g === "N"
                               ? "Нейтраль (N)"
-                              : "Drive (F)"
+                              : manualMode
+                                ? `Ручной режим ${gearDisplay} (Shift ▲ / RShift·X ▼) — нажмите для возврата в Авто D (F)`
+                                : "Автомат D1–D6 (F); нажмите Shift для ручного переключения M1–M6"
                       }
                       className={`mono h-8 min-w-[30px] px-2 rounded-lg text-xs font-bold border transition ${
                         active
                           ? g === "P"
                             ? "bg-[#94a3b8] text-[#081512] border-[#94a3b8]"
-                            : g === "R"
+                            : g === "R" || (isDriveSlot && manualMode)
                               ? "bg-[#f5b942] text-[#17130a] border-[#f5b942]"
                               : "bg-[#52d6bd] text-[#081512] border-[#52d6bd]"
                           : "border-[rgba(148,176,194,.2)] text-[#8fa2ae] hover:text-white"
                       }`}
                     >
-                      {active && g === "D" ? gearDisplay : g}
+                      {active && isDriveSlot ? gearDisplay : g}
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  onClick={() => shiftGear(1)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    shiftGear(-1);
+                  }}
+                  title="Повысить передачу — левый Shift / ЛКМ · Понизить — правый Shift, X или ПКМ"
+                  aria-label="Переключить передачу вверх (Shift)"
+                  className={`mono h-8 min-w-[26px] px-1.5 rounded-lg text-[11px] font-bold border transition ${
+                    shiftUpCue
+                      ? "bg-[#f5b942] text-[#17130a] border-[#f5b942]"
+                      : manualMode
+                        ? "border-[#f5b942]/60 text-[#f5b942] hover:bg-[#f5b942]/15"
+                        : "border-[rgba(148,176,194,.2)] text-[#8fa2ae] hover:text-white"
+                  }`}
+                >
+                  ▲
+                </button>
               </div>
 
               {/* Индикаторы-кнопки I / РН / B / L */}

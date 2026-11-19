@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM/границы/маршруты/редактор (T27–T33).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), КПП/Shift/динамика (T25, T34), Markdown (T26), OSM/границы/маршруты/редактор (T27–T33).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
@@ -74,13 +74,26 @@ import {
 } from "../scenarios/editorOps";
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
+import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS, stepGearSequential } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
-import type { SimEvent } from "./types";
-import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, STEER_WHEEL, wheelDegToSteerRad } from "./vehicle";
+import type { Gear, SimEvent } from "./types";
+import {
+  ackermannAngle,
+  CAR,
+  centralSteerLimit,
+  clamp,
+  ENGINE_IDLE_RPM,
+  FIXED_DT,
+  MAX_FORWARD_GEAR,
+  MAX_SPEED_KMH,
+  normalizeWheelLock,
+  outerTurningRadius,
+  STEER_WHEEL,
+  wheelDegToSteerRad,
+} from "./vehicle";
 
 export type SelfTestCase = { id: string; suite: string; name: string; fn: () => string };
 
@@ -1308,6 +1321,159 @@ export const extraCases: SelfTestCase[] = [
       assert(merged.reprojected && merged.keptBays === 1, "mergeUserObjectsOntoOsmMap не перенёс бокс с WGS84-репроекцией");
 
       return `Согласовано ${pack.meta.resolvedConflictsCount} конфл. · двор ${pack.buildings.length} корп. · забор ${fenceParts.length} секц. · oneway/layer/WGS84 OK`;
+    },
+  },
+  {
+    id: "T34",
+    suite: "vehicle",
+    name: "6-ст. КПП Shiftronic (Shift): плавные обороты ДВС, 0–100 км/ч ≈ 10,8 с и Vmax = 180 км/ч",
+    fn: () => {
+      const baseWorld = buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+      const track = {
+        ...baseWorld,
+        bounds: { minX: -50, maxX: 50, minZ: -50, maxZ: 4000 },
+        boundaryPolygon: undefined,
+        obstacles: [],
+        bays: [],
+        checkpoints: [],
+        signals: [],
+        crosswalks: [],
+        pedestrians: [],
+        start: { x: 0, z: 0, h: 0 },
+        defaultSpeedLimitKmh: 200,
+      };
+      const grid = new SpatialGrid([], 10);
+
+      // 1. Секвентальное переключение Shift (P ↔ R ↔ N ↔ M1..M6) и защитные блокировки
+      assert(stepGearSequential({ gear: "P", engineOn: false }, 0, 1, 1).next === null, "Shift из P без ДВС должен блокироваться");
+      const upSeq: Gear[] = [];
+      let cur: Gear = "P";
+      for (let i = 0; i < 8; i++) {
+        const res = stepGearSequential({ gear: cur, engineOn: true }, 0, 1, 1);
+        assert(res.next !== null, `Ожидалось повышение с ${cur}`);
+        cur = res.next!;
+        upSeq.push(cur);
+      }
+      assert(upSeq.join(",") === "R,N,1,2,3,4,5,6", `Неверный ряд Shift▲: ${upSeq.join(",")}`);
+      assert(stepGearSequential({ gear: "6", engineOn: true }, 30, 6, 1).next === null, "Выше M6 передач нет");
+      // Защита от перекрута при понижении на высокой скорости (110 км/ч -> M2 запрещено, -> M3 разрешено)
+      assert(stepGearSequential({ gear: "4", engineOn: true }, 110 / 3.6, 4, -1).next === "3", "Понижение M4→M3 на 110 км/ч должно работать");
+      assert(stepGearSequential({ gear: "3", engineOn: true }, 110 / 3.6, 3, -1).next === null, "Перекрут M3→M2 на 110 км/ч должен блокироваться");
+      // На ходу понижение с M1 не выбрасывает в N
+      assert(stepGearSequential({ gear: "1", engineOn: true }, 6, 1, -1).next === null, "На ходу M1 не должна сбрасываться в N");
+      // На месте полный спуск M6 → ... → P
+      for (let i = 0; i < 8; i++) {
+        const res = stepGearSequential({ gear: cur, engineOn: true }, 0, 1, -1);
+        assert(res.next !== null, `Ожидалось понижение с ${cur}`);
+        cur = res.next!;
+      }
+      assert(cur === "P", `Полный спуск должен вернуть в P, получено ${cur}`);
+      // Переход из D по Shift▲ на ходу повышает ступень в ручной режим
+      assert(stepGearSequential({ gear: "D", engineOn: true }, 12, 2, 1).next === "3", "Shift▲ из D2 на ходу должен включать M3");
+
+      // 2. Плавная раскрутка и спад оборотов на холостом ходу (P): без скачков, скорость 0
+      let idleState = createInitialState(track, true);
+      idleState = { ...idleState, gear: "P", prevGear: "P" };
+      let maxRevStep = 0;
+      for (let i = 0; i < 120; i++) {
+        const prev = idleState.rpm;
+        idleState = stepSimulation(
+          idleState,
+          { ...createReadyInput("P"), throttle: 1 },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+        assert(idleState.rpm >= prev - 0.01, "Обороты при перегазовке должны расти монотонно");
+        maxRevStep = Math.max(maxRevStep, idleState.rpm - prev);
+        assert(idleState.v === 0, "В P при перегазовке скорость обязана быть 0");
+      }
+      const peakFreeRpm = idleState.rpm;
+      assert(peakFreeRpm > 6100 && maxRevStep <= 95, `Неплавная перегазовка: peak=${peakFreeRpm.toFixed(0)}, step=${maxRevStep.toFixed(1)}`);
+      for (let i = 0; i < 150; i++) {
+        idleState = stepSimulation(
+          idleState,
+          { ...createReadyInput("P"), throttle: 0 },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+      }
+      assert(idleState.rpm < ENGINE_IDLE_RPM + 80, `Обороты не вернулись к ХХ: ${idleState.rpm.toFixed(0)}`);
+
+      // 3. Разгон 0–100 км/ч и максимальная скорость 180 км/ч в режиме D (6АКПП)
+      let autoS = createInitialState(track, true);
+      let t100Auto: number | null = null;
+      let maxKmhAuto = 0;
+      let maxDriveRpmStep = 0;
+      for (let i = 0; i < 55 * 60; i++) {
+        const prevRpm = autoS.rpm;
+        autoS = stepSimulation(
+          autoS,
+          { ...createReadyInput("D"), throttle: 1, signal: "left" },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+        const kmh = autoS.v * 3.6;
+        if (t100Auto === null && kmh >= 100) t100Auto = autoS.time;
+        maxKmhAuto = Math.max(maxKmhAuto, kmh);
+        maxDriveRpmStep = Math.max(maxDriveRpmStep, Math.abs(autoS.rpm - prevRpm));
+        assert(kmh <= MAX_SPEED_KMH + 1e-6, `Превышен потолок 180 км/ч: ${kmh.toFixed(3)}`);
+      }
+      assert(
+        t100Auto !== null && t100Auto >= 10.2 && t100Auto <= 11.6,
+        `Разгон 0–100 в D вне паспорта Kia Ceed 1.6 (10.2–11.6 с): ${t100Auto}`
+      );
+      assert(autoS.autoSubGear === MAX_FORWARD_GEAR, `Ожидалась 6-я передача на Vmax, получено D${autoS.autoSubGear}`);
+      assert(maxKmhAuto >= 179.5 && Math.round(maxKmhAuto) === 180, `Vmax != 180 км/ч: ${maxKmhAuto.toFixed(2)}`);
+      assert(maxDriveRpmStep <= 135, `Скачок оборотов на переключении слишком резкий: ${maxDriveRpmStep.toFixed(1)} об/тик`);
+
+      // 4. Ручной разгон 0–100 км/ч на Shift (M1 → M2 → M3) + побитовый RLE-реплей
+      let manS = createInitialState(track, true);
+      const rec = new AttemptRecorder(manS, true);
+      let manGear: Gear = "1";
+      let t100Man: number | null = null;
+      for (let i = 0; i < 14 * 60; i++) {
+        if (manS.shiftTimer <= 0 && manS.rpm >= 6220) {
+          const sh = stepGearSequential({ gear: manGear, engineOn: true }, manS.v, manS.autoSubGear, 1);
+          if (sh.next) manGear = sh.next;
+        }
+        const inp = quantizeInput({ ...createReadyInput(manGear), throttle: 1, signal: "left" });
+        const out = stepSimulation(manS, inp, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        manS = out.state;
+        rec.recordTick(inp, manS, out.newEvents);
+        if (t100Man === null && manS.v * 3.6 >= 100) t100Man = manS.time;
+      }
+      assert(
+        t100Man !== null && t100Man >= 10.0 && t100Man <= 11.4,
+        `Ручной разгон 0–100 на Shift вне паспорта (10.0–11.4 с): ${t100Man}`
+      );
+      assert(manGear === "3" || manGear === "4", `Ожидалась M3/M4 после 100 км/ч, получено M${manGear}`);
+      const snap = rec.snapshot(manS, track, DEFAULT_CALIBRATION, DEFAULT_RULESET);
+      const rep = replayInputStream(
+        JSON.parse(JSON.stringify(snap.inputStream)),
+        track,
+        DEFAULT_CALIBRATION,
+        DEFAULT_RULESET,
+        true
+      );
+      assert(
+        rep.finalState.x === manS.x &&
+          rep.finalState.z === manS.z &&
+          rep.finalState.v === manS.v &&
+          rep.finalState.rpm === manS.rpm &&
+          rep.finalState.gear === manS.gear,
+        "Реплей заезда с переключениями Shift разошёлся с оригиналом"
+      );
+
+      return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
     },
   },
 ];
