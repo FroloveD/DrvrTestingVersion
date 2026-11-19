@@ -933,8 +933,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                                 limitKmh: isSpeedSignKind(nextKind)
                                   ? s.limitKmh ?? spec.defaultLimitKmh ?? 40
                                   : undefined,
-                                zoneRadius: isSpeedSignKind(nextKind)
-                                  ? s.zoneRadius ?? spec.defaultZoneRadius ?? 24
+                                zoneLength: isSpeedSignKind(nextKind)
+                                  ? s.zoneLength ?? s.zoneRadius ?? spec.defaultZoneLength ?? 250
                                   : undefined,
                                 zoneX: isSpeedSignKind(nextKind) ? s.zoneX ?? s.x : undefined,
                                 zoneZ: isSpeedSignKind(nextKind) ? s.zoneZ ?? s.z : undefined,
@@ -1019,34 +1019,14 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                         }
                       />
                       <NumField
-                        label="РАДИУС ЗОНЫ, М"
-                        value={selectedSign.zoneRadius ?? 24}
-                        step={1}
+                        label="ДЛИНА УЧАСТКА, М"
+                        value={selectedSign.zoneLength ?? selectedSign.zoneRadius ?? 250}
+                        step={5}
                         min={0}
-                        max={250}
+                        max={2000}
                         onChange={(v) =>
                           patchDef({
-                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneRadius: v } : s)),
-                          })
-                        }
-                      />
-                      <NumField
-                        label="ЦЕНТР ЗОНЫ X"
-                        value={selectedSign.zoneX ?? selectedSign.x}
-                        step={0.5}
-                        onChange={(v) =>
-                          patchDef({
-                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneX: v } : s)),
-                          })
-                        }
-                      />
-                      <NumField
-                        label="ЦЕНТР ЗОНЫ Z"
-                        value={selectedSign.zoneZ ?? selectedSign.z}
-                        step={0.5}
-                        onChange={(v) =>
-                          patchDef({
-                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneZ: v } : s)),
+                            signs: signs.map((s) => (s.id === selectedSign.id ? { ...s, zoneLength: v } : s)),
                           })
                         }
                       />
