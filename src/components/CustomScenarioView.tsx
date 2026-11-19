@@ -2042,6 +2042,13 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 Подогнать границы
               </button>
             </div>
+            <div className="rounded-lg border border-[#f5b942]/25 bg-[#091017] p-2 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2"><span className="mono text-[10px] text-[#f5d78a]">ФОРМА ПЛОЩАДКИ / ГРАНИЦА МИРА</span><span className="mono text-[10px] text-[#9bafbc]">{def.boundaryPolygon ? `${def.boundaryPolygon.length} вершин · ${Math.round(polygonArea(def.boundaryPolygon))} м²` : "прямоугольные границы"}</span></div>
+              <div className="flex flex-wrap gap-1">{BOUNDARY_SHAPE_PRESETS.map(p => <button key={p.id} type="button" className="btn btn-mini" title={p.hint} onClick={() => handlePresetBoundary(p.id)}>{p.label}</button>)}</div>
+              <div className="flex flex-wrap items-center gap-2 text-xs"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={Boolean(def.perimeterCurb)} onChange={e => patchDef({ perimeterCurb: e.target.checked || undefined })} className="accent-[#f5b942]" />3D-бордюр по контуру</label><button type="button" className="btn btn-mini" onClick={() => { setTool("boundary"); setDraftBoundary([]); }}>Нарисовать контур</button>{def.boundaryPolygon && <button type="button" className="btn btn-mini text-[#ff9494]" onClick={handleResetBoundary}>Сбросить контур</button>}</div>
+              {tool === "boundary" && <div className="text-[10px] text-[#9bafbc]">Кликайте по карте, чтобы добавить вершины. Двойной клик или клик рядом с первой точкой замыкает контур. Enter — применить, Esc — отменить.</div>}
+              {draftBoundary.length > 0 && <div className="flex items-center justify-between text-[11px]"><span>Черновик: {draftBoundary.length} точек</span><div className="flex gap-1"><button type="button" className="btn btn-mini" onClick={() => setDraftBoundary(v => v.slice(0,-1))}>Назад</button><button type="button" className="btn btn-mini" disabled={draftBoundary.length < 3} onClick={() => handleFinishBoundary(draftBoundary)}>Применить</button><button type="button" className="btn btn-mini" onClick={handleCancelBoundary}>Отмена</button></div></div>}
+            </div>
             <div className="grid sm:grid-cols-2 gap-2">
               <TextField label="НАЗВАНИЕ" value={def.title} onChange={(v) => patchDef({ title: v })} />
               <TextField label="ПОДЗАГОЛОВОК" value={def.subtitle} onChange={(v) => patchDef({ subtitle: v })} />
