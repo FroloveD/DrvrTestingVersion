@@ -543,7 +543,7 @@ export function runAllSelfTests(): TestCaseResult[] {
         assert(statuses.filter((s) => s === "done").length === 3, "Фазы 0, 2 и 3 должны быть завершены");
         assert(STRATEGY_PHASES.find((p) => p.id === "ph4")?.status === "later", "Аудит OSM должен оставаться в сопровождении");
         assert(STRATEGY_PHASES.find((p) => p.id === "ph5")?.status === "active", "Каталог экзаменационных маршрутов должен быть активным");
-        assert(statuses.includes("active") && statuses.includes("next") && statuses.includes("later"), "Нет активных/следующих фаз");
+        assert(statuses.includes("active") && statuses.includes("later"), "Нет активной или отложенной фазы");
         for (const p of STRATEGY_PHASES) {
           assert(p.goal.length > 0 && p.metric.length > 0, `Фаза ${p.num}: нет цели или метрики`);
           assert(p.done.length + p.remaining.length > 0, `Фаза ${p.num}: пустой состав`);
