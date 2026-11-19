@@ -118,9 +118,10 @@ L.push("| `src/sim/step.ts` | единственный шаг физики, де
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 29 автотестов ядра (T01–T29) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 30 автотестов ядра (T01–T30) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер `.osm` XML, Overpass JSON и GeoJSON (дороги, здания, знаки, заборы, деревья), ODbL |");
+  L.push("| `src/maps/boundary.ts` | геометрия произвольных границ мира: шаблоны форм, проверка полигона, проекция автомобиля внутрь и обрезка по контуру |");
 L.push("| `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |");
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
