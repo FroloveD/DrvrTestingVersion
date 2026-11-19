@@ -186,6 +186,7 @@ export type SpeedZone = {
   signZ: number;
   h?: number;
   length?: number;
+  endDistance?: number;
   halfWidth?: number;
   radius?: number;
   limitKmh: number;
