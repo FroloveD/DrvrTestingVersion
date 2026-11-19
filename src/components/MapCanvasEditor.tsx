@@ -811,6 +811,7 @@ export function MapCanvasEditor({
                 data-half-z={def.lotHalfZ}
                 className={tool === "select" ? "cursor-move" : undefined}
                 onPointerDown={beginLotMove}
+                onClick={(e) => { e.stopPropagation(); setLotSelected(true); }}
               />
               {lotSelected && tool === "select" && ([-1, 1] as const).flatMap((cx) => ([-1, 1] as const).map((cz) => (
                 <circle

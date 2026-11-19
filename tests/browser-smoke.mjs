@@ -560,11 +560,12 @@ try {
   const before = await statusBox();
   check("K1 панель статуса найдена и плавающая", Boolean(before), JSON.stringify(before));
 
-  // Длительное удержание 420 мс → панель переносится
-  await page.mouse.move(before.x + before.w / 2, before.y + before.h - 10);
+  // Длительное удержание 420 мс → панель переносится.
+  // Стартуем на свободной внутренней полосе, не на кнопке быстрого старта.
+  await page.mouse.move(before.x + 10, before.y + before.h / 2);
   await page.mouse.down();
   await sleep(700);
-  await page.mouse.move(before.x + before.w / 2 + 170, before.y + before.h / 2 - 95, { steps: 10 });
+  await page.mouse.move(before.x + 180, before.y + before.h / 2 - 95, { steps: 10 });
   await page.mouse.up();
   await sleep(400);
   const after = await statusBox();
@@ -700,13 +701,11 @@ try {
   check("L6 внутреннее колесо доходит до 33° при полном руле",Boolean(locked));
   await controls.click(); await slider.press("End");
   const at42=await until(async()=> /Л 42.0°/.test(await page.locator('.wheel-readout').innerText()));
-  await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
   check("L7 предел 42° применяется без сброса заезда или руля",Boolean(at42) && await page.getByRole('button',{name:'Быстрый старт'}).count()===0);
 
-  // Управление мышью выключено по умолчанию; газ и руление включаются независимо.
-  // Открываем панель повторно: L7 закрыла её после проверки выворота.
-  await controls.click();
+  // Панель управления оставляем открытой: ниже проверяются её независимые опции мыши.
   const mouseSteerToggle = page.getByTestId("mouse-steer-toggle");
+  await mouseSteerToggle.waitFor({state:"visible",timeout:5000});
   const mouseGasToggle = page.getByTestId("mouse-gas-toggle");
   check("L8 настройки газа и руля мышью изначально выключены",
     !(await mouseSteerToggle.isChecked()) && !(await mouseGasToggle.isChecked()));
