@@ -60,6 +60,10 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const [spacing, setSpacing] = useState(90);
   const [preview, setPreview] = useState<ReturnType<typeof buildExamRouteRecord> | null>(null);
   const [editing, setEditing] = useState<{ id: string; title: string; checkpoints: RouteCheckpoint[] } | null>(null);
+  const [routeSearch, setRouteSearch] = useState("");
+  const [routeMapFilter, setRouteMapFilter] = useState("all");
+  const [routeLengthFilter, setRouteLengthFilter] = useState("all");
+  const [routeManeuverFilter, setRouteManeuverFilter] = useState("all");
   const dragCheckpointRef = useRef<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -229,6 +233,40 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const viewWidth = bounds ? bounds.maxX - bounds.minX : 1;
   const viewHeight = bounds ? bounds.maxZ - bounds.minZ : 1;
   const currentMapMismatch = (route: ExamRouteRecord) => Boolean(fingerprint && route.mapFingerprint !== fingerprint);
+  const routeMapOptions = useMemo(
+    () => Array.from(new Set(routes.map((route) => route.mapTitle.trim()).filter(Boolean))
+      .sort((a, b) => a.localeCompare(b, "ru"))),
+    [routes]
+  );
+  const filteredRoutes = useMemo(() => {
+    const query = routeSearch.trim().toLocaleLowerCase("ru-RU");
+    return routes.filter((route) => {
+      if (query) {
+        const haystack = [route.title, route.mapTitle, ...route.roadNames].join(" ").toLocaleLowerCase("ru-RU");
+        if (!haystack.includes(query)) return false;
+      }
+      if (routeMapFilter !== "all" && route.mapTitle !== routeMapFilter) return false;
+      const lengthKm = route.lengthM / 1000;
+      if (routeLengthFilter === "lt2" && lengthKm >= 2) return false;
+      if (routeLengthFilter === "2to5" && (lengthKm < 2 || lengthKm >= 5)) return false;
+      if (routeLengthFilter === "5to10" && (lengthKm < 5 || lengthKm >= 10)) return false;
+      if (routeLengthFilter === "gte10" && lengthKm < 10) return false;
+      const maneuvers = (route.maneuvers ?? []).length;
+      if (routeManeuverFilter === "0" && maneuvers !== 0) return false;
+      if (routeManeuverFilter === "1to2" && (maneuvers < 1 || maneuvers > 2)) return false;
+      if (routeManeuverFilter === "3to5" && (maneuvers < 3 || maneuvers > 5)) return false;
+      if (routeManeuverFilter === "gte6" && maneuvers < 6) return false;
+      return true;
+    });
+  }, [routes, routeSearch, routeMapFilter, routeLengthFilter, routeManeuverFilter]);
+  const hasRouteFilters = Boolean(routeSearch.trim()) || routeMapFilter !== "all" ||
+    routeLengthFilter !== "all" || routeManeuverFilter !== "all";
+  const resetRouteFilters = () => {
+    setRouteSearch("");
+    setRouteMapFilter("all");
+    setRouteLengthFilter("all");
+    setRouteManeuverFilter("all");
+  };
 
   return (
     <div className="space-y-5">
@@ -343,9 +381,54 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
           {loading && <span className="text-xs text-[#8fa2ae]">Загрузка каталога…</span>}
         </div>
         {!loading && routes.length === 0 && <div className="panel-soft p-5 text-sm text-[#8fa2ae]">Каталог пока пуст. Импортируйте OSM-карту и создайте первый маршрут.</div>}
+        {routes.length > 0 && (
+          <div className="panel-soft p-3 space-y-3" data-testid="route-filters">
+            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3">
+              <label className="text-xs text-[#8fa2ae]">Поиск по маршруту и улицам
+                <input data-testid="route-search" type="search" value={routeSearch}
+                  onChange={(event) => setRouteSearch(event.target.value)}
+                  placeholder="Название, улица или карта…" className="field mt-1 w-full" />
+              </label>
+              <label className="text-xs text-[#8fa2ae]">Карта / район
+                <select data-testid="route-map-filter" value={routeMapFilter}
+                  onChange={(event) => setRouteMapFilter(event.target.value)} className="field mt-1 w-full">
+                  <option value="all">Все карты</option>
+                  {routeMapOptions.map((mapTitle) => <option key={mapTitle} value={mapTitle}>{mapTitle}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-[#8fa2ae]">Длина маршрута
+                <select data-testid="route-length-filter" value={routeLengthFilter}
+                  onChange={(event) => setRouteLengthFilter(event.target.value)} className="field mt-1 w-full">
+                  <option value="all">Любая длина</option><option value="lt2">До 2 км</option>
+                  <option value="2to5">2–5 км</option><option value="5to10">5–10 км</option>
+                  <option value="gte10">10 км и более</option>
+                </select>
+              </label>
+              <label className="text-xs text-[#8fa2ae]">Количество манёвров
+                <select data-testid="route-maneuver-filter" value={routeManeuverFilter}
+                  onChange={(event) => setRouteManeuverFilter(event.target.value)} className="field mt-1 w-full">
+                  <option value="all">Любое количество</option><option value="0">Без манёвров</option>
+                  <option value="1to2">1–2</option><option value="3to5">3–5</option>
+                  <option value="gte6">6 и более</option>
+                </select>
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span data-testid="route-filter-count" className="text-xs text-[#b9c9d3]">Показано {filteredRoutes.length} из {routes.length}</span>
+              <button type="button" data-testid="route-filter-reset" className="btn btn-mini"
+                onClick={resetRouteFilters} disabled={!hasRouteFilters}>Сбросить фильтры</button>
+            </div>
+          </div>
+        )}
+        {routes.length > 0 && filteredRoutes.length === 0 && (
+          <div data-testid="route-filter-empty" className="panel-soft p-5 text-sm text-[#8fa2ae]">
+            По заданным условиям маршруты не найдены. Измените запрос или сбросьте фильтры.
+          </div>
+        )}
         <div className="space-y-3">
-          {routes.map((route) => (
-            <article key={route.id} className="panel-soft p-4">
+          {filteredRoutes.map((route) => (
+            <article key={route.id} data-testid="route-card" data-length-m={route.lengthM}
+              data-maneuvers={(route.maneuvers ?? []).length} className="panel-soft p-4">
               <div className="flex flex-wrap justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">

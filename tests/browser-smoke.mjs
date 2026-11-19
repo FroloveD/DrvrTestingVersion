@@ -1183,19 +1183,47 @@ try {
         await tab(page, "Каталог маршрутов");
         const restored = await until(async () => (await low(page)).includes("улица каталожная"), 5000, 100);
         check("P8 маршрут сохраняется после перезагрузки", restored);
+        const routeSearch = page.getByTestId("route-search");
+        await routeSearch.fill("Маршрут P · редакция");
+        check("P9 поиск находит маршрут по названию", await page.getByTestId("route-card").count() === 1);
+        await routeSearch.fill("улица каталожная");
+        check("P10 поиск находит маршрут по названию улицы", await page.getByTestId("route-card").count() === 1);
+        await routeSearch.fill("строка без совпадений");
+        check("P11 пустая выдача объясняет отсутствие результатов", await page.getByTestId("route-filter-empty").isVisible());
+        await page.getByTestId("route-filter-reset").click();
+        const card = page.getByTestId("route-card").first();
+        const routeData = await card.evaluate((el) => ({
+          lengthKm: Number(el.getAttribute("data-length-m")) / 1000,
+          maneuvers: Number(el.getAttribute("data-maneuvers")),
+        }));
+        const lengthValue = routeData.lengthKm < 2 ? "lt2" : routeData.lengthKm < 5 ? "2to5" :
+          routeData.lengthKm < 10 ? "5to10" : "gte10";
+        await page.getByTestId("route-length-filter").selectOption(lengthValue);
+        check("P12 фильтр длины учитывает диапазон маршрута", await page.getByTestId("route-card").count() === 1);
+        await page.getByTestId("route-filter-reset").click();
+        const maneuverValue = routeData.maneuvers === 0 ? "0" : routeData.maneuvers <= 2 ? "1to2" :
+          routeData.maneuvers <= 5 ? "3to5" : "gte6";
+        await page.getByTestId("route-maneuver-filter").selectOption(maneuverValue);
+        check("P13 фильтр манёвров учитывает количество поворотов", await page.getByTestId("route-card").count() === 1);
+        await page.getByTestId("route-filter-reset").click();
+        const mapSelect = page.getByTestId("route-map-filter");
+        const mapValue = await mapSelect.locator("option").nth(1).getAttribute("value");
+        await mapSelect.selectOption(mapValue ?? "all");
+        check("P14 фильтр исходной карты показывает её маршруты", await page.getByTestId("route-card").count() === 1);
+        await page.getByTestId("route-filter-reset").click();
         await page.getByTestId("route-edit-button").first().click();
         const savedInstruction = await page.getByTestId("route-edit-checkpoint-0").inputValue();
-        check("P9 изменения контрольных точек переживают перезагрузку",
+        check("P15 изменения контрольных точек переживают перезагрузку",
           savedInstruction === "Проверить перекрёсток и выполнить задание инструктора.", savedInstruction);
         const restoredPosition = await page.getByTestId("route-checkpoint-marker-0").evaluate((el) => ({
           x: el.getAttribute("cx"), y: el.getAttribute("cy"),
         }));
-        check("P10 новое положение контрольной точки переживает перезагрузку",
+        check("P16 новое положение контрольной точки переживает перезагрузку",
           Boolean(movedPosition) && restoredPosition.x === movedPosition.x && restoredPosition.y === movedPosition.y,
           JSON.stringify(restoredPosition));
       }
     }
-    check("P11 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    check("P17 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
   } catch (e) {
     check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
