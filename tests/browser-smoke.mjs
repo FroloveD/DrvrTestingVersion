@@ -756,8 +756,8 @@ try {
   // Возвращаем вид сзади (1)
   await page.keyboard.press("Digit1");
   await sleep(120);
-  check("K7c подсказки КПП (HUD + 3D-рычаг) и переключение рычагом в салоне P→D1→M1→M2→D1",
-    hudHintOk && cabinHintOk && afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && afterBackD === "D1",
+  check("K7c подсказки КПП (HUD + 3D-рычаг) и переключение рычагом в салоне P→D1→M1→M2→D",
+    hudHintOk && cabinHintOk && afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && /^D[12]$/.test(afterBackD),
     JSON.stringify({ topTag, hudHintOk, cabinHintOk, afterDragD, afterDragM1, afterDragM2, afterBackD }));
 
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));

@@ -336,9 +336,11 @@ export class SceneController {
         obj.layers.set(PLAYER_EXTERIOR_LAYER);
       }
     });
-    // Основной вид сохраняет всю машину, включая зеркала, водителя и светотехнику.
+    // Основной вид сохраняет всю машину, включая зеркала, водителя и светотехнику;
+    // raycaster 3D-рычага АКПП также слушает слой кузова/салона PLAYER_EXTERIOR_LAYER.
     this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
     this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
+    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
     this.scene.add(this.playerRig.root);
 
     // Линии прогнозной траектории Аккермана
