@@ -128,7 +128,18 @@ try {
   check("A2d навигация: все 7 вкладок видны на экране 1440 px", nav1440.ok, `нужно ${nav1440.need}px, есть ${nav1440.have}px`);
   await page.screenshot({ path: `${shotDir}/layout.png` });
 
-  await page.getByRole("button", { name: "Быстрый старт" }).click();
+  await page.getByTestId("quick-start-dismiss").click();
+  check("A2e окно подсказки и быстрого старта закрывается", await page.getByTestId("quick-start-button").count() === 0);
+  await page.getByRole("button", { name: /^Сброс$/ }).click();
+  check("A2f сброс нового заезда возвращает окно быстрого старта", await page.getByTestId("quick-start-button").count() === 1);
+  await page.getByTestId("quick-start-button").click();
+  await sleep(300);
+  check("A2g быстрый старт нельзя повторно включить в том же заезде", await page.getByTestId("quick-start-button").count() === 0);
+  await page.keyboard.press("KeyI");
+  await sleep(150);
+  check("A2h повторная подготовка не возвращает быстрый старт без сброса", await page.getByTestId("quick-start-button").count() === 0);
+  await page.getByRole("button", { name: /^Сброс$/ }).click();
+  await page.getByTestId("quick-start-button").click();
   await sleep(400);
   await page.keyboard.down("KeyW");
   await page.keyboard.down("KeyA");
