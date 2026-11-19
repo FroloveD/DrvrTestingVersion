@@ -912,7 +912,7 @@ export const extraCases: SelfTestCase[] = [
   <node id="2" lat="55.7510" lon="37.6100"/>
   <node id="3" lat="55.7520" lon="37.6100"/>
   <node id="4" lat="55.7510" lon="37.6110"/>
-  <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><tag k="highway" v="secondary"/><tag k="name" v="Улица Сетевая"/></way>
+  <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><tag k="highway" v="secondary"/><tag k="name" v="Улица Сетевая"/><tag k="oneway" v="yes"/></way>
   <way id="11"><nd ref="2"/><nd ref="4"/><tag k="highway" v="residential"/><tag k="name" v="Переулок Связной"/></way>
 </osm>`;
       const source = customFromOsmPack(parseOsmXml(xml, "Тестовый квартал"));
@@ -932,6 +932,16 @@ export const extraCases: SelfTestCase[] = [
       assert(record.lengthM > 25 && record.path.length >= 3, "Маршрут должен пройти по обеим улицам и быть длиннее 25 м");
       assert(record.roadNames.includes("Улица Сетевая") && record.roadNames.includes("Переулок Связной"),
         `В пути потерялись улицы: ${record.roadNames.join(", ")}`);
+      const reverse = buildExamRouteRecord(
+        source,
+        sideRoad.points[sideRoad.points.length - 1],
+        mainRoad.points[0],
+        "Запрещённое направление",
+        "route-test-32-reverse",
+        "2026-11-19T00:00:00.000Z"
+      );
+      assert(!reverse.ok && reverse.error.includes("one-way"),
+        "Путь против one-way должен быть отклонён с понятной причиной");
       assert(record.checkpoints.length >= 2 && record.checkpoints[record.checkpoints.length - 1]?.requireStop === true,
         "Нужны промежуточные КТ и финальная КТ с остановкой");
       assert(record.scenarioSnapshot.mapMeta?.attribution === "© OpenStreetMap contributors",
