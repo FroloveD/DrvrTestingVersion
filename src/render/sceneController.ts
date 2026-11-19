@@ -753,6 +753,46 @@ export class SceneController {
 
     // Дороги и разметка
     for (const road of world.roads) {
+      const rounded = (road.cornerRadiusM ?? 0) > 0 && road.points.length >= 3;
+      const isStreetRoad =
+        world.scenarioId === "city_osm" ||
+        (world.scenarioId === "custom" && road.id !== "custom-lot");
+
+      // Скруглённая дорога строится одной непрерывной лентой, чтобы между короткими
+      // сегментами аппроксимации не появлялись щели и наложенные прямоугольники.
+      if (rounded) {
+        const addRibbon = (width: number, y: number, material: THREE.Material) => {
+          const vertices: number[] = [];
+          const indices: number[] = [];
+          const pts = road.points;
+          for (let i = 0; i < pts.length; i++) {
+            const prev = pts[Math.max(0, i - 1)];
+            const next = pts[Math.min(pts.length - 1, i + 1)];
+            let tx = next.x - prev.x;
+            let tz = next.z - prev.z;
+            const length = Math.hypot(tx, tz) || 1;
+            tx /= length; tz /= length;
+            const nx = -tz, nz = tx;
+            const point = pts[i];
+            vertices.push(point.x + nx * width / 2, y, point.z + nz * width / 2);
+            vertices.push(point.x - nx * width / 2, y, point.z - nz * width / 2);
+            if (i < pts.length - 1) {
+              const k = i * 2;
+              indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+            }
+          }
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+          geometry.setIndex(indices);
+          geometry.computeVertexNormals();
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.receiveShadow = true;
+          this.worldGroup.add(mesh);
+        };
+        if (isStreetRoad) addRibbon(road.width + 3.2, 0.005, sidewalkMat);
+        addRibbon(road.width, 0.012, asphaltMat);
+      }
+
       for (let i = 0; i < road.points.length - 1; i++) {
         const p0 = road.points[i];
         const p1 = road.points[i + 1];
@@ -764,14 +804,10 @@ export class SceneController {
         const mx = (p0.x + p1.x) / 2;
         const mz = (p0.z + p1.z) / 2;
 
-        // Тротуар-подложка для городских и пользовательских улиц (кроме базовой площадки автодрома)
-        const isStreetRoad =
-          world.scenarioId === "city_osm" ||
-          (world.scenarioId === "custom" && road.id !== "custom-lot");
-        const segmentOverlap = (road.cornerRadiusM ?? 0) > 0 ? Math.min(0.2, len * 0.1) : road.width;
-        if (isStreetRoad) {
+        // Для обычной ломаной оставляем исторические сегментные плоскости.
+        if (!rounded && isStreetRoad) {
           const sw = new THREE.Mesh(
-            new THREE.PlaneGeometry(road.width + 3.2, len + segmentOverlap * 0.4),
+            new THREE.PlaneGeometry(road.width + 3.2, len + road.width * 0.4),
             sidewalkMat
           );
           sw.rotation.order = "YXZ";
@@ -782,16 +818,18 @@ export class SceneController {
           this.worldGroup.add(sw);
         }
 
-        const seg = new THREE.Mesh(
-          new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? segmentOverlap : 0)),
-          asphaltMat
-        );
-        seg.rotation.order = "YXZ";
-        seg.rotation.y = angle;
-        seg.rotation.x = -Math.PI / 2;
-        seg.position.set(mx, 0.012, mz);
-        seg.receiveShadow = true;
-        this.worldGroup.add(seg);
+        if (!rounded) {
+          const seg = new THREE.Mesh(
+            new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? road.width : 0)),
+            asphaltMat
+          );
+          seg.rotation.order = "YXZ";
+          seg.rotation.y = angle;
+          seg.rotation.x = -Math.PI / 2;
+          seg.position.set(mx, 0.012, mz);
+          seg.receiveShadow = true;
+          this.worldGroup.add(seg);
+        }
 
         // Осевая разметка (1.1 сплошная или 1.5 прерывистая)
         if (road.lanes >= 2 && len > 8) {
