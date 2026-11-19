@@ -752,6 +752,8 @@ export class SceneController {
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.9 });
     const whiteMarkMat = new THREE.MeshBasicMaterial({ color: 0xf1f5f9 });
 
+
+
     // Дороги и разметка
     for (const road of world.roads) {
       const roadPoints = roadGeometryPoints(road.points, road.cornerRadiusM ?? 0);
