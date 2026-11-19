@@ -383,8 +383,8 @@ export function MapCanvasEditor({
   const beginObjectDrag = (e: React.PointerEvent, target: EditorSelection) => {
     if (e.button === 1 || tool === "pan") return;
     setLotSelected(false);
-    // В режиме добавления нового объекта клик по карте ставит новый объект, а в select — тянет существующий
-    if (tool !== "select") return;
+    // В режиме границы разрешаем перемещать только вершины контура.
+    if (tool !== "select" && !(tool === "boundary" && target.kind === "boundary_point")) return;
     e.stopPropagation();
     const pt = clientToWorld(e.clientX, e.clientY);
     onSelect(target);
