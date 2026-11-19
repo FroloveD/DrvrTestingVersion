@@ -124,7 +124,7 @@ L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парс�
 L.push("| `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |");
   L.push("| `src/maps/boundary.ts` | геометрия произвольных границ мира: шаблоны форм, проверка полигона, проекция автомобиля внутрь и обрезка по контуру |");
 L.push("| `src/maps/route.ts` | сшивка сегментов, кандидаты и граф маршрутов с учётом oneway/layer, пространственная индексация и A* |");
-L.push("| `src/maps/routeCatalog.ts` | построение и проверка OSM-маршрута: безопасный старт в правой полосе, повороты с указателями, КТ, fingerprint и снимок карты |");
+L.push("| `src/maps/routeCatalog.ts` | построение/проверка OSM-маршрута, безопасный старт, повороты, редактирование КТ, fingerprint и снимок карты |");
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |");
