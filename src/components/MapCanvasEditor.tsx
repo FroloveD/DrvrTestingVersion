@@ -823,7 +823,7 @@ export function MapCanvasEditor({
               const sel = isSelected("road", r.id);
               const pts = roundRoadPolyline(r.points, r.cornerRadiusM ?? 0).map((p) => `${-p.x},${-p.z}`).join(" ");
               return (
-                <g key={r.id} data-testid={`map-road-${r.id}`}>
+                <g key={r.id} data-testid={`map-road-${r.id}`} data-corner-radius={r.cornerRadiusM ?? 0}>
                   <polyline
                     points={pts}
                     fill="none"
