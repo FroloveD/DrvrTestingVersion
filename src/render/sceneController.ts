@@ -244,14 +244,20 @@ export class SceneController {
     this.scene.background = skyTex;
     this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
 
-    // Физически корректная IBL-карта окружения из 360°-неба (блики облаков и солнца на лаке Kia Ceed, хроме и стёклах; 0 draw calls)
+    // Физически корректная IBL-карта окружения из 360°-неба (блики облаков и солнца на эмали Kia Ceed, хроме и стёклах;
+    // на программном WebGL вроде SwiftShader/llvmpipe пропускается ради максимальной отзывчивости слабых школьных ПК)
     try {
-      const pmrem = new THREE.PMREMGenerator(this.renderer);
-      pmrem.compileEquirectangularShader();
-      this.envMapRT = pmrem.fromEquirectangular(skyTex);
-      this.scene.environment = this.envMapRT.texture;
-      this.scene.environmentIntensity = 0.56;
-      pmrem.dispose();
+      const gl = this.renderer.getContext();
+      const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      const gpuName = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) ?? "") : "";
+      const isSoftwareGl = /swiftshader|llvmpipe|software/i.test(gpuName);
+      if (!isSoftwareGl) {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envMapRT = pmrem.fromEquirectangular(skyTex);
+        this.scene.environment = this.envMapRT.texture;
+        this.scene.environmentIntensity = 0.56;
+        pmrem.dispose();
+      }
     } catch {
       this.envMapRT = null;
     }

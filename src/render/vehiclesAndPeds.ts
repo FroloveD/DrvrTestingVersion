@@ -301,20 +301,12 @@ export function buildDetailedCar(
   shadowPlane.position.set(0, 0.02, centerShiftZ);
   root.add(shadowPlane);
 
-  // Автомобильная эмаль с лаковым слоем clearcoat (ловит блики 360°-неба и облаков из scene.environment)
-  const paintMat: THREE.Material = isPlayer
-    ? new THREE.MeshPhysicalMaterial({
-        color: bodyColor,
-        metalness: 0.48,
-        roughness: 0.22,
-        clearcoat: 0.88,
-        clearcoatRoughness: 0.1,
-      })
-    : new THREE.MeshStandardMaterial({
-        color: bodyColor,
-        metalness: 0.48,
-        roughness: 0.24,
-      });
+  // Глянцевая автомобильная эмаль металлик (ловит блики 360°-неба и облаков из scene.environment без тяжёлого шейдера)
+  const paintMat = new THREE.MeshStandardMaterial({
+    color: bodyColor,
+    metalness: isPlayer ? 0.54 : 0.48,
+    roughness: isPlayer ? 0.18 : 0.24,
+  });
   const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x1b2129, roughness: 0.68, metalness: 0.14 });
   const satinSilverMat = new THREE.MeshStandardMaterial({ color: 0xb8c4d0, metalness: 0.72, roughness: 0.28 });
   const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe6edf5, metalness: 0.9, roughness: 0.12 });

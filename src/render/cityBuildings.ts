@@ -62,8 +62,8 @@ function makeRng(seedInit: number): () => number {
  * и мягкий рефлекс земли в нижней полусфере для реалистичных PBR-отражений на кузове и стёклах.
  */
 export function makeCloudySkyTexture(): THREE.CanvasTexture {
-  const w = 1024;
-  const h = 512;
+  const w = 512;
+  const h = 256;
   const horizonY = h * 0.5;
   const c = document.createElement("canvas");
   c.width = w;
@@ -99,39 +99,39 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
   };
 
   // Атмосферное рассеяние Ми вокруг солнца и тёплое подсвечивание горизонта
-  drawWrappedDisc(sunX, horizonY * 0.92, 290, 74, (ctx) => {
-    const hg = ctx.createRadialGradient(0, 0, 6, 0, 0, 290);
+  drawWrappedDisc(sunX, horizonY * 0.92, 145, 38, (ctx) => {
+    const hg = ctx.createRadialGradient(0, 0, 3, 0, 0, 145);
     hg.addColorStop(0, "rgba(255,244,218,0.42)");
     hg.addColorStop(0.5, "rgba(255,238,205,0.16)");
     hg.addColorStop(1, "rgba(255,238,205,0)");
     ctx.fillStyle = hg;
     ctx.beginPath();
-    ctx.arc(0, 0, 290, 0, Math.PI * 2);
+    ctx.arc(0, 0, 145, 0, Math.PI * 2);
     ctx.fill();
   });
-  drawWrappedDisc(sunX, sunY, 150, 150, (ctx) => {
-    const sg = ctx.createRadialGradient(0, 0, 3, 0, 0, 150);
+  drawWrappedDisc(sunX, sunY, 76, 76, (ctx) => {
+    const sg = ctx.createRadialGradient(0, 0, 2, 0, 0, 76);
     sg.addColorStop(0, "rgba(255,253,242,0.98)");
-    sg.addColorStop(0.08, "rgba(255,249,224,0.88)");
-    sg.addColorStop(0.24, "rgba(255,241,206,0.34)");
+    sg.addColorStop(0.09, "rgba(255,249,224,0.88)");
+    sg.addColorStop(0.25, "rgba(255,241,206,0.34)");
     sg.addColorStop(0.6, "rgba(245,236,218,0.1)");
     sg.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = sg;
     ctx.beginPath();
-    ctx.arc(0, 0, 150, 0, Math.PI * 2);
+    ctx.arc(0, 0, 76, 0, Math.PI * 2);
     ctx.fill();
   });
 
   // Лёгкие перистые полосы в верхнем ярусе
   const rand = makeRng(2026);
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < 16; i++) {
     const cx = rand() * w;
-    const cy = 36 + rand() * 78;
-    const rx = 65 + rand() * 120;
-    const ry = 4 + rand() * 8;
+    const cy = 18 + rand() * 40;
+    const rx = 34 + rand() * 60;
+    const ry = 2.5 + rand() * 4.5;
     const a = 0.05 + rand() * 0.09;
     drawWrappedDisc(cx, cy, rx, ry, (ctx) => {
-      const cg = ctx.createRadialGradient(0, 0, 2, 0, 0, rx);
+      const cg = ctx.createRadialGradient(0, 0, 1, 0, 0, rx);
       cg.addColorStop(0, `rgba(250,253,255,${a})`);
       cg.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = cg;
@@ -142,17 +142,16 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
   }
 
   // Объёмные кучево-слоистые облака (бесшовно по долготе, с серо-голубым донышком и светлой вершиной)
-  for (let i = 0; i < 64; i++) {
+  for (let i = 0; i < 46; i++) {
     const cx = rand() * w;
-    const cy = 96 + rand() * (horizonY - 114);
+    const cy = 48 + rand() * (horizonY - 56);
     const persp = 0.55 + (1 - cy / horizonY) * 0.75;
-    const rx = (34 + rand() * 78) * persp;
-    const ry = (11 + rand() * 22) * persp;
+    const rx = (18 + rand() * 40) * persp;
+    const ry = (6 + rand() * 11) * persp;
     const alpha = 0.14 + rand() * 0.2;
-    const sunProx = Math.max(0, 1 - Math.min(Math.abs(cx - sunX), w - Math.abs(cx - sunX)) / 260);
-    // Теневое основание облака
+    const sunProx = Math.max(0, 1 - Math.min(Math.abs(cx - sunX), w - Math.abs(cx - sunX)) / 130);
     drawWrappedDisc(cx, cy + ry * 0.34, rx * 0.96, ry * 0.62, (ctx) => {
-      const bg = ctx.createRadialGradient(0, 0, 2, 0, 0, rx * 0.96);
+      const bg = ctx.createRadialGradient(0, 0, 1, 0, 0, rx * 0.96);
       bg.addColorStop(0, `rgba(148,171,196,${alpha * 0.65})`);
       bg.addColorStop(1, "rgba(148,171,196,0)");
       ctx.fillStyle = bg;
@@ -160,12 +159,11 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
       ctx.arc(0, 0, rx * 0.96, 0, Math.PI * 2);
       ctx.fill();
     });
-    // Освещённая солнцем купольная шапка облака
     const topR = Math.round(248 + sunProx * 7);
     const topG = Math.round(251 + sunProx * 2);
     const topB = Math.round(255 - sunProx * 14);
     drawWrappedDisc(cx, cy, rx, ry, (ctx) => {
-      const cg = ctx.createRadialGradient(0, -rx * 0.22, 2, 0, 0, rx);
+      const cg = ctx.createRadialGradient(0, -rx * 0.22, 1, 0, 0, rx);
       cg.addColorStop(0, `rgba(${topR},${topG},${topB},${alpha})`);
       cg.addColorStop(0.62, `rgba(234,243,251,${alpha * 0.58})`);
       cg.addColorStop(1, "rgba(255,255,255,0)");
@@ -177,12 +175,12 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
   }
 
   // Мягкая воздушная дымка прямо у линии горизонта (скрывает границу дальнего тумана)
-  const haze = g.createLinearGradient(0, horizonY - 30, 0, horizonY + 18);
+  const haze = g.createLinearGradient(0, horizonY - 16, 0, horizonY + 10);
   haze.addColorStop(0, "rgba(204,224,240,0)");
   haze.addColorStop(0.62, "rgba(206,225,240,0.68)");
   haze.addColorStop(1, "rgba(198,219,237,0)");
   g.fillStyle = haze;
-  g.fillRect(0, horizonY - 30, w, 48);
+  g.fillRect(0, horizonY - 16, w, 26);
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
