@@ -768,9 +768,10 @@ export class SceneController {
         const isStreetRoad =
           world.scenarioId === "city_osm" ||
           (world.scenarioId === "custom" && road.id !== "custom-lot");
+        const segmentOverlap = (road.cornerRadiusM ?? 0) > 0 ? Math.min(0.2, len * 0.1) : road.width;
         if (isStreetRoad) {
           const sw = new THREE.Mesh(
-            new THREE.PlaneGeometry(road.width + 3.2, len + road.width * 0.4),
+            new THREE.PlaneGeometry(road.width + 3.2, len + segmentOverlap * 0.4),
             sidewalkMat
           );
           sw.rotation.order = "YXZ";
@@ -782,7 +783,7 @@ export class SceneController {
         }
 
         const seg = new THREE.Mesh(
-          new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? road.width : 0)),
+          new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? segmentOverlap : 0)),
           asphaltMat
         );
         seg.rotation.order = "YXZ";
