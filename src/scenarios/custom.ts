@@ -445,7 +445,7 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
   const signs: RoadSignDef[] = (def.signs ?? []).map((s) => ({ ...s }));
   const speedZones: SpeedZone[] = [];
   for (const sign of signs) {
-    const sz = signToSpeedZone(sign);
+    const sz = signToSpeedZone(sign, roads);
     if (sz) speedZones.push(sz);
   }
 
