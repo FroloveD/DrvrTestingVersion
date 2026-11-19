@@ -217,23 +217,35 @@ export function buildExamRouteRecord(
 export function isExamRouteRecord(value: unknown): value is ExamRouteRecord {
   if (!value || typeof value !== "object") return false;
   const route = value as Partial<ExamRouteRecord>;
-  return (
-    route.schema === "cdt.route.v1" &&
-    typeof route.id === "string" &&
-    route.id.length > 0 &&
-    typeof route.title === "string" &&
-    typeof route.createdAt === "string" &&
-    typeof route.updatedAt === "string" &&
-    typeof route.mapFingerprint === "string" &&
-    typeof route.mapTitle === "string" &&
-    Boolean(route.mapMeta && route.scenarioSnapshot?.mapMeta) &&
-    Array.isArray(route.path) &&
-    route.path.length >= 2 &&
-    route.path.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z)) &&
-    Number.isFinite(route.lengthM) &&
-    route.lengthM! >= 25 &&
-    Array.isArray(route.checkpoints) &&
-    route.checkpoints.length >= 2 &&
-    route.checkpoints.every((point) => typeof point.id === "string" && Number.isFinite(point.x) && Number.isFinite(point.z))
-  );
+  const snapshot = route.scenarioSnapshot;
+  if (
+    route.schema !== "cdt.route.v1" ||
+    typeof route.id !== "string" || route.id.length === 0 ||
+    typeof route.title !== "string" || route.title.trim().length === 0 ||
+    typeof route.createdAt !== "string" || !Number.isFinite(Date.parse(route.createdAt)) ||
+    typeof route.updatedAt !== "string" || !Number.isFinite(Date.parse(route.updatedAt)) ||
+    typeof route.mapFingerprint !== "string" || !/^osm-[0-9a-f]{8}$/.test(route.mapFingerprint) ||
+    typeof route.mapTitle !== "string" ||
+    !route.mapMeta || !Array.isArray(route.mapMeta.bbox) || route.mapMeta.bbox.length !== 4 ||
+    !snapshot || snapshot.version !== 1 || !snapshot.mapMeta ||
+    !snapshot.bounds || !snapshot.start ||
+    !Array.isArray(snapshot.roads) || snapshot.roads.length === 0 ||
+    !Array.isArray(snapshot.obstacles) ||
+    !Array.isArray(route.path) || route.path.length < 2 ||
+    !route.path.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z)) ||
+    !Number.isFinite(route.lengthM) || route.lengthM! < 25 ||
+    !route.start || !Number.isFinite(route.start.x) || !Number.isFinite(route.start.z) ||
+    !route.finish || !Number.isFinite(route.finish.x) || !Number.isFinite(route.finish.z) ||
+    !Array.isArray(route.roadNames) || !route.roadNames.every((name) => typeof name === "string") ||
+    !Array.isArray(route.checkpoints) || route.checkpoints.length < 2 ||
+    !route.checkpoints.every((point) =>
+      typeof point.id === "string" &&
+      typeof point.instruction === "string" &&
+      Number.isFinite(point.x) &&
+      Number.isFinite(point.z) &&
+      Number.isFinite(point.radius) &&
+      point.radius > 0
+    )
+  ) return false;
+  return fingerprintOsmScenario(snapshot as CustomScenarioDef) === route.mapFingerprint;
 }
