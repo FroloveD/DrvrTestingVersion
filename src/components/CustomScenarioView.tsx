@@ -76,6 +76,8 @@ import type {
   RoadSignKind,
   Vec2,
 } from "../sim/types";
+import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
+import { DEFAULT_PLAYER_CAR_ID, PLAYER_CARS, getPlayerCar } from "../sim/playerCar";
 import { VEHICLE_DIMS } from "../sim/vehicle";
 import { Chip, downloadJson, Icon } from "./Icons";
 import { DEFAULT_LAYERS, MapCanvasEditor, type LayerVisibility } from "./MapCanvasEditor";
@@ -348,6 +350,13 @@ export function CustomScenarioView({
     },
     [def, onChange]
   );
+
+  /** Отмеченные в сценарии станции; пустое/отсутствующее поле означает весь каталог. */
+  const radioList = useMemo(() => {
+    const saved = def.radioStationIds ?? [];
+    const known = saved.filter((id) => INTERNET_RADIO_STATIONS.some((st) => st.id === id));
+    return known.length > 0 ? known : INTERNET_RADIO_STATIONS.map((st) => st.id);
+  }, [def.radioStationIds]);
 
   const patchDef = useCallback(
     (patch: Partial<CustomScenarioDef>) => {
@@ -1249,6 +1258,132 @@ export function CustomScenarioView({
           >
             Показать все
           </button>
+        </div>
+      )}
+
+      {/* === [SEC:custom-car] Автомобиль заезда и список радиостанций/подключений сценария === */}
+      {!editorClosed.palette && (
+        <div className="panel p-3.5 space-y-3" data-testid="editor-car-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-extrabold">Автомобиль заезда</span>
+            <span className="mono text-[10px] text-[#9bafbc]">
+              {getPlayerCar(def.playerCarId).name} · {getPlayerCar(def.playerCarId).gearbox}
+            </span>
+          </div>
+          <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+            {PLAYER_CARS.map((car) => {
+              const active = (def.playerCarId ?? DEFAULT_PLAYER_CAR_ID) === car.id;
+              return (
+                <button
+                  key={car.id}
+                  type="button"
+                  data-testid={`editor-car-${car.id}`}
+                  aria-pressed={active}
+                  title={`${car.name} · ${car.engine} · ${car.gearbox} · ${car.length.toFixed(2)} м · Vmax ${car.vmaxKmh} км/ч`}
+                  onClick={() => {
+                    patchDef({ playerCarId: car.id });
+                    onNotify(
+                      active
+                        ? `Учебная машина сценария: ${car.name}`
+                        : `Учебная машина сценария: ${car.name} · ${car.engine} · ${car.gearbox}`
+                    );
+                  }}
+                  className={`text-left rounded-lg p-2 border transition cursor-pointer ${
+                    active
+                      ? "bg-[#f5b942]/12 border-[#f5b942]/70 text-white"
+                      : "bg-[#091017] border-white/10 text-[#c3d2dc] hover:border-white/25"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full border border-white/25"
+                      style={{ background: `#${car.color.toString(16).padStart(6, "0")}` }}
+                    />
+                    <span className="text-[11px] font-extrabold">{car.shortName}</span>
+                    <span className="mono text-[10px] text-[#8fa2ae] ml-auto">{car.vmaxKmh} км/ч</span>
+                  </span>
+                  <span className="mono block text-[10px] text-[#8fa2ae]">
+                    {car.length.toFixed(2)}×{car.width.toFixed(2)} м · база {car.wheelbase.toFixed(2)} м · {car.tyres}
+                  </span>
+                  <span className="block text-[10px] text-[#a9bcc8] mt-0.5">{car.blurb}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-white/10 pt-2.5 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-extrabold">Радиостанции и подключения</span>
+              <span className="mono text-[10px] text-[#9bafbc]">
+                {radioList.length} из {INTERNET_RADIO_STATIONS.length} в тюнере сценария
+              </span>
+            </div>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {INTERNET_RADIO_STATIONS.map((st) => {
+                const on = radioList.includes(st.id);
+                return (
+                  <label
+                    key={st.id}
+                    className={`flex items-start gap-2 rounded-lg px-2 py-1.5 border cursor-pointer transition ${
+                      on ? "bg-[#0f1a24] border-[#52d6bd]/45" : "bg-[#091017] border-white/10"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      data-testid={`editor-radio-${st.id}`}
+                      checked={on}
+                      onChange={() => {
+                        const next = on ? radioList.filter((id) => id !== st.id) : [...radioList, st.id];
+                        // Пустой список радио недопустим: тюнеру нужен хотя бы один эфир
+                        if (next.length === 0) {
+                          onNotify("В тюнере должна остаться хотя бы одна станция");
+                          return;
+                        }
+                        patchDef({ radioStationIds: next });
+                        onNotify(on ? `Станция ${st.name} убрана из сценария` : `Станция ${st.name} добавлена в сценарий`);
+                      }}
+                      className="mt-0.5 accent-[#52d6bd]"
+                    />
+                    <span className="min-w-0">
+                      <span className="mono text-[11px] text-white">
+                        FM {st.freq} · {st.name}
+                      </span>
+                      <span className="mono block text-[10px] text-[#8fa2ae]">
+                        {st.genre} · {st.streamUrl.replace(/^https?:\/\//, "").split("/")[0]}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                className="btn btn-mini"
+                data-testid="editor-radio-all"
+                onClick={() => {
+                  patchDef({ radioStationIds: INTERNET_RADIO_STATIONS.map((st) => st.id) });
+                  onNotify("В тюнер сценария добавлены все станции каталога");
+                }}
+              >
+                Все станции
+              </button>
+              <button
+                type="button"
+                className="btn btn-mini"
+                data-testid="editor-radio-saving"
+                onClick={() => {
+                  patchDef({ radioStationIds: ["record", "record-deep"] });
+                  onNotify("Компактный список: RECORD и RECORD Deep — без лишних жанров");
+                }}
+              >
+                Минимум FM
+              </button>
+              <span className="mono text-[10px] text-[#7c909d]">
+                Тюнер ШГУ показывает именно этот список — станции вне сценария недоступны во время заезда.
+              </span>
+            </div>
+          </div>
         </div>
       )}
 

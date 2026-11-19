@@ -349,6 +349,8 @@ export type WorldData = {
    * поэтому старые сценарии, снимки попыток и реплеи остаются побитно совместимыми.
    */
   playerCarId?: PlayerCarId;
+  /** Список станций тюнера ШГУ для этого мира (id из `audio/radioCatalog.ts`); отсутствует — весь каталог. */
+  radioStationIds?: string[];
   /** Охватывающий прямоугольник мира (вычисляется по реальным пропорциям участка или `boundaryPolygon`). */
   bounds: WorldBounds;
   /**

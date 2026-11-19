@@ -54,6 +54,7 @@ import {
   defaultCustomScenario,
   emptyCustomScenario,
   importEditorFileText,
+  normalizeCustomScenario,
   validateCustomScenario,
 } from "../scenarios/custom";
 import {
@@ -97,6 +98,8 @@ import {
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
+import { radioStationsFor } from "../audio/radioCatalog";
+import { cockpitFramingFor, cockpitWheelBand, projectCockpitPoint } from "../render/cockpitFraming";
 import { HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
 import { DEFAULT_PLAYER_CAR_ID, PLAYER_CARS, getPlayerCar, playerCarPhysics } from "./playerCar";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
@@ -1896,7 +1899,114 @@ export const extraCases: SelfTestCase[] = [
       assert(st.carId === "picanto", "Состояние должно запомнить машину заезда");
 
       const p = playerCarPhysics("sorento");
-      return `5 машин · Ceed эталон 1:1 · Picanto ${kmh.toFixed(0)} км/ч · Sorento ${p.length.toFixed(2)} м / тормоза ×${p.brakeScale}`;
+
+      // 5. Сценарий хранит машину и список станций; старый файл без полей ведёт себя как раньше
+      const legacy = normalizeCustomScenario({ title: "Старый файл" });
+      assert(legacy.playerCarId === undefined, "Старый файл сценария не должен получать машину по умолчанию в файле");
+      assert(legacy.radioStationIds === undefined, "Старый файл сценария не должен получать список станций");
+      assert(buildCustomWorld(legacy).playerCarId === undefined, "Мир старого сценария остаётся на учебном Ceed");
+      const tuned = normalizeCustomScenario({
+        title: "Свой заезд",
+        playerCarId: "xceed",
+        radioStationIds: ["record", "unknown-station", "europa-plus"],
+      });
+      assert(tuned.playerCarId === "xceed", "Сценарий должен запомнить выбранную машину");
+      assert(
+        Array.isArray(tuned.radioStationIds) && tuned.radioStationIds.join(",") === "record,europa-plus",
+        "Список станций сценария обязан отбросить неизвестный id и сохранить порядок"
+      );
+      const tunedWorld = buildCustomWorld(tuned);
+      assert(tunedWorld.playerCarId === "xceed", "Мир сценария должен нести машину игрока");
+      assert(
+        Array.isArray(tunedWorld.radioStationIds) && tunedWorld.radioStationIds.length === 2,
+        "Мир сценария должен нести список станций тюнера"
+      );
+      assert(
+        normalizeCustomScenario({ radioStationIds: [] }).radioStationIds === undefined &&
+          normalizeCustomScenario({ playerCarId: "tractor" as never }).playerCarId === undefined,
+        "Пустой список и неизвестная машина не должны попадать в сценарий"
+      );
+      assert(radioStationsFor(["record"]).map((st) => st.id).join(",") === "record", "Сценарий сужает тюнер до своих станций");
+      assert(
+        radioStationsFor(undefined).length === INTERNET_RADIO_STATIONS.length,
+        "Без списка тюнер показывает весь каталог станций"
+      );
+
+      return `5 машин · Ceed эталон 1:1 · Picanto ${kmh.toFixed(0)} км/ч · Sorento ${p.length.toFixed(2)} м / тормоза ×${p.brakeScale} · сценарий: машина + ${tunedWorld.radioStationIds?.length ?? 0} станции`;
+    },
+  },
+  {
+    id: "T39",
+    suite: "vehicle",
+    name: "Кадрировка вида из салона: руль в нижней трети, дорога и салонное зеркало в верхней, поза по паспорту машины",
+    fn: () => {
+      const framing = cockpitFramingFor("ceed");
+      // Эталонный кадр референса: глаз на уровне 1,19 м, чуть впереди центра базы, наклон вниз на ~3°
+      assert(
+        Math.abs(framing.eyeY - 1.195) < 0.01 && Math.abs(framing.eyeZ + 0.06) < 0.02,
+        "Ceed: глаз водителя должен стоять в выверенной точке референса (1,195 м; −0,06 м)"
+      );
+      assert(
+        framing.eyeAboveWheelM > 0.25 && framing.eyeAboveWheelM < 0.35,
+        "Глаз обязан быть выше ступицы руля на 0,25–0,35 м, иначе обод закроет дорогу"
+      );
+      assert(framing.pitchRad < 0 && framing.pitchRad > -0.09, "Взгляд на дорогу — лёгкий наклон вниз");
+      assert(framing.fovDeg >= 62 && framing.fovDeg <= 72, "FOV базового ракурса — 62–72° (как на референсе)");
+
+      // Колесо руля (доли от НИЗА кадра, как на референсе: верх обода ≈ 42 %, ступица ≈ 21 %)
+      const band = cockpitWheelBand(framing);
+      assert(
+        band.topV > 0.34 && band.topV < 0.52,
+        `Верх обода руля должен быть на 34–52 % высоты от низа, получено ${band.topV.toFixed(3)}`
+      );
+      assert(band.bottomV < 0.06, `Нижняя часть обода почти уходит за кадр, получено ${band.bottomV.toFixed(3)}`);
+      assert(band.hubV > 0.12 && band.hubV < 0.30, "Ступица руля в нижней трети кадра");
+      assert(Math.abs(band.hubU - 0.5) < 0.18, `Руль стоит по центру кадра (u=${band.hubU.toFixed(3)})`);
+
+      // Дорога: точка в 40 м впереди машины попадает в среднюю полосу кадра (не в небо и не за капот)
+      const road = projectCockpitPoint(framing, { x: 0, y: 0, z: 40 });
+      assert(road.v > 0.42 && road.v < 0.64, `Дорога в 40 м должна быть в средней полосе кадра (v=${road.v.toFixed(3)})`);
+      // Ближняя дорога в 12 м — выше руля, но ниже горизонта
+      const near = projectCockpitPoint(framing, { x: 0, y: 0, z: 12 });
+      assert(near.v > band.topV + 0.02, "Ближняя дорога обязана быть видна над ободом руля");
+      const far = projectCockpitPoint(framing, { x: 0, y: 0, z: 320 });
+      assert(far.v > near.v && far.v < 0.72, "Дальняя дорога уходит к горизонту, но не в верх кадра");
+
+      // Салонное зеркало — реальная геометрия рига: центр (0; 1,326; centerShiftZ + 0,644), высота полотна 0,078 м
+      const mirrorCenterZ = (CAR.frontOverhang - CAR.rearOverhang) / 2 + 0.644;
+      const mirror = projectCockpitPoint(framing, { x: 0, y: 1.326, z: mirrorCenterZ });
+      const mirrorTop = projectCockpitPoint(framing, { x: 0, y: 1.365, z: mirrorCenterZ });
+      const mirrorBottom = projectCockpitPoint(framing, { x: 0, y: 1.287, z: mirrorCenterZ });
+      assert(
+        mirror.u > 0.55 && mirror.u < 0.9 && mirror.v > 0.6 && mirror.v < 0.85,
+        `Салонное зеркало обязано быть справа вверху кадра (u=${mirror.u.toFixed(2)}, v=${mirror.v.toFixed(2)})`
+      );
+      assert(mirrorTop.v < 0.99 && mirrorBottom.v > 0.5, "Салонное зеркало видно целиком, не обрезано кромкой кадра");
+      // Дорога и зеркало в одном кадре: зеркало над дорогой, дорога над рулём
+      assert(mirrorBottom.v > road.v && road.v > band.topV, "Композиция: руль → дорога → салонное зеркало снизу вверх");
+
+      // Поза масштабируется по паспорту: Picanto ниже и ближе, Sorento выше и дальше — но кадр тот же по композиции.
+      // Высота считается по пропорции кузова: Picanto ниже Ceed-класса по посадке, Sorento заметно выше.
+      const pic = cockpitFramingFor("picanto");
+      const sor = cockpitFramingFor("sorento");
+      assert(sor.eyeY > framing.eyeY + 0.05, "У Sorento водитель сидит заметно выше, чем в Ceed");
+      assert(
+        pic.eyeZ > framing.eyeZ && sor.eyeZ < framing.eyeZ,
+        "Более длинная база отодвигает сиденье от руля, короткая — придвигает"
+      );
+      assert(pic.eyeX < sor.eyeX, "Чем шире кузов, тем дальше глаз от оси — меняется только поперечная поза");
+      for (const [id, f] of [
+        ["picanto", pic],
+        ["sorento", sor],
+      ] as const) {
+        const b = cockpitWheelBand(f);
+        const r = projectCockpitPoint(f, { x: 0, y: 0, z: 40 });
+        assert(b.topV > 0.3 && b.topV < 0.55, `${id}: обод руля вне рабочей полосы кадра`);
+        assert(r.v > 0.4 && r.v < 0.68, `${id}: дорога должна оставаться в средней полосе кадра`);
+        assert(r.v > b.topV, `${id}: дорога должна быть видна над ободом руля`);
+      }
+
+      return `Ceed: обод ${(band.topV * 100).toFixed(0)}–${(band.bottomV * 100).toFixed(0)} % · ступица ${(band.hubV * 100).toFixed(0)} % · салонное зеркало ${(mirror.v * 100).toFixed(0)} % · FOV ${framing.fovDeg.toFixed(0)}°`;
     },
   },
 ];

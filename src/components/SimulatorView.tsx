@@ -27,7 +27,7 @@ import { checkScenarioRoute } from "../maps/routeCheck";
 import { EngineSound } from "../audio/engineSound";
 import {
   clampVolume,
-  nextStationIndex,
+  radioStationsFor,
   renderTrackWav,
   trackCacheKey,
   VOLUME_STEP,
@@ -40,6 +40,7 @@ import {
   HEAD_UNIT_CLIPS,
   HEAD_UNIT_MODES,
   RADIO_STATIONS,
+  setActiveRadioStations,
   type HeadUnitMode,
   type HeadUnitState,
 } from "../render/cockpitDisplays";
@@ -161,6 +162,7 @@ function loadHeadUnit(): HeadUnitState {
     const parsed = JSON.parse(raw) as Partial<HeadUnitState>;
     const mode: HeadUnitMode =
       parsed.mode && HEAD_UNIT_MODES.some((m) => m.id === parsed.mode) ? parsed.mode : DEFAULT_HEAD_UNIT_STATE.mode;
+    // Верхняя граница — по максимальному каталогу; список сценария может быть короче, его обрежет эффект смены сценария
     const stationIndex = clamp(Math.round(Number(parsed.stationIndex) || 0), 0, RADIO_STATIONS.length - 1);
     const clipIndex = clamp(Math.round(Number(parsed.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1);
     const source =
@@ -812,8 +814,9 @@ export function SimulatorView({
   const stepRadioStation = useCallback(
     (dir: 1 | -1) => {
       setHeadUnit((prev) => {
-        const stationIndex = nextStationIndex(prev.stationIndex, dir);
-        const st = RADIO_STATIONS[stationIndex];
+        const list = radioStationsRef.current;
+        const stationIndex = ((prev.stationIndex + dir + list.length) % list.length + list.length) % list.length;
+        const st = list[stationIndex];
         onNotify(`FM ${st.freq} · ${st.name} — ${st.genre}`);
         return {
           ...prev,
@@ -943,7 +946,8 @@ export function SimulatorView({
    * процедурный офлайн-рендер эфира в WAV → IndexedDB, сразу доступен для прослушивания без сети.
    */
   const saveCurrentTrack = useCallback(async () => {
-    const st = RADIO_STATIONS[headUnitRef.current.stationIndex];
+    const list = radioStationsRef.current;
+    const st = list[clamp(headUnitRef.current.stationIndex, 0, list.length - 1)];
     const seconds = 32;
     const key = trackCacheKey(st.id, seconds);
     const wav = renderTrackWav(st, seconds);
@@ -1026,7 +1030,7 @@ export function SimulatorView({
       setHeadUnit((prev) =>
         prev.streamStatus === "connecting" ? prev : { ...prev, streamStatus: "connecting" }
       );
-      playStationStream(RADIO_STATIONS[headUnit.stationIndex]);
+      playStationStream(radioStationsRef.current[clamp(headUnit.stationIndex, 0, radioStationsRef.current.length - 1)]);
     }
     // playStationStream/playSavedTrack читают актуальные refs и не должны перезапускать звук
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1047,6 +1051,32 @@ export function SimulatorView({
       return true;
     }
   });
+  /**
+   * Список станций тюнера из сценария (редактор «Радиостанции и подключения»).
+   * Без поля в сценарии — весь каталог, поэтому старые заезды ведут себя как раньше.
+   */
+  // Источник истины — мир текущего заезда (для сценариев он собирается из customDef, для встроенных — каталог)
+  // Смена машины в сценарии пересаживает камеру сразу, без перезагрузки мира
+  useEffect(() => {
+    const carId = scenarioId === "custom" ? customDef.playerCarId : undefined;
+    sceneCtrlRef.current?.setPlayerCarFraming(carId);
+  }, [scenarioId, customDef.playerCarId]);
+
+  const radioStations = useMemo(
+    () => (scenarioId === "custom" ? radioStationsFor(customDef.radioStationIds) : [...RADIO_STATIONS]),
+    [scenarioId, customDef.radioStationIds]
+  );
+  const radioStationsRef = useRef(radioStations);
+  radioStationsRef.current = radioStations;
+
+  // Действующий список отдаём в ШГУ (canvas рисует ту же станцию, что играет поток)
+  useEffect(() => {
+    setActiveRadioStations(radioStations);
+    setHeadUnit((prev) =>
+      prev.stationIndex < radioStations.length ? prev : { ...prev, stationIndex: 0, radioPlaying: false }
+    );
+  }, [radioStations]);
+
   const soundEnabledRef = useRef(soundEnabled);
   /** Отдельные слои звука: ДВС с шинами, клаксон, реле поворотника. */
   const [soundLayers, setSoundLayers] = useState<{ engine: boolean; horn: boolean; indicator: boolean }>(() => {
@@ -1302,6 +1332,8 @@ export function SimulatorView({
       ctrl = new SceneController(canvas);
       ctrl.applyQuality(optsRef.current.quality);
       ctrl.loadWorld(worldRef.current);
+      // Садим камеру водителя по паспорту машины сценария (кадрировка T39), а не в общий «Ceed-кадр»
+      ctrl.setPlayerCarFraming(worldRef.current.playerCarId);
       ctrl.resize(box.clientWidth, box.clientHeight);
       sceneCtrlRef.current = ctrl;
       setWebglFallback(false);
@@ -3013,14 +3045,14 @@ export function SimulatorView({
               <div className="mt-2 rounded-lg bg-[#0c1520] border hairline px-2 py-1.5">
                 <div className="flex items-center justify-between gap-1.5">
                   <span className="mono text-[10px] text-[#52d6bd]">
-                    FM {RADIO_STATIONS[headUnit.stationIndex].freq}
+                    FM {radioStations[clamp(headUnit.stationIndex, 0, radioStations.length - 1)].freq}
                   </span>
                   <span className="truncate text-[10px] text-[#d3e0e7]">
-                    {RADIO_STATIONS[headUnit.stationIndex].name}
+                    {radioStations[clamp(headUnit.stationIndex, 0, radioStations.length - 1)].name}
                   </span>
                 </div>
                 <div className="mono text-[9.5px] text-[#7c909d] mt-0.5">
-                  {RADIO_STATIONS[headUnit.stationIndex].genre} ·{" "}
+                  {radioStations[clamp(headUnit.stationIndex, 0, radioStations.length - 1)].genre} ·{" "}
                   {headUnit.source === "saved"
                     ? "КЭШИРОВАННЫЙ ТРЕК"
                     : headUnit.streamStatus === "live"
@@ -3871,12 +3903,12 @@ export function SimulatorView({
             vol: {
               title: "Шайба VOL · громкость",
               action: headUnit.radioPlaying ? "Клик — пауза радио" : "Клик — включить радио",
-              hint: `FM ${RADIO_STATIONS[headUnit.stationIndex].freq} · ${RADIO_STATIONS[headUnit.stationIndex].name}`,
+              hint: `FM ${radioStations[clamp(headUnit.stationIndex, 0, radioStations.length - 1)].freq} · ${radioStations[clamp(headUnit.stationIndex, 0, radioStations.length - 1)].name}`,
             },
             tune: {
               title: "Шайба TUNE · настройка",
               action: "Клик — следующая станция FM",
-              hint: `${RADIO_STATIONS.length} станции в офлайн-тюнере`,
+              hint: `${radioStations.length} станций в списке сценария`,
             },
             hazard: {
               title: "Аварийная сигнализация",

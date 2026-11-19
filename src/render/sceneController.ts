@@ -41,6 +41,7 @@ import { SpatialChunkBatcher, type WorldChunkHandle } from "./staticBatcher";
 import {
   buildDetailedCar,
   buildDetailedPedestrian,
+  disposeSharedVehicleTextures,
   makeInstrumentClusterTexture,
   makeRussianLicensePlateTexture,
   SHIFTER_LAYOUT,
@@ -49,6 +50,7 @@ import {
   type DetailedPedestrianVisual,
   type ShifterHitId,
 } from "./vehiclesAndPeds";
+import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
 import { HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
@@ -209,6 +211,8 @@ export class SceneController {
   private orbitPitch = 0.36;
   private orbitDist = 9.2;
   private cockpitFov = 68;
+  /** Кадрировка вида из салона для текущей машины (создаётся под учебный Ceed, меняется при смене машины). */
+  private cockpitFraming: CockpitFraming = cockpitFramingFor("ceed");
   /**
    * Взгляд водителя в салоне — независимое от орбиты состояние. `headYawTarget`/`headPitchTarget`
    * задают, куда водитель поворачивает голову (детент зеркала/дороги или свободный обзор ПКМ),
@@ -432,6 +436,23 @@ export class SceneController {
   }
 
   /** Индекс детента внимания: −1 правое зеркало, 0 дорога, +1 левое зеркало. */
+  /**
+   * Переключает кадрировку салона при смене машины игрока в сценарии: поза глаз, наклон и FOV
+   * пересчитываются по паспорту (T39), пользовательский зум колесом сохраняется как смещение.
+   */
+  setPlayerCarFraming(carId: string | null | undefined): void {
+    this.cockpitFraming = cockpitFramingFor(carId);
+    // Базовый FOV возвращаем к паспортному: кадр машины не должен наследовать зум предыдущей
+    this.cockpitFov = this.cockpitFraming.fovDeg;
+    this.camera.fov = this.cockpitFov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Текущая кадрировка салона (для отладки и смоук-тестов). */
+  getCockpitFraming(): CockpitFraming {
+    return this.cockpitFraming;
+  }
+
   getHeadDetent(): -1 | 0 | 1 {
     return this.headDetent;
   }
@@ -494,7 +515,8 @@ export class SceneController {
     this.orbitYaw = 0;
     this.orbitPitch = 0.36;
     this.orbitDist = 9.2;
-    this.cockpitFov = 68;
+    // Сброс возвращает паспортный FOV текущей машины, а не общий 68°
+    this.cockpitFov = this.cockpitFraming.fovDeg;
     this.resetHeadLook();
   }
 
@@ -1563,15 +1585,17 @@ export class SceneController {
     const fz = Math.cos(s.h);
 
     if (mode === "cockpit") {
-      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами)
+      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами).
+      // Поза и наклон берутся из кадрировки конкретной машины (T39), FOV — из неё же, пока игрок не крутил колесо.
       const pose = this.playerRig.chassis.matrixWorld;
-      const localEyeX = CAR.width * 0.225;
-      const localEyeY = 1.195;
-      const localEyeZ = -0.06;
+      const framing = this.cockpitFraming;
+      const localEyeX = framing.eyeX;
+      const localEyeY = framing.eyeY;
+      const localEyeZ = framing.eyeZ;
       // Взгляд берётся из собственного состояния головы: детенты зеркал/дороги (стрелки) или
       // свободный обзор ПКМ, который остаётся там, где его отпустили.
       const headYaw = this.headYaw;
-      const headPitch = clamp(HEAD_TURN.PITCH_RAD + this.headPitch, -0.74, 0.34);
+      const headPitch = clamp(framing.pitchRad + this.headPitch, -0.74, 0.34);
       const cosP = Math.cos(headPitch);
       if (this.camera.fov !== this.cockpitFov) {
         this.camera.fov = this.cockpitFov;
@@ -1700,6 +1724,8 @@ export class SceneController {
     this.cockpitLeftRT.dispose();
     this.cockpitRightRT.dispose();
     this.sharedTextures.forEach((t) => t.dispose());
+    // Общие текстуры парка (кулиса, лучи фар) живут на уровне модуля — освобождаем отдельно
+    disposeSharedVehicleTextures();
     this.renderer.dispose();
   }
 }

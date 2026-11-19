@@ -28,6 +28,20 @@ export const HEAD_UNIT_MODES: readonly { id: HeadUnitMode; short: string; label:
  */
 export const RADIO_STATIONS: readonly RadioStation[] = INTERNET_RADIO_STATIONS;
 
+/**
+ * Действующий список станций тюнера на текущем заезде: сценарий (`radioStationIds`) фильтрует
+ * каталог и выключенные в редакторе станции. Меняется только при смене сценария.
+ */
+let activeStations: readonly RadioStation[] = INTERNET_RADIO_STATIONS;
+
+export function setActiveRadioStations(list: readonly RadioStation[]): void {
+  activeStations = list.length > 0 ? list : INTERNET_RADIO_STATIONS;
+}
+
+export function getActiveRadioStations(): readonly RadioStation[] {
+  return activeStations;
+}
+
 /** Плейлист процедурных офлайн-видеоклипов на экране 7" ШГУ. */
 export const HEAD_UNIT_CLIPS: readonly { title: string; subtitle: string; theme: "night_city" | "coast" }[] = [
   { title: "НОЧНОЙ МЕГАПОЛИС", subtitle: "Городской драйв · HD Клип", theme: "night_city" },
@@ -654,7 +668,8 @@ export class CockpitDisplayController {
     g.fillText(`${s.gearLabel}  ·  ${s.speedKmh} км/ч`, w - 14, 17);
 
     if (mode === "radio") {
-      const station = RADIO_STATIONS[clamp(s.headUnit.stationIndex, 0, RADIO_STATIONS.length - 1)];
+      const list = activeStations;
+      const station = list[clamp(s.headUnit.stationIndex, 0, list.length - 1)];
       const playing = s.headUnit.radioPlaying;
       const live = playing && s.headUnit.source === "stream" && s.headUnit.streamStatus === "live";
       const sourceLabel = !playing

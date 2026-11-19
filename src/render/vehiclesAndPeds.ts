@@ -98,7 +98,7 @@ export const SHIFTER_LAYOUT = {
  * Текстура подсвеченной кулисы 6АКПП Shiftronic `P – R – N – D` + боковой ручной паз `+ / M / −`
  * на центральном тоннеле Kia Ceed JD (160×320; `u=0` слева — сторона водителя `+X`, `v=1` сверху — вперёд `+Z`).
  */
-function makeShifterGateTexture(): THREE.CanvasTexture {
+function makeShifterGateTextureRaw(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 160;
   c.height = 320;
@@ -188,7 +188,7 @@ function makeShifterGateTexture(): THREE.CanvasTexture {
 }
 
 /** Текстура мягкого светового пятна ближнего света фар на дорожном полотне (128×256). */
-function makeHeadlightBeamTexture(): THREE.CanvasTexture {
+function makeHeadlightBeamTextureRaw(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 128;
   c.height = 256;
@@ -366,6 +366,32 @@ function createDetailedWheelMesh(radius: number, width: number): THREE.Group {
   capGeo.rotateZ(Math.PI / 2);
   g.add(new THREE.Mesh(capGeo, hubMat));
   return g;
+}
+
+/**
+ * Текстуры кулисы и светового пятна не зависят от машины, поэтому создаются один раз на вкладку:
+ * парк из пяти машин не плодит по копии canvas-текстуры на каждый кадр (и GPU-память не утекает
+ * при пересборке рига). Общая текстура освобождается вместе со сценой.
+ */
+let shifterGateTexCache: THREE.CanvasTexture | null = null;
+let headlightBeamTexCache: THREE.CanvasTexture | null = null;
+
+function makeShifterGateTexture(): THREE.CanvasTexture {
+  if (!shifterGateTexCache) shifterGateTexCache = makeShifterGateTextureRaw();
+  return shifterGateTexCache;
+}
+
+function makeHeadlightBeamTexture(): THREE.CanvasTexture {
+  if (!headlightBeamTexCache) headlightBeamTexCache = makeHeadlightBeamTextureRaw();
+  return headlightBeamTexCache;
+}
+
+/** Освобождает общие текстуры кулисы и лучей (вызывается при полном dispose сцены). */
+export function disposeSharedVehicleTextures(): void {
+  shifterGateTexCache?.dispose();
+  headlightBeamTexCache?.dispose();
+  shifterGateTexCache = null;
+  headlightBeamTexCache = null;
 }
 
 /** Строит детализированный учебный Kia Ceed JD (`isPlayer = true`) или автомобиль припаркованного автопарка. */

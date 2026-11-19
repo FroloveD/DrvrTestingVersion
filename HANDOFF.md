@@ -30,7 +30,7 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 38 автотестов ядра (T01–T38), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Тесты ядра | 39 автотестов ядра (T01–T39), прогоняются и в Node, и во вкладке «Тесты и Модули» |
 | Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
@@ -107,6 +107,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
 | `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |
 | `src/sim/playerCar.ts` | Парк автомобилей игрока: паспорта Picanto TA, Rio FB, Ceed JD, XCeed CD и Sorento MQ4 (габариты, база, колея, Vmax, тормоза, самоход) и коэффициенты физики относительно эталонного Ceed |
+| `src/render/cockpitFraming.ts` | Кадрировка вида из салона по референсу: поза глаз, наклон и FOV по паспорту машины, обод руля в нижней трети, дорога и салонное зеркало в верхней (T39) |
 | `src/render/headLook.ts` | Три точки внимания водителя (левое зеркало 39° · дорога + салонное зеркало · правое зеркало), инерция шеи τ=0,055 с и пределы свободного обзора ПКМ |
 | `src/render/sceneController.ts`, `src/render/staticBatcher.ts`, `src/render/cockpitDisplays.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts`, `src/render/cityBuildings.ts`, `src/render/vehiclesAndPeds.ts` | весь Three.js: чанковый батчинг статики, живые 3D-приборы Supervision и ШГУ/R-камера, 360°-небо + PBR IBL, ГОСТ-дороги/тротуары/разметка/светофоры/знаки, здания и деревья РФ/СНГ, Kia Ceed JD, 3D-зеркала, dispose (`[SEC:...]`) |
 | `src/audio/radioCatalog.ts` | каталог реальных интернет-радиостанций (MP3/AAC-потоки), громкость, ключи кэша и детерминированный офлайн-рендер трека в WAV |

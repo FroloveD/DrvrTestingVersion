@@ -17,7 +17,9 @@ import {
   sanitizeBoundaryPolygon,
 } from "../maps/boundary";
 import { clipPolylineOutsideRoads, RoadCorridorIndex } from "../maps/osmDeconflict";
+import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
 import { parseMapFileText, type MapImportFormat, type NormalizedOsmPack } from "../maps/osmLoader";
+import { PLAYER_CARS } from "../sim/playerCar";
 import { isCarInsideBay, SpatialGrid } from "../sim/spatialGrid";
 import type {
   CrosswalkDef,
@@ -26,6 +28,7 @@ import type {
   ObstacleKind,
   ParkedModelKey,
   ParkingBay,
+  PlayerCarId,
   RoadSegment,
   RoadSignDef,
   RoadSignKind,
@@ -75,6 +78,16 @@ export type CustomScenarioDef = {
   boundaryPolygon?: Vec2[];
   /** Установить физический бордюр по всему контуру площадки/границы (прямоугольному или многоугольному). */
   perimeterCurb?: boolean;
+  /**
+   * Список радиостанций/подключений сценария: id из `audio/radioCatalog.ts`.
+   * Отсутствие поля — все станции каталога (старые сценарии не меняются).
+   */
+  radioStationIds?: string[];
+  /**
+   * Автомобиль игрока для этого сценария (`sim/playerCar.ts`).
+   * Отсутствие поля — учебный Kia Ceed JD (совместимость со старыми файлами сценариев).
+   */
+  playerCarId?: PlayerCarId;
 };
 
 export type EditorImportKind = "scenario" | "backup" | MapImportFormat;
@@ -88,6 +101,10 @@ export type EditorImportResult = {
 };
 
 export const CUSTOM_STORAGE_KEY = "cdt.customScenario.v1";
+
+/** Допустимые id машин сценария и станций тюнера — для валидации при импорте файла. */
+export const PLAYER_CAR_IDS: readonly PlayerCarId[] = PLAYER_CARS.map((c) => c.id);
+export const RADIO_STATION_IDS: readonly string[] = INTERNET_RADIO_STATIONS.map((st) => st.id);
 
 const PARKED_COLORS: Record<ParkedModelKey, number> = {
   picanto: 0xf2c94c,
@@ -232,6 +249,14 @@ export function normalizeCustomScenario(raw: Partial<CustomScenarioDef>): Custom
     bounds,
     boundaryPolygon: poly,
     perimeterCurb: raw.perimeterCurb ? true : undefined,
+    // Новые поля сценария: машина заезда и список станций тюнера (неизвестные id отбрасываем)
+    playerCarId: PLAYER_CAR_IDS.includes(raw.playerCarId as PlayerCarId) ? (raw.playerCarId as PlayerCarId) : undefined,
+    radioStationIds: (() => {
+      if (!Array.isArray(raw.radioStationIds)) return undefined;
+      const ids = raw.radioStationIds.filter((id): id is string => typeof id === "string" && RADIO_STATION_IDS.includes(id));
+      // Пустой список бессмыслен: тюнеру нужен хотя бы один эфир, поэтому поле просто не сохраняется
+      return ids.length > 0 ? ids : undefined;
+    })(),
     useLotSurface: raw.useLotSurface !== undefined ? Boolean(raw.useLotSurface) : true,
     roads: Array.isArray(raw.roads)
       ? raw.roads.map((r) => ({ ...r, points: Array.isArray(r.points) ? r.points.map((p) => ({ ...p })) : [] }))
@@ -611,6 +636,11 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
       ? { mapMeta: { ...def.mapMeta, bbox: [...def.mapMeta.bbox] as [number, number, number, number] } }
       : {}),
     embedInAttempt: true,
+    // Машина и список станций сценария: отсутствие полей — учебный Ceed и весь каталог FM
+    ...(def.playerCarId ? { playerCarId: def.playerCarId } : {}),
+    ...(def.radioStationIds && def.radioStationIds.length > 0
+      ? { radioStationIds: [...def.radioStationIds] }
+      : {}),
     bounds,
     ...(validPoly ? { boundaryPolygon: validPoly } : {}),
     ...(lotPolygon ? { lotPolygon } : {}),
