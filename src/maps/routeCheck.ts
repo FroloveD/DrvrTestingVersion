@@ -213,6 +213,16 @@ export function checkScenarioRoute(input: RouteCheckInput): RouteCheckReport {
         target: { kind: "start" },
       });
       canAutoFix = true;
+    } else if (startRoad && startRoad.road.oneway && startRoad.dist <= startRoad.road.width * 0.6 + 1) {
+      const owDiffDeg = Math.abs((angleDiffRad(input.start.h, startRoad.h) * 180) / Math.PI);
+      if (owDiffDeg > 110) {
+        issues.push({
+          severity: "error",
+          message: `Старт направлен против одностороннего движения на «${startRoad.road.name || "улице OSM"}» (отклонение ${Math.round(owDiffDeg)}°).`,
+          target: { kind: "start" },
+        });
+        canAutoFix = true;
+      }
     }
   }
 
@@ -404,7 +414,16 @@ export function checkScenarioRoute(input: RouteCheckInput): RouteCheckReport {
             roadNames: [] as string[],
           };
 
-    if (net.connected) connectedLegsCount += 1;
+    if (net.connected) {
+      connectedLegsCount += 1;
+    } else if (net.wrongWay) {
+      issues.push({
+        severity: "error",
+        message: `Участок ${fromLabel} → ${toLabel} направлен против одностороннего движения (знак 5.5 / 3.1).`,
+        target: { kind: "checkpoint", id: cp.id },
+      });
+      canAutoFix = true;
+    }
     totalLengthM += net.lengthM;
 
     const legBlocker = findLegBlocker(net.path, grid, snapCp?.road.width ?? 7);

@@ -158,4 +158,17 @@
 - **Отвергнуто:** внешние GIS-библиотеки (Turf.js и др.) — увеличивают single-file бандл при том, что все нужные 2D-операции компактно и детерминированно реализованы в `src/maps/boundary.ts`; изменение `src/scoring/rules.ts`.
 - **Последствия и защита:** автотесты `T30`, `T31`, `T32` и браузерный смоук `P` (`tests/browser-smoke.mjs`).
 
+---
+
+## ADR-015. Двухпроходный бесконфликтный импорт реальных карт OSM / Overpass / GeoJSON
+
+- **Статус:** принято · **Дата:** 2026-11
+- **Контекст:** в реальных выгрузках OpenStreetMap Г-/П-образные здания и `relation type=multipolygon` перекрывали дворовые проезды одним общим OBB, `barrier=fence`/`wall` шли сквозь дороги и ворота `barrier=gate`, деревья/столбы/стойки знаков оказывались на проезжей части, светофоры с `footway`/ЖД и парные узлы создавали ложные стоп-линии, `oneway=yes`/`junction=roundabout` и `bridge`/`tunnel` (`layer`) не учитывались маршрутизатором, зоны `20 км/ч` из дворов задевали соседние магистрали `60 км/ч`, а повторный импорт расширенного `bbox` затирал объекты инструктора.
+- **Решение:**
+  1. Новый чистый модуль `src/maps/osmDeconflict.ts` (`@layer pure-core`): проекция и обратная репроекция WGS84 (`reprojectBetweenOrigins`), разбор единиц и региональных лимитов (`RU:urban`, `mph`, `ft`, `oneway`, `layer`), пространственный индекс проезжей части `RoadCorridorIndex`, раскладка вогнутых/дворовых зданий на корпуса и угловое ужатие OBB (`buildDeconflictedBuildingObstacles`, `retractObstacleFromRoads`), автоматическая прорезка проездов и ворот в заборах/бордюрах (`clipPolylineOutsideRoads`), вынос точечных препятствий и стоек знаков на обочину, дедупликация светофоров/переходов и подгонка радиуса зон скорости (`fitSpeedZoneRadius`).
+  2. Двухпроходный конвейер в `src/maps/osmXml.ts` (поддержка `<relation>`/`<member>`, фильтрация `action="delete"`/`visible="false"`) и `src/maps/osmLoader.ts` (`.osm` XML, Overpass JSON, GeoJSON `Multi*` + дыры полигонов): сначала строится сеть реальных автодорог (с отсевом `construction`/`proposed`/`access=private`/`railway`/`building=roof`/`area=yes`), затем все здания, ограждения, знаки, светофоры (с `direction=forward|backward`), переходы и скоростные зоны согласуются с проезжей частью с записью отчёта в `mapMeta.conflictNotes`.
+  3. Направленный и поуровневый граф дорог в `src/maps/route.ts` и `src/maps/routeCheck.ts`: защита `oneway`/`roundabout` от встречного старта и реверса (`reverseBlocked`), разделение мостов и тоннелей по `layer`, кнопка «Согласовать с дорогами» (`deconflictScenarioWithRoads`) и режим «Сохранить мои объекты» с WGS84-репроекцией (`mergeUserObjectsOntoOsmMap`) в `src/scenarios/editorOps.ts`, а также круглые стыки асфальта, разрыв сплошной на перекрёстках и стрелки `oneway` в `src/render/sceneController.ts` и `src/components/MapCanvasEditor.tsx`.
+- **Последствия и защита:** автотест `T33` (`33/33`), браузерный смоук `P9` (`tests/browser-smoke.mjs`), 0 внешних зависимостей, полная совместимость `cdt.golden.v1` (`T14`).
+
+
 

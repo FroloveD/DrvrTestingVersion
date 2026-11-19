@@ -228,6 +228,14 @@ export type RoadSegment = {
   name?: string;
   hasSolidCenter?: boolean;
   speedLimitKmh?: number;
+  /** Одностороннее движение по ходу `points[0] → points[n-1]` (включая развёрнутые `oneway=-1` и кольца). */
+  oneway?: boolean;
+  /** Круговое движение (`junction=roundabout | circular`). */
+  roundabout?: boolean;
+  /** Вертикальный уровень OSM (`0` — земля, `> 0` — мост/эстакада, `< 0` — тоннель). */
+  layer?: number;
+  /** Подтип служебного проезда OSM (`driveway`, `parking_aisle`, `alley` и др.). */
+  service?: string;
 };
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
@@ -283,6 +291,14 @@ export type MapPackMeta = {
   buildingsCount: number;
   signalsCount: number;
   signsCount?: number;
+  /** Точка начала локальной метрической проекции WGS84 (для точного переимпорта без сдвига координат). */
+  origin?: { lat: number; lon: number };
+  /** Число распознанных односторонних участков (включая круговое движение). */
+  onewayRoadsCount?: number;
+  /** Сколько геометрических и дорожных конфликтов автоматически устранено при импорте реальной карты. */
+  resolvedConflictsCount?: number;
+  /** Сводка устранённых конфликтов импорта для инструктора. */
+  conflictNotes?: string[];
 };
 
 export type WorldBounds = {

@@ -16,6 +16,7 @@ import {
   polygonArea,
   sanitizeBoundaryPolygon,
 } from "../maps/boundary";
+import { clipPolylineOutsideRoads, RoadCorridorIndex } from "../maps/osmDeconflict";
 import { parseMapFileText, type MapImportFormat, type NormalizedOsmPack } from "../maps/osmLoader";
 import { isCarInsideBay, SpatialGrid } from "../sim/spatialGrid";
 import type {
@@ -376,11 +377,14 @@ export function importEditorFileText(text: string, fileName = "import.json"): Ed
     const def = customFromOsmPack(pack);
     const spanX = Math.round(def.bounds.maxX - def.bounds.minX);
     const spanZ = Math.round(def.bounds.maxZ - def.bounds.minZ);
+    const fixedNote = pack.meta.resolvedConflictsCount
+      ? ` · согласовано конфликтов: ${pack.meta.resolvedConflictsCount}`
+      : "";
     return {
       def,
       kind: format,
       rawPack: pack,
-      summary: `Импортирован .osm «${def.title}» (${spanX}×${spanZ} м): дорог ${def.roads?.length ?? 0}, КТ ${def.checkpoints.length}, знаков ${def.signs?.length ?? 0}, светофоров ${def.signals?.length ?? 0}`,
+      summary: `Импортирован .osm «${def.title}» (${spanX}×${spanZ} м): дорог ${def.roads?.length ?? 0}, КТ ${def.checkpoints.length}, знаков ${def.signs?.length ?? 0}, светофоров ${def.signals?.length ?? 0}${fixedNote}`,
     };
   }
 
@@ -416,11 +420,14 @@ export function importEditorFileText(text: string, fileName = "import.json"): Ed
     const label = format === "geojson" ? "GeoJSON" : "Overpass OSM JSON";
     const spanX = Math.round(def.bounds.maxX - def.bounds.minX);
     const spanZ = Math.round(def.bounds.maxZ - def.bounds.minZ);
+    const fixedNote = pack.meta.resolvedConflictsCount
+      ? ` · согласовано конфликтов: ${pack.meta.resolvedConflictsCount}`
+      : "";
     return {
       def,
       kind: format,
       rawPack: pack,
-      summary: `Импортирован ${label} «${def.title}» (${spanX}×${spanZ} м): дорог ${def.roads?.length ?? 0}, КТ ${def.checkpoints.length}, знаков ${def.signs?.length ?? 0}, светофоров ${def.signals?.length ?? 0}`,
+      summary: `Импортирован ${label} «${def.title}» (${spanX}×${spanZ} м): дорог ${def.roads?.length ?? 0}, КТ ${def.checkpoints.length}, знаков ${def.signs?.length ?? 0}, светофоров ${def.signals?.length ?? 0}${fixedNote}`,
     };
   }
 
@@ -474,6 +481,13 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
   // При активном boundaryPolygon асфальтовая площадка принимает точную произвольную форму полигона (а не прямоугольник)
   const lotPolygon = useLot && validPoly ? validPoly.map((p) => ({ ...p })) : undefined;
 
+  const streetRoads: RoadSegment[] = [];
+  for (const r of def.roads ?? []) {
+    if (Array.isArray(r.points) && r.points.length >= 2) {
+      streetRoads.push({ ...r, points: r.points.map((p) => ({ ...p })) });
+    }
+  }
+
   if (def.perimeterCurb) {
     const curbRing =
       validPoly ??
@@ -485,21 +499,66 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
             maxZ: def.lotHalfZ,
           })
         : boundsToPolygon(bounds));
-    const curbSegs = buildBoundaryCurbSegments(curbRing, 0.28);
-    curbSegs.forEach((seg, idx) => {
-      obstacles.push({
-        id: `boundary-curb-${idx + 1}`,
-        kind: "curb",
-        cx: seg.cx,
-        cz: seg.cz,
-        halfX: seg.halfX,
-        halfZ: seg.halfZ,
-        h: seg.h,
-        height: 0.16,
-        color: 0xcbd5e1,
-        label: "Бордюр границы площадки",
+
+    if (streetRoads.length === 0) {
+      // На закрытой площадке без внешних улиц — сплошной 3D-бордюр по всему контуру
+      const curbSegs = buildBoundaryCurbSegments(curbRing, 0.28);
+      curbSegs.forEach((seg, idx) => {
+        obstacles.push({
+          id: `boundary-curb-${idx + 1}`,
+          kind: "curb",
+          cx: seg.cx,
+          cz: seg.cz,
+          halfX: seg.halfX,
+          halfZ: seg.halfZ,
+          h: seg.h,
+          height: 0.16,
+          color: 0xcbd5e1,
+          label: "Бордюр границы площадки",
+        });
       });
-    });
+    } else {
+      // На карте с реальными улицами автоматически оставляем чистые проезды в местах выхода дорог за контур
+      const roadIdx = new RoadCorridorIndex(streetRoads, true);
+      let area2 = 0;
+      for (let i = 0; i < curbRing.length; i++) {
+        const a = curbRing[i];
+        const b = curbRing[(i + 1) % curbRing.length];
+        area2 += a.x * b.z - b.x * a.z;
+      }
+      const outSign = area2 >= 0 ? 1 : -1;
+      const halfT = 0.14;
+      let curbIdx = 1;
+      for (let i = 0; i < curbRing.length; i++) {
+        const a = curbRing[i];
+        const b = curbRing[(i + 1) % curbRing.length];
+        const clipped = clipPolylineOutsideRoads([a, b], roadIdx, { roadClearanceM: 0.4, minPieceLenM: 0.8 });
+        for (const piece of clipped.pieces) {
+          for (let k = 0; k < piece.length - 1; k++) {
+            const p0 = piece[k];
+            const p1 = piece[k + 1];
+            const dx = p1.x - p0.x;
+            const dz = p1.z - p0.z;
+            const len = Math.hypot(dx, dz);
+            if (len < 0.6) continue;
+            const nx = (outSign * dz) / len;
+            const nz = (-outSign * dx) / len;
+            obstacles.push({
+              id: `boundary-curb-${curbIdx++}`,
+              kind: "curb",
+              cx: Number(((p0.x + p1.x) * 0.5 + nx * halfT).toFixed(2)),
+              cz: Number(((p0.z + p1.z) * 0.5 + nz * halfT).toFixed(2)),
+              halfX: halfT,
+              halfZ: Number((len * 0.5).toFixed(2)),
+              h: Number(Math.atan2(dx, dz).toFixed(4)),
+              height: 0.16,
+              color: 0xcbd5e1,
+              label: "Бордюр границы участка",
+            });
+          }
+        }
+      }
+    }
   }
 
   const roads: RoadSegment[] = [];
@@ -516,11 +575,7 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
       name: "Своя площадка",
     });
   }
-  for (const r of def.roads ?? []) {
-    if (Array.isArray(r.points) && r.points.length >= 2) {
-      roads.push({ ...r, points: r.points.map((p) => ({ ...p })) });
-    }
-  }
+  roads.push(...streetRoads);
 
   const signs: RoadSignDef[] = (def.signs ?? []).map((s) => ({ ...s }));
   const speedZones: SpeedZone[] = [];

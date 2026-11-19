@@ -40,11 +40,13 @@ import {
   clearBoundaryPolygon,
   createEditorHistory,
   cropScenarioToBoundary,
+  deconflictScenarioWithRoads,
   deleteSelected,
   duplicateSelected,
   fitBoundsToContent,
   getSelectionAnchor,
   insertBoundaryPoint,
+  mergeUserObjectsOntoOsmMap,
   moveSelected,
   primarySelection,
   pushEditorHistory,
@@ -282,6 +284,7 @@ export function CustomScenarioView({
   const [tool, setTool] = useState<EditorTool>("select");
   const [selection, setSelection] = useState<EditorSelection | null>({ kind: "start" });
   const [snapStep, setSnapStep] = useState<number>(0.5);
+  const [preserveOnImport, setPreserveOnImport] = useState<boolean>(false);
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [fitSignal, setFitSignal] = useState<number>(0);
   const [focusSignal, setFocusSignal] = useState<number>(0);
@@ -513,6 +516,19 @@ export function CustomScenarioView({
       const text = await file.text();
       const { def: imported, kind, summary, rawPack } = importEditorFileText(text, file.name);
       const isOsmMap = kind === "osm_xml" || kind === "osm_json" || kind === "geojson";
+      if (isOsmMap && preserveOnImport) {
+        const merged = mergeUserObjectsOntoOsmMap(def, imported);
+        const keptObjects = merged.keptBays + merged.keptSigns;
+        const mergeNote =
+          keptObjects > 0 || merged.keptCheckpoints > 0
+            ? ` · перенесено объектов: ${keptObjects}, КТ: ${merged.keptCheckpoints}${merged.reprojected ? " (WGS84)" : ""}`
+            : "";
+        applyImportedScenario(merged.def, `${summary}${mergeNote}`, {
+          rawPack: rawPack ?? null,
+          openCheck: true,
+        });
+        return;
+      }
       applyImportedScenario(imported, summary, {
         rawPack: rawPack ?? null,
         openCheck: isOsmMap || imported.checkpoints.length > 0,
@@ -540,9 +556,27 @@ export function CustomScenarioView({
     commitChange(res.def, def);
     setSelection({ kind: "start" });
     setShowRouteCheck(true);
+    if (res.reverseBlocked) {
+      setRouteReverse(false);
+      onNotify(
+        `«${res.roadName ?? "Улица"}» — односторонняя по данным OSM: маршрут построен по разрешённому направлению (${res.count} КТ)`
+      );
+      return;
+    }
     onNotify(
       `Построен маршрут (${res.count} КТ, ${Math.round(res.lengthM)} м)${res.roadName ? ` по «${res.roadName}»` : ""}${reverse ? " · реверс" : ""}`
     );
+  };
+
+  const handleDeconflictWithRoads = () => {
+    const res = deconflictScenarioWithRoads(def);
+    if (res.changedCount === 0) {
+      onNotify("Конфликтов с дорожной сетью не обнаружено: здания, знаки, стойки и маршрут согласованы");
+      return;
+    }
+    commitChange(res.def, def);
+    setShowRouteCheck(true);
+    onNotify(`Согласовано с дорогами (${res.changedCount}): ${res.fixes[0] ?? "коллизии устранены"}`);
   };
 
   const handleAutoFixRoute = () => {
@@ -775,6 +809,19 @@ export function CustomScenarioView({
           >
             <Icon name="upload" size={13} /> Импорт OSM / GeoJSON / JSON
           </button>
+          <label
+            className="inline-flex items-center gap-1.5 rounded-lg border hairline bg-[#0b131a] px-2 py-1 text-[11px] text-[#c5d4de] cursor-pointer select-none"
+            title="При повторном импорте карты OSM / GeoJSON перенести ваши боксы, ручные знаки и маршрут (с точным пересчётом координат WGS84 и очисткой проезжей части)"
+          >
+            <input
+              type="checkbox"
+              data-testid="editor-import-preserve-toggle"
+              checked={preserveOnImport}
+              onChange={(e) => setPreserveOnImport(e.target.checked)}
+              className="accent-[#52d6bd]"
+            />
+            <span>Сохранить мои объекты</span>
+          </label>
             <button
               type="button"
               data-testid="editor-route-check-btn"
@@ -931,6 +978,17 @@ export function CustomScenarioView({
                   Исправить маршрут
                 </button>
               )}
+              {roads.length > 0 && (
+                <button
+                  type="button"
+                  data-testid="editor-deconflict-btn"
+                  className="btn btn-mini text-[#52d6bd]"
+                  onClick={handleDeconflictWithRoads}
+                  title="Убрать с проезжей части конфликтующие здания, заборы, деревья, стойки знаков и выровнять маршрут по односторонним улицам"
+                >
+                  ✓ Согласовать с дорогами
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-mini"
@@ -959,7 +1017,9 @@ export function CustomScenarioView({
                 <option value="">Автоматически (лучшая улица внутри границы)</option>
                 {routeCandidates.slice(0, 20).map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} · {c.lengthM} м ({c.highway}, {c.speedLimitKmh} км/ч)
+                    {c.oneway ? "→ " : ""}
+                    {c.name} · {c.lengthM} м ({c.highway}, {c.speedLimitKmh} км/ч
+                    {c.oneway ? ", 1-стор." : ""})
                   </option>
                 ))}
               </select>
@@ -988,6 +1048,30 @@ export function CustomScenarioView({
               </span>
             </div>
           )}
+
+          {/* Отчёт автоматического согласования с реальной картой OSM / GeoJSON */}
+          {def.mapMeta &&
+            ((def.mapMeta.conflictNotes && def.mapMeta.conflictNotes.length > 0) ||
+              (def.mapMeta.onewayRoadsCount ?? 0) > 0 ||
+              def.mapMeta.origin) && (
+              <div
+                data-testid="editor-osm-deconflict-notes"
+                className="rounded-lg bg-[#081519] border border-[#52d6bd]/25 px-3 py-1.5 text-[11px] text-[#b7d4dc] flex flex-wrap items-center gap-x-2 gap-y-1"
+              >
+                <span className="mono text-[10px] text-[#52d6bd] font-semibold">РЕАЛЬНАЯ КАРТА OSM:</span>
+                {def.mapMeta.origin && (
+                  <span className="mono text-[10px] text-[#8ab2bf]">
+                    WGS84 {def.mapMeta.origin.lat.toFixed(5)}, {def.mapMeta.origin.lon.toFixed(5)}
+                  </span>
+                )}
+                {(def.mapMeta.onewayRoadsCount ?? 0) > 0 && (
+                  <span>· односторонних: {def.mapMeta.onewayRoadsCount}</span>
+                )}
+                {def.mapMeta.conflictNotes && def.mapMeta.conflictNotes.length > 0 && (
+                  <span>· согласовано: {def.mapMeta.conflictNotes.join("; ")}</span>
+                )}
+              </div>
+            )}
 
           {/* Замечания и ошибки с кнопкой перехода к объекту на 2D-карте */}
           {routeCheck.issues.length > 0 && (
@@ -2132,6 +2216,22 @@ export function CustomScenarioView({
                     className="accent-[#f5b942]"
                   />
                   <span>Сплошная осевая 1.1 (иначе прерывистая 1.5)</span>
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="editor-road-oneway-toggle"
+                    checked={Boolean(selectedRoad.oneway)}
+                    onChange={(e) =>
+                      patchDef({
+                        roads: roads.map((r) =>
+                          r.id === selectedRoad.id ? { ...r, oneway: e.target.checked } : r
+                        ),
+                      })
+                    }
+                    className="accent-[#52d6bd]"
+                  />
+                  <span>Одностороннее движение (OSM oneway / 5.5)</span>
                 </label>
                 {selection?.kind === "road_point" &&
                   selection.id === selectedRoad.id &&

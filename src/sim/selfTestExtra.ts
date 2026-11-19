@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM/границы/маршруты/редактор (T27–T32).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM/границы/маршруты/редактор (T27–T33).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
@@ -27,6 +27,12 @@ import {
   polygonArea,
   removeBoundaryVertex,
 } from "../maps/boundary";
+import {
+  RoadCorridorIndex,
+  doesObstacleOverlapRoads,
+  parseOsmMaxspeedKmh,
+  parseOsmMeters,
+} from "../maps/osmDeconflict";
 import { cropOsmPackToPolygon, parseMapFileText, parseOsmOrGeoJson, parseOsmXml } from "../maps/osmLoader";
 import { buildRouteFromRoads, findRoadNetworkPath, listRouteCandidates } from "../maps/route";
 import { checkScenarioRoute } from "../maps/routeCheck";
@@ -43,6 +49,8 @@ import {
 import {
   appendRoadPoint,
   applyConvexHullBoundary,
+  deconflictScenarioWithRoads,
+  mergeUserObjectsOntoOsmMap,
   applyPresetBoundaryShape,
   applyRouteCorridorBoundary,
   attachCheckpointToSign,
@@ -1079,6 +1087,227 @@ export const extraCases: SelfTestCase[] = [
       assert(s.finished && s.finishedReason === "completed", "Маршрут с isFinalPark без боксов должен завершаться на КТ");
 
       return `OSM check OK (${initialCheck.checkpointsCount} КТ, ${initialCheck.totalLengthM} м) · Дейкстра 2 ул. · реверс · autoFix (${fixed.fixes.length}) OK`;
+    },
+  },
+  {
+    id: "T33",
+    suite: "osm",
+    name: "Бесконфликтный импорт реальной карты: дворы, мультиполигоны, oneway, мосты, заборы и WGS84-слияние",
+    fn: () => {
+      // 1. Парсеры реальных единиц OSM (RU:urban, RU:living_street, mph, футы, составные значения)
+      assert(parseOsmMaxspeedKmh("RU:urban") === 60 && parseOsmMaxspeedKmh("RU:living_street") === 20, "Ошибка RU:* maxspeed");
+      assert(parseOsmMaxspeedKmh("30 mph") === 48 && parseOsmMaxspeedKmh("40; 60") === 40, "Ошибка mph / списка maxspeed");
+      assert(Math.abs((parseOsmMeters("10.5 m") ?? 0) - 10.5) < 0.05, "Ошибка parseOsmMeters(m)");
+      assert(Math.abs((parseOsmMeters("30'") ?? 0) - 9.14) < 0.1, "Ошибка parseOsmMeters(ft)");
+
+      // 2. Реалистичный сложный .osm XML с типичными конфликтами реальных карт:
+      // - главная односторонняя улица (oneway=yes, 60 км/ч) + эстакада (bridge=yes, layer=1) поперёк без общего узла;
+      // - примыкающая жилая зона (20 км/ч) рядом с магистралью (не должна ронять лимит на магистрали);
+      // - здание-мультиполигон с внутренним двором и проездом + навес АЗС (building=roof) + удалённый узел (action=delete);
+      // - забор поперёк улицы с воротами + дерево/столб на оси дороги + парные светофоры + direction=backward + пешеходный светофор.
+      const realConflictXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7490" minlon="37.6090" maxlat="55.7520" maxlon="37.6130"/>
+  <!-- Главная односторонняя улица с юга на север (lon=37.6105) -->
+  <node id="1" lat="55.7492" lon="37.6105"/>
+  <node id="2" lat="55.7502" lon="37.6105" ><tag k="highway" v="traffic_signals"/><tag k="traffic_signals:direction" v="forward"/></node>
+  <node id="3" lat="55.75024" lon="37.6105"><tag k="highway" v="traffic_signals"/></node>
+  <node id="4" lat="55.7510" lon="37.6105"><tag k="traffic_sign" v="RU:2.4"/><tag k="direction" v="backward"/></node>
+  <node id="5" lat="55.7518" lon="37.6105"/>
+  <!-- Дерево и удалённый боллард прямо на оси главной улицы -->
+  <node id="6" lat="55.7497" lon="37.6105"><tag k="natural" v="tree"/></node>
+  <node id="7" lat="55.7498" lon="37.6105" action="delete"><tag k="barrier" v="bollard"/></node>
+  <!-- Пешеходная дорожка со своим светофором (не должна создавать стоп-линию для авто) -->
+  <node id="8" lat="55.7496" lon="37.6094"/>
+  <node id="9" lat="55.7500" lon="37.6094"><tag k="highway" v="traffic_signals"/></node>
+  <node id="10" lat="55.7504" lon="37.6094"/>
+  <!-- Поперечная эстакада (bridge=yes, layer=1) без общих узлов с главной улицей -->
+  <node id="11" lat="55.7506" lon="37.6092"/>
+  <node id="12" lat="55.7506" lon="37.6122"/>
+  <!-- Боковая жилая зона (20 км/ч) восточнее главной улицы -->
+  <node id="13" lat="55.7498" lon="37.6110"/>
+  <node id="14" lat="55.7498" lon="37.6122"/>
+  <!-- Забор поперёк главной улицы с воротами -->
+  <node id="15" lat="55.7513" lon="37.6098"/>
+  <node id="16" lat="55.7513" lon="37.6105"><tag k="barrier" v="gate"/></node>
+  <node id="17" lat="55.7513" lon="37.6112"/>
+  <!-- Здание-мультиполигон с двором (outer 20..23, inner 24..27) и проездом во двор (28..29) -->
+  <node id="20" lat="55.7500" lon="37.6113"/>
+  <node id="21" lat="55.7500" lon="37.6123"/>
+  <node id="22" lat="55.7505" lon="37.6123"/>
+  <node id="23" lat="55.7505" lon="37.6113"/>
+  <node id="24" lat="55.75012" lon="37.6115"/>
+  <node id="25" lat="55.75012" lon="37.6121"/>
+  <node id="26" lat="55.75038" lon="37.6121"/>
+  <node id="27" lat="55.75038" lon="37.6115"/>
+  <node id="28" lat="55.75025" lon="37.6111"/>
+  <node id="29" lat="55.75025" lon="37.6119"/>
+  <!-- Навес АЗС (building=roof) прямо над дорогой — не должен становиться глухой стеной -->
+  <node id="30" lat="55.7494" lon="37.6103"/>
+  <node id="31" lat="55.7494" lon="37.6107"/>
+  <node id="32" lat="55.7496" lon="37.6107"/>
+  <node id="33" lat="55.7496" lon="37.6103"/>
+
+  <way id="100">
+    <nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="6"/><nd ref="4"/><nd ref="16"/><nd ref="5"/>
+    <tag k="highway" v="primary"/><tag k="name" v="Набережная"/><tag k="oneway" v="yes"/><tag k="lanes" v="2"/><tag k="maxspeed" v="RU:urban"/>
+  </way>
+  <way id="101">
+    <nd ref="8"/><nd ref="9"/><nd ref="10"/>
+    <tag k="highway" v="footway"/>
+  </way>
+  <way id="102">
+    <nd ref="11"/><nd ref="12"/>
+    <tag k="highway" v="secondary"/><tag k="name" v="Эстакада"/><tag k="bridge" v="yes"/><tag k="layer" v="1"/>
+  </way>
+  <way id="103">
+    <nd ref="13"/><nd ref="14"/>
+    <tag k="highway" v="living_street"/><tag k="name" v="Тихий двор"/>
+  </way>
+  <way id="104">
+    <nd ref="15"/><nd ref="16"/><nd ref="17"/>
+    <tag k="barrier" v="fence"/>
+  </way>
+  <way id="105">
+    <nd ref="28"/><nd ref="29"/>
+    <tag k="highway" v="service"/>
+  </way>
+  <way id="106">
+    <nd ref="1"/><nd ref="5"/>
+    <tag k="highway" v="construction"/><tag k="name" v="Закрытая стройка"/>
+  </way>
+  <way id="200"><nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="23"/><nd ref="20"/></way>
+  <way id="201"><nd ref="24"/><nd ref="25"/><nd ref="26"/><nd ref="27"/><nd ref="24"/></way>
+  <way id="202">
+    <nd ref="30"/><nd ref="31"/><nd ref="32"/><nd ref="33"/><nd ref="30"/>
+    <tag k="building" v="roof"/>
+  </way>
+  <relation id="500">
+    <member type="way" ref="200" role="outer"/>
+    <member type="way" ref="201" role="inner"/>
+    <tag k="type" v="multipolygon"/><tag k="building" v="apartments"/><tag k="building:levels" v="6"/>
+  </relation>
+</osm>`;
+
+      // Исправим порядок узлов на way 100, чтобы улица шла монотонно с юга на север
+      const cleanXml = realConflictXml.replace(
+        '<nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="6"/><nd ref="4"/><nd ref="16"/><nd ref="5"/>',
+        '<nd ref="1"/><nd ref="6"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="16"/><nd ref="5"/>'
+      );
+      const pack = parseOsmXml(cleanXml, "Реальный квартал OSM");
+
+      // Только реальные автомобильные дороги (без footway и construction)
+      assert(pack.roads.length === 4, `Ожидалось 4 автодороги, получено ${pack.roads.length}`);
+      const mainRoad = pack.roads.find((r) => r.name === "Набережная")!;
+      const bridgeRoad = pack.roads.find((r) => r.name === "Эстакада")!;
+      assert(mainRoad.oneway === true && mainRoad.speedLimitKmh === 60, "Не распознаны oneway=yes или RU:urban");
+      assert(bridgeRoad.layer === 1, "Не распознан layer=1 у эстакады");
+
+      // Ни одно здание, забор, дерево или столб не перекрывает проезжую часть ни одной наземной дороги!
+      const roadIdx = new RoadCorridorIndex(pack.roads, true);
+      const allObs = [...pack.buildings, ...(pack.extraObstacles ?? [])];
+      for (const obs of allObs) {
+        assert(!doesObstacleOverlapRoads(obs, roadIdx, 0.25), `Конфликт с дорогой у препятствия ${obs.id} (${obs.kind})`);
+      }
+      // Мультиполигон дома с двором разложен на корпуса вокруг проезда, а забор разрезан по обе стороны улицы
+      assert(pack.buildings.length >= 2, `Дом-двор должен разложиться на корпуса без перекрытия проезда (${pack.buildings.length})`);
+      const fenceParts = (pack.extraObstacles ?? []).filter((o) => o.kind === "fence");
+      assert(fenceParts.length >= 2, `Забор через улицу должен быть разрезан на боковые секции (${fenceParts.length})`);
+      assert(!(pack.extraObstacles ?? []).some((o) => o.id.includes("7")), "Удалённый узел action=delete не должен импортироваться");
+
+      // Светофоры: дубль объединён, пешеходный светофор отброшен → ровно 1 светофор на проезжей части
+      assert(pack.signals.length === 1, `Ожидался 1 дедуплицированный автосветофор, получено ${pack.signals.length}`);
+      // Знак с direction=backward повёрнут на юг (|h| > 2.5 рад), а не по ходу северной улицы (h ≈ 0)
+      const yieldSign = pack.signs.find((s) => s.kind === "give_way");
+      assert(Boolean(yieldSign) && Math.abs(yieldSign!.h) > 2.5, "direction=backward не развернул знак");
+      // Счётчик устранённых конфликтов и WGS84-якорь заполнены
+      assert((pack.meta.resolvedConflictsCount ?? 0) >= 3 && Boolean(pack.meta.origin), "Нет отчёта согласования или WGS84 origin");
+
+      // Односторонняя улица запрещает реверс маршрута против потока
+      const revAttempt = buildRouteFromRoads(pack.roads, { reverse: true });
+      assert(revAttempt.reverseBlocked === true, "Односторонняя улица должна блокировать реверс маршрута");
+      // Искусственный старт против шерсти на oneway ловится проверкой и чинится autoFixScenarioRoute
+      const scen = customFromOsmPack(pack);
+      const wrongStart = { ...scen, start: { ...scen.start, h: Math.PI } };
+      const wrongCheck = checkScenarioRoute(wrongStart);
+      assert(wrongCheck.status === "errors" && wrongCheck.canAutoFix, "Старт против oneway должен быть ошибкой");
+      const repaired = autoFixScenarioRoute(wrongStart);
+      assert(Math.abs(Math.sin(repaired.def.start.h)) < 0.3 && Math.cos(repaired.def.start.h) > 0.8, "autoFix не развернул старт по oneway");
+
+      // Развязка по уровням: граф не перепрыгивает с Набережной (layer=0) на Эстакаду (layer=1) без общего узла
+      const crossLayer = findRoadNetworkPath(pack.roads, mainRoad.points[0], bridgeRoad.points[1]);
+      assert(!crossLayer.connected, "Граф дорог не должен соединять layer=0 с эстакадой layer=1 без съезда");
+
+      // Жилая зона 20 км/ч не роняет лимит на главной магистрали 60 км/ч; физический проезд без ложных столкновений
+      const cityWorld = buildScenarioWorld("city_osm", DEFAULT_CALIBRATION, pack);
+      const cityGrid = new SpatialGrid(cityWorld.obstacles, 10);
+      assert(!cityGrid.queryCarHit(cityWorld.start.x, cityWorld.start.z, cityWorld.start.h).hit, "Коллизия на старте OSM");
+      for (const sz of cityWorld.speedZones) {
+        const dToMain = Math.abs(sz.x - mainRoad.points[0].x);
+        assert(dToMain > sz.radius + 1, "Зона 20 км/ч бокового двора не должна накрывать главную магистраль");
+      }
+
+      // 3. GeoJSON: MultiLineString + Polygon с дырой двора + landuse=residential (не должен становиться стеной!)
+      const gjPack = parseOsmOrGeoJson(
+        {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { highway: "secondary", name: "пр-т Ленина", oneway: "yes" },
+              geometry: {
+                type: "MultiLineString",
+                coordinates: [
+                  [[37.61, 55.75], [37.61, 55.7506]],
+                  [[37.61, 55.7506], [37.61, 55.7512]],
+                ],
+              },
+            },
+            {
+              type: "Feature",
+              properties: { landuse: "residential", name: "Микрорайон" },
+              geometry: {
+                type: "Polygon",
+                coordinates: [[[37.609, 55.7495], [37.612, 55.7495], [37.612, 55.7515], [37.609, 55.7515], [37.609, 55.7495]]],
+              },
+            },
+          ],
+        },
+        "GeoJSON тест"
+      );
+      assert(gjPack.roads.length === 2 && gjPack.buildings.length === 0, "landuse=residential в GeoJSON не должен быть зданием");
+
+      // 4. Слияние пользовательских боксов и ручных знаков при повторном импорте сдвинутого участка OSM (WGS84) + deconflictScenarioWithRoads
+      const withUserBay = {
+        ...scen,
+        useLotSurface: true,
+        bays: [
+          {
+            id: 1,
+            label: "Мой карман",
+            kind: "parallel" as const,
+            cx: mainRoad.points[0].x - 7.5,
+            cz: mainRoad.points[0].z + 18,
+            width: 2.5,
+            length: 6.7,
+            h: 0,
+            openSide: "left" as const,
+            occupied: false,
+          },
+        ],
+        obstacles: [
+          ...scen.obstacles,
+          { id: "bad-tree", kind: "tree" as const, cx: mainRoad.points[0].x, cz: mainRoad.points[0].z + 25, halfX: 0.45, halfZ: 0.45, h: 0, height: 4, color: 0x2f6a44 },
+        ],
+      };
+      const cleaned = deconflictScenarioWithRoads(withUserBay);
+      assert(cleaned.changedCount >= 2 && cleaned.def.useLotSurface === false, "deconflictScenarioWithRoads не убрал конфликт");
+      const shiftedXml = cleanXml.replace('maxlon="37.6130"', 'maxlon="37.6145"');
+      const shiftedDef = customFromOsmPack(parseOsmXml(shiftedXml, "Расширенный участок"));
+      const merged = mergeUserObjectsOntoOsmMap(cleaned.def, shiftedDef);
+      assert(merged.reprojected && merged.keptBays === 1, "mergeUserObjectsOntoOsmMap не перенёс бокс с WGS84-репроекцией");
+
+      return `Согласовано ${pack.meta.resolvedConflictsCount} конфл. · двор ${pack.buildings.length} корп. · забор ${fenceParts.length} секц. · oneway/layer/WGS84 OK`;
     },
   },
 ];

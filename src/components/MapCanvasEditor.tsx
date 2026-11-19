@@ -968,10 +968,34 @@ export function MapCanvasEditor({
                       fill="none"
                       stroke="rgba(241,245,249,0.55)"
                       strokeWidth={Math.max(0.14, thin)}
-                      strokeDasharray={r.hasSolidCenter ? undefined : `${scale * 0.9} ${scale * 0.9}`}
+                      strokeDasharray={r.hasSolidCenter && !r.oneway ? undefined : `${scale * 0.9} ${scale * 0.9}`}
                       style={{ pointerEvents: "none" }}
                     />
                   )}
+                  {r.oneway &&
+                    r.points.slice(0, -1).map((p0, sIdx) => {
+                      const p1 = r.points[sIdx + 1];
+                      const segLen = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+                      if (segLen < 8) return null;
+                      const mx = -(p0.x + p1.x) * 0.5;
+                      const my = -(p0.z + p1.z) * 0.5;
+                      const deg = (Math.atan2(-(p1.z - p0.z), -(p1.x - p0.x)) * 180) / Math.PI;
+                      const asz = Math.max(0.7, Math.min(r.width * 0.28, signUnit * 0.7));
+                      return (
+                        <path
+                          key={`${r.id}-ow-${sIdx}`}
+                          d={`M ${-asz} ${-asz * 0.65} L ${asz * 0.75} 0 L ${-asz} ${asz * 0.65}`}
+                          transform={`translate(${mx} ${my}) rotate(${deg})`}
+                          fill="none"
+                          stroke="#52d6bd"
+                          strokeOpacity={0.8}
+                          strokeWidth={Math.max(0.16, thin * 1.25)}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{ pointerEvents: "none" }}
+                        />
+                      );
+                    })}
                   {sel && (
                     <polyline
                       points={pts}

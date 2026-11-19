@@ -859,8 +859,61 @@ export class SceneController {
       }
     }
 
-    // Дороги и разметка
+    // Дороги и разметка (с круглыми стыками на изгибах, без z-fighting и с разрывом сплошной на перекрёстках)
+    const surfaceStreetRoads = world.roads.filter(
+      (r) =>
+        (world.scenarioId === "city_osm" || (world.scenarioId === "custom" && r.id !== "custom-lot")) &&
+        (r.layer ?? 0) === 0
+    );
+    const streetJunctionProbe = (px: number, pz: number, ownRoadId: string): boolean => {
+      if (surfaceStreetRoads.length < 2) return false;
+      for (const other of surfaceStreetRoads) {
+        if (other.id === ownRoadId) continue;
+        const limit = other.width * 0.5 + 1.4;
+        const limSq = limit * limit;
+        for (let j = 0; j < other.points.length - 1; j++) {
+          const a = other.points[j];
+          const b = other.points[j + 1];
+          const abx = b.x - a.x;
+          const abz = b.z - a.z;
+          const lenSq = abx * abx + abz * abz;
+          const t = lenSq > 1e-6 ? Math.max(0, Math.min(1, ((px - a.x) * abx + (pz - a.z) * abz) / lenSq)) : 0;
+          const cx = a.x + abx * t;
+          const cz = a.z + abz * t;
+          if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= limSq) return true;
+        }
+      }
+      return false;
+    };
+
+    let segSerial = 0;
     for (const road of world.roads) {
+      const isStreetRoad =
+        world.scenarioId === "city_osm" ||
+        (world.scenarioId === "custom" && road.id !== "custom-lot");
+      const layerVal = road.layer ?? 0;
+      const layerLift = isStreetRoad && layerVal > 0 ? Math.min(0.18, layerVal * 0.06) : 0;
+
+      // Плавные круглые стыки асфальта и тротуара в вершинах реальных ломаных улиц и колец OSM
+      if (isStreetRoad && road.points.length >= 2) {
+        const capGeo = new THREE.CircleGeometry(road.width * 0.5, 16);
+        const swCapGeo = new THREE.CircleGeometry(road.width * 0.5 + 1.6, 14);
+        for (let vi = 0; vi < road.points.length; vi++) {
+          const vp = road.points[vi];
+          const swCap = new THREE.Mesh(swCapGeo, sidewalkMat);
+          swCap.rotation.x = -Math.PI / 2;
+          swCap.position.set(vp.x, 0.0045 + layerLift, vp.z);
+          swCap.receiveShadow = true;
+          this.worldGroup.add(swCap);
+
+          const cap = new THREE.Mesh(capGeo, asphaltMat);
+          cap.rotation.x = -Math.PI / 2;
+          cap.position.set(vp.x, 0.0118 + layerLift, vp.z);
+          cap.receiveShadow = true;
+          this.worldGroup.add(cap);
+        }
+      }
+
       for (let i = 0; i < road.points.length - 1; i++) {
         const p0 = road.points[i];
         const p1 = road.points[i + 1];
@@ -871,55 +924,112 @@ export class SceneController {
         const angle = Math.atan2(dx, dz);
         const mx = (p0.x + p1.x) / 2;
         const mz = (p0.z + p1.z) / 2;
+        const microY = isStreetRoad ? (segSerial++ % 11) * 0.0001 : 0;
 
         // Тротуар-подложка для городских и пользовательских улиц (кроме базовой площадки автодрома)
-        const isStreetRoad =
-          world.scenarioId === "city_osm" ||
-          (world.scenarioId === "custom" && road.id !== "custom-lot");
         if (isStreetRoad) {
           const sw = new THREE.Mesh(
-            new THREE.PlaneGeometry(road.width + 3.2, len + road.width * 0.4),
+            new THREE.PlaneGeometry(road.width + 3.2, len),
             sidewalkMat
           );
           sw.rotation.order = "YXZ";
           sw.rotation.y = angle;
           sw.rotation.x = -Math.PI / 2;
-          sw.position.set(mx, 0.005, mz);
+          sw.position.set(mx, 0.005 + layerLift + microY, mz);
           sw.receiveShadow = true;
           this.worldGroup.add(sw);
         }
 
         const seg = new THREE.Mesh(
-          new THREE.PlaneGeometry(road.width, len + (isStreetRoad ? road.width : 0)),
+          new THREE.PlaneGeometry(road.width, len),
           asphaltMat
         );
         seg.rotation.order = "YXZ";
         seg.rotation.y = angle;
         seg.rotation.x = -Math.PI / 2;
-        seg.position.set(mx, 0.012, mz);
+        seg.position.set(mx, 0.012 + layerLift + microY, mz);
         seg.receiveShadow = true;
         this.worldGroup.add(seg);
 
-        // Осевая разметка (1.1 сплошная или 1.5 прерывистая)
+        // Осевая разметка (1.1 сплошная с разрывом на перекрёстках или 1.5 прерывистая)
+        const markY = 0.022 + layerLift + microY;
         if (road.lanes >= 2 && len > 8) {
-          if (road.hasSolidCenter) {
-            const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, len - 8), whiteMarkMat);
-            line.rotation.order = "YXZ";
-            line.rotation.y = angle;
-            line.rotation.x = -Math.PI / 2;
-            line.position.set(mx, 0.022, mz);
-            this.worldGroup.add(line);
+          if (road.hasSolidCenter && !road.oneway) {
+            if (!isStreetRoad || surfaceStreetRoads.length < 2) {
+              const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, len - 8), whiteMarkMat);
+              line.rotation.order = "YXZ";
+              line.rotation.y = angle;
+              line.rotation.x = -Math.PI / 2;
+              line.position.set(mx, markY, mz);
+              this.worldGroup.add(line);
+            } else {
+              // Разбиваем сплошную осевую вокруг реальных перекрёстков и примыканий
+              const endPad = Math.min(4, len * 0.2);
+              const samples = Math.max(4, Math.min(64, Math.ceil((len - endPad * 2) / 3)));
+              let runStart: number | null = null;
+              const emitSolidRun = (d0: number, d1: number) => {
+                const rLen = d1 - d0;
+                if (rLen < 2.2) return;
+                const midT = ((d0 + d1) * 0.5) / len;
+                const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, rLen), whiteMarkMat);
+                line.rotation.order = "YXZ";
+                line.rotation.y = angle;
+                line.rotation.x = -Math.PI / 2;
+                line.position.set(p0.x + dx * midT, markY, p0.z + dz * midT);
+                this.worldGroup.add(line);
+              };
+              for (let s = 0; s <= samples; s++) {
+                const d = endPad + ((len - endPad * 2) * s) / samples;
+                const t = d / len;
+                const inJunc = layerVal === 0 && streetJunctionProbe(p0.x + dx * t, p0.z + dz * t, road.id);
+                if (!inJunc && runStart === null) {
+                  runStart = d;
+                } else if (inJunc && runStart !== null) {
+                  emitSolidRun(runStart, d);
+                  runStart = null;
+                }
+              }
+              if (runStart !== null) emitSolidRun(runStart, len - endPad);
+            }
           } else {
             const dashCount = Math.floor(len / 5);
             for (let k = 0; k < dashCount; k++) {
               const t = (k + 0.5) / dashCount;
+              const px = p0.x + dx * t;
+              const pz = p0.z + dz * t;
+              if (isStreetRoad && layerVal === 0 && streetJunctionProbe(px, pz, road.id)) continue;
               const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 2.2), whiteMarkMat);
               dash.rotation.order = "YXZ";
               dash.rotation.y = angle;
               dash.rotation.x = -Math.PI / 2;
-              dash.position.set(p0.x + dx * t, 0.022, p0.z + dz * t);
+              dash.position.set(px, markY, pz);
               this.worldGroup.add(dash);
             }
+          }
+        }
+
+        // Разметка направления 1.18 на односторонних улицах и кольцах реальной карты OSM
+        if (isStreetRoad && road.oneway && len >= 16) {
+          const arrowCount = Math.min(8, Math.max(1, Math.floor(len / 28)));
+          for (let aIdx = 0; aIdx < arrowCount; aIdx++) {
+            const t = (aIdx + 0.5) / arrowCount;
+            const ax = p0.x + dx * t;
+            const az = p0.z + dz * t;
+            if (layerVal === 0 && streetJunctionProbe(ax, az, road.id)) continue;
+            const arrowGrp = new THREE.Group();
+            arrowGrp.position.set(ax, markY + 0.0005, az);
+            arrowGrp.rotation.y = angle;
+            const shaft = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 1.5), whiteMarkMat);
+            shaft.rotation.x = -Math.PI / 2;
+            shaft.position.z = -0.35;
+            const head = new THREE.Mesh(new THREE.CircleGeometry(0.46, 3), whiteMarkMat);
+            head.rotation.order = "YXZ";
+            head.rotation.x = -Math.PI / 2;
+            // Вершина треугольника смотрит вперёд вдоль +Z (по ходу одностороннего потока)
+            head.rotation.z = -Math.PI / 2;
+            head.position.z = 0.55;
+            arrowGrp.add(shaft, head);
+            this.worldGroup.add(arrowGrp);
           }
         }
       }

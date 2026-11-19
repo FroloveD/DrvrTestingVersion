@@ -1099,6 +1099,53 @@ try {
   check("P8 Г-образная асфальтовая площадка (без квадратного rect) с 3D-бордюром открывается в 3D без ошибок",
     hasLPoly && noRectLot && lVtx === 6 && errors.length === 0,
     `poly=${hasLPoly}, noRect=${noRectLot}, vtx=${lVtx}, err=${errors.slice(0, 2).join(" | ")}`);
+
+  // 9. Бесконфликтный импорт реального .osm (oneway, забор с воротами поперёк улицы, дерево на оси, building=roof, слияние WGS84)
+  await tab(page, "Свой сценарий");
+  await sleep(300);
+  const realConflictOsm = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7492" minlon="37.6095" maxlat="55.7518" maxlon="37.6122"/>
+  <node id="1" lat="55.7494" lon="37.6105"/>
+  <node id="2" lat="55.7501" lon="37.6105"><tag k="natural" v="tree"/></node>
+  <node id="3" lat="55.7508" lon="37.6105"><tag k="barrier" v="gate"/></node>
+  <node id="4" lat="55.7516" lon="37.6105"/>
+  <node id="5" lat="55.7508" lon="37.6098"/>
+  <node id="6" lat="55.7508" lon="37.6112"/>
+  <node id="7" lat="55.7498" lon="37.6103"/><node id="8" lat="55.7498" lon="37.6107"/>
+  <node id="9" lat="55.7500" lon="37.6107"/><node id="10" lat="55.7500" lon="37.6103"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><tag k="highway" v="primary"/><tag k="name" v="ул. Односторонняя"/><tag k="oneway" v="yes"/><tag k="lanes" v="2"/><tag k="maxspeed" v="RU:urban"/></way>
+  <way id="11"><nd ref="5"/><nd ref="3"/><nd ref="6"/><tag k="barrier" v="fence"/></way>
+  <way id="12"><nd ref="7"/><nd ref="8"/><nd ref="9"/><nd ref="10"/><nd ref="7"/><tag k="building" v="roof"/></way>
+</osm>`;
+  await page.getByTestId("editor-import-input").setInputFiles({
+    name: "real-conflict.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(realConflictOsm),
+  });
+  await sleep(450);
+  const deconfNotes = (await page.getByTestId("editor-osm-deconflict-notes").innerText()).toLowerCase();
+  const deconfRouteOk = (await page.getByTestId("route-check-status").innerText()).toLowerCase().includes("маршрут проверен");
+  // Попытка реверса на односторонней улице OSM оставляет маршрут по разрешённому направлению и сбрасывает галку
+  await page.getByTestId("editor-route-reverse-toggle").check();
+  await page.getByTestId("editor-build-route-btn").click();
+  await sleep(200);
+  const revBlockedUnchecked = !(await page.getByTestId("editor-route-reverse-toggle").isChecked());
+  // Кнопка согласования + режим сохранения пользовательских объектов при повторном импорте расширенного bbox
+  await page.getByTestId("editor-deconflict-btn").click();
+  await page.getByTestId("editor-import-preserve-toggle").check();
+  await page.getByTestId("editor-import-input").setInputFiles({
+    name: "real-conflict-expanded.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(realConflictOsm.replace('maxlon="37.6122"', 'maxlon="37.6134"')),
+  });
+  await sleep(350);
+  await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
+  await sleep(800);
+  check("P9 бесконфликтный импорт .osm: отчёт WGS84/согласования, защита oneway от реверса и 3D без ошибок",
+    deconfNotes.includes("wgs84") && deconfNotes.includes("односторонних: 1") && deconfNotes.includes("согласовано:")
+      && deconfRouteOk && revBlockedUnchecked && errors.length === 0,
+    `notes=${deconfNotes.slice(0, 110)} | ok=${deconfRouteOk} | owBlock=${revBlockedUnchecked} | err=${errors.slice(0, 2).join(" | ")}`);
   await ctx.close();
 } catch (e) {
   check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));

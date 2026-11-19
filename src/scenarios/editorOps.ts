@@ -24,6 +24,14 @@ import {
   type BoundaryShapePreset,
 } from "../maps/boundary";
 import {
+  clipPolylineOutsideRoads,
+  deconflictPointObstacle,
+  placeSignPostClearOfRoads,
+  reprojectBetweenOrigins,
+  retractObstacleFromRoads,
+  RoadCorridorIndex,
+} from "../maps/osmDeconflict";
+import {
   buildRouteFromRoads,
   findRoadNetworkPath,
   nearestRoadPoint,
@@ -884,7 +892,36 @@ export function applyPresetBoundaryShape(
 ): { def: CustomScenarioDef; vertices: number } {
   const poly = buildPresetBoundaryPolygon(preset, def.bounds);
   const bounds = boundingBoxOfPolygon(poly, 0);
-  const startPos = isInsideWorldBoundary(def.start.x, def.start.z, bounds, poly)
+  const streetRoads = (def.roads ?? []).filter((r) => r.id !== "custom-lot" && r.points.length >= 2);
+  const startInside = isInsideWorldBoundary(def.start.x, def.start.z, bounds, poly);
+  const anyCpOutside = def.checkpoints.some((cp) => !isInsideWorldBoundary(cp.x, cp.z, bounds, poly));
+
+  if (streetRoads.length > 0 && def.useLotSurface === false && (!startInside || anyCpOutside)) {
+    const insideCps = def.checkpoints.filter((cp) => isInsideWorldBoundary(cp.x, cp.z, bounds, poly));
+    const rebuilt = buildRouteFromRoads(streetRoads, {
+      boundaryPolygon: poly,
+      obstacles: def.obstacles,
+    });
+    const nextCps = insideCps.length > 0 ? insideCps : rebuilt.checkpoints;
+    const clampedStart = clampPointToWorldBoundary(def.start.x, def.start.z, bounds, poly);
+    const nextStart = startInside
+      ? def.start
+      : rebuilt.startPose && isInsideWorldBoundary(rebuilt.startPose.x, rebuilt.startPose.z, bounds, poly)
+        ? rebuilt.startPose
+        : { ...def.start, x: round2(clampedStart.x), z: round2(clampedStart.z) };
+    return {
+      vertices: poly.length,
+      def: {
+        ...def,
+        start: nextStart,
+        checkpoints: nextCps,
+        boundaryPolygon: poly,
+        bounds,
+      },
+    };
+  }
+
+  const startPos = startInside
     ? { x: def.start.x, z: def.start.z }
     : clampPointToWorldBoundary(def.start.x, def.start.z, bounds, poly);
   const checkpoints = def.checkpoints.map((cp) => {
@@ -1161,7 +1198,7 @@ export function cropScenarioToBoundary(def: CustomScenarioDef): CropSummary {
 export function rebuildRouteFromEditorRoads(
   def: CustomScenarioDef,
   options: Omit<BuildRouteOptions, "boundaryPolygon" | "obstacles"> = {}
-): { def: CustomScenarioDef; count: number; roadName: string; lengthM: number } {
+): { def: CustomScenarioDef; count: number; roadName: string; lengthM: number; reverseBlocked?: boolean } {
   const poly = isValidBoundaryPolygon(def.boundaryPolygon) ? def.boundaryPolygon : undefined;
   const route = buildRouteFromRoads(def.roads ?? [], {
     ...options,
@@ -1191,6 +1228,7 @@ export function rebuildRouteFromEditorRoads(
     count: route.checkpoints.length,
     roadName: route.roadName,
     lengthM: route.totalLengthM,
+    ...(route.reverseBlocked ? { reverseBlocked: true } : {}),
   };
 }
 
@@ -1299,7 +1337,7 @@ export function autoFixScenarioRoute(def: CustomScenarioDef): { def: CustomScena
     fixes.push("Старт автомобиля возвращён внутрь границы карты.");
   }
 
-  // Привязка старта к дороге, если он вне асфальта на уличной карте
+  // Привязка старта к дороге и проверка направления на односторонней улице OSM
   if (roads.length > 0 && next.useLotSurface === false) {
     const snap = nearestRoadPoint(next.start.x, next.start.z, roads);
     if (snap && snap.dist > snap.road.width * 0.65 + 2.5) {
@@ -1310,6 +1348,46 @@ export function autoFixScenarioRoute(def: CustomScenarioDef): { def: CustomScena
         next.start = { x: sx, z: sz, h: round2(snap.h) };
         startChanged = true;
         fixes.push(`Старт перенесён на улицу «${snap.road.name || snap.road.id}».`);
+      }
+    } else if (snap && snap.road.oneway && snap.dist <= snap.road.width * 0.65 + 1) {
+      let owDiff = snap.h - next.start.h;
+      while (owDiff > Math.PI) owDiff -= Math.PI * 2;
+      while (owDiff <= -Math.PI) owDiff += Math.PI * 2;
+      if (Math.abs(owDiff) > (110 * Math.PI) / 180) {
+        next.start = { ...next.start, h: normalizeAngleRad(snap.h) };
+        startChanged = true;
+        fixes.push(`Курс старта развёрнут по одностороннему потоку «${snap.road.name || snap.road.id}».`);
+      }
+    }
+  }
+
+  // Если контрольные точки идут против односторонней улицы — разворачиваем их порядок по потоку
+  if (roads.length > 0 && next.checkpoints.length >= 2) {
+    let wrongWayLegs = 0;
+    for (let i = 0; i < next.checkpoints.length; i++) {
+      const from = i === 0 ? next.start : next.checkpoints[i - 1];
+      const net = findRoadNetworkPath(roads, from, next.checkpoints[i]);
+      if (net.wrongWay) wrongWayLegs += 1;
+    }
+    if (wrongWayLegs > 0) {
+      const revCps = [...next.checkpoints].reverse();
+      const firstSnap = nearestRoadPoint(revCps[0].x, revCps[0].z, roads);
+      if (firstSnap) {
+        const backM = revCps[0].radius + 7;
+        const candStart = {
+          x: round2(revCps[0].x - Math.sin(firstSnap.h) * backM),
+          z: round2(revCps[0].z - Math.cos(firstSnap.h) * backM),
+          h: normalizeAngleRad(firstSnap.h),
+        };
+        const checkFirst = findRoadNetworkPath(roads, revCps[0], revCps[1]);
+        if (checkFirst.connected) {
+          next = {
+            ...next,
+            checkpoints: revCps,
+            ...(inside(candStart.x, candStart.z) ? { start: candStart } : {}),
+          };
+          fixes.push("Порядок КТ развёрнут по разрешённому направлению односторонней улицы.");
+        }
       }
     }
   }
@@ -1388,6 +1466,235 @@ export function autoFixScenarioRoute(def: CustomScenarioDef): { def: CustomScena
   }
 
   return { def: next, fixes };
+}
+
+/**
+ * Устраняет конфликты объектов сценария с реальной дорожной сетью карты:
+ * снимает наложение площадки автодрома на улицы OSM, ужимает здания от проезжей части,
+ * прорезает проезды в заборах/бордюрах, выносит деревья/столбы/стойки знаков на обочину и чинит маршрут.
+ */
+export function deconflictScenarioWithRoads(def: CustomScenarioDef): {
+  def: CustomScenarioDef;
+  fixes: string[];
+  changedCount: number;
+} {
+  const roads = (def.roads ?? []).filter((r) => r.id !== "custom-lot" && r.points.length >= 2);
+  if (roads.length === 0) {
+    return { def, fixes: [], changedCount: 0 };
+  }
+
+  const roadIndex = new RoadCorridorIndex(roads, true);
+  const fixes: string[] = [];
+  let changedCount = 0;
+
+  // 1. Отключаем прямоугольную/полигональную площадку автодрома, если карта представляет реальную сеть улиц
+  let nextUseLot = def.useLotSurface;
+  if (def.useLotSurface !== false && (def.mapMeta || (roads.length >= 2 && def.bays.length === 0))) {
+    nextUseLot = false;
+    changedCount += 1;
+    fixes.push("Отключена подложка площадки поверх реальной дорожной сети.");
+  }
+
+  // 2. Препятствия: здания ужимаем, заборы/бордюры прорезаем по улицам, деревья/столбы/конусы выносим на обочину
+  const nextObstacles = [] as CustomScenarioDef["obstacles"];
+  let adjustedBld = 0;
+  let openedBar = 0;
+  let movedPts = 0;
+
+  for (const obs of def.obstacles) {
+    if (obs.kind === "building") {
+      const res = retractObstacleFromRoads(obs, roadIndex, 0.45, 2.0);
+      if (res.changed) {
+        adjustedBld += 1;
+        changedCount += 1;
+      }
+      if (res.obstacle) nextObstacles.push(res.obstacle);
+    } else if (obs.kind === "fence" || obs.kind === "curb") {
+      const fx = Math.sin(obs.h);
+      const fz = Math.cos(obs.h);
+      const a: Vec2 = { x: obs.cx - fx * obs.halfZ, z: obs.cz - fz * obs.halfZ };
+      const b: Vec2 = { x: obs.cx + fx * obs.halfZ, z: obs.cz + fz * obs.halfZ };
+      const margin = obs.kind === "curb" ? 0.25 : 0.55;
+      const clipped = clipPolylineOutsideRoads([a, b], roadIndex, { roadClearanceM: margin, minPieceLenM: 0.9 });
+      if (clipped.cutCount === 0) {
+        nextObstacles.push(obs);
+      } else {
+        openedBar += 1;
+        changedCount += 1;
+        clipped.pieces.forEach((piece, pIdx) => {
+          const p0 = piece[0];
+          const p1 = piece[piece.length - 1];
+          const len = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+          if (len < 0.9) return;
+          nextObstacles.push({
+            ...obs,
+            id: pIdx === 0 ? obs.id : `${obs.id}-s${pIdx + 1}`,
+            cx: round2((p0.x + p1.x) * 0.5),
+            cz: round2((p0.z + p1.z) * 0.5),
+            halfZ: round2(len * 0.5),
+          });
+        });
+      }
+    } else if (obs.kind === "tree" || obs.kind === "pole" || obs.kind === "cone" || obs.kind === "island") {
+      const res = deconflictPointObstacle(obs, roadIndex);
+      if (res.changed) {
+        movedPts += 1;
+        changedCount += 1;
+      }
+      if (res.obstacle) nextObstacles.push(res.obstacle);
+    } else {
+      nextObstacles.push(obs);
+    }
+  }
+
+  if (adjustedBld > 0) fixes.push(`Ужато/убрано зданий с проезжей части: ${adjustedBld}.`);
+  if (openedBar > 0) fixes.push(`Открыто проездов в ограждениях и бордюрах: ${openedBar}.`);
+  if (movedPts > 0) fixes.push(`Вынесено объектов с полос на обочину: ${movedPts}.`);
+
+  // 3. Стойки дорожных знаков — с проезжей части на правую обочину
+  let movedSigns = 0;
+  const nextSigns = (def.signs ?? []).map((s) => {
+    const res = placeSignPostClearOfRoads(s, roadIndex);
+    if (res.shifted) {
+      movedSigns += 1;
+      changedCount += 1;
+    }
+    return res.sign;
+  });
+  if (movedSigns > 0) fixes.push(`Вынесено стоек знаков на обочину: ${movedSigns}.`);
+
+  const base: CustomScenarioDef = {
+    ...def,
+    useLotSurface: nextUseLot,
+    obstacles: nextObstacles,
+    signs: nextSigns,
+  };
+
+  // 4. Согласуем старт и контрольные точки с дорогами, границей и `oneway`
+  const routeFix = autoFixScenarioRoute(base);
+  if (routeFix.fixes.length > 0) {
+    changedCount += routeFix.fixes.length;
+    fixes.push(...routeFix.fixes);
+  }
+
+  return { def: routeFix.def, fixes, changedCount };
+}
+
+/**
+ * Бесконфликтно обновляет реальную карту OSM, сохраняя расставленные инструктором парковочные боксы,
+ * ручные дорожные знаки и контрольные точки с точным перепроецированием по WGS84 (`mapMeta.origin`).
+ */
+export function mergeUserObjectsOntoOsmMap(
+  prevDef: CustomScenarioDef,
+  importedDef: CustomScenarioDef
+): { def: CustomScenarioDef; keptBays: number; keptSigns: number; keptCheckpoints: number; reprojected: boolean } {
+  const fromOrigin = prevDef.mapMeta?.origin;
+  const toOrigin = importedDef.mapMeta?.origin;
+  const canReproject = Boolean(fromOrigin && toOrigin);
+  let reprojected = false;
+
+  const mapPt = (pt: Vec2): Vec2 | null => {
+    if (fromOrigin && toOrigin) {
+      const rp = reprojectBetweenOrigins(pt, fromOrigin, toOrigin);
+      if (!rp) return null;
+      if (Math.hypot(rp.x - pt.x, rp.z - pt.z) > 0.05) reprojected = true;
+      return rp;
+    }
+    // Если прежняя сцена тоже была с привязкой к другой области — не смешиваем несовместимые карты
+    if (prevDef.mapMeta && !fromOrigin) return pt;
+    return pt;
+  };
+
+  const poly = isValidBoundaryPolygon(importedDef.boundaryPolygon) ? importedDef.boundaryPolygon : undefined;
+  const inside = (p: Vec2) => isInsideWorldBoundary(p.x, p.z, importedDef.bounds, poly);
+  const roads = importedDef.roads ?? [];
+  const roadIndex = new RoadCorridorIndex(roads, true);
+  const bldGrid = new SpatialGrid(importedDef.obstacles, 10);
+
+  // Сохраняем пользовательские боксы, попавшие в новую карту и не врезающиеся в реальные здания OSM
+  const keptBays: ParkingBay[] = [];
+  for (const b of prevDef.bays) {
+    const p = mapPt({ x: b.cx, z: b.cz });
+    if (!p || !inside(p)) continue;
+    if (bldGrid.queryCarHit(p.x, p.z, b.h).hit) continue;
+    keptBays.push({ ...b, cx: round2(p.x), cz: round2(p.z) });
+  }
+
+  // Сохраняем только добавленные вручную знаки (не авто-импортированные `sign-way-*` / `gj-sign-*`), без дублей
+  const baseSigns = [...(importedDef.signs ?? [])];
+  let keptSignsCount = 0;
+  for (const s of prevDef.signs ?? []) {
+    const isOsmSign =
+      s.id.startsWith("sign-way-") ||
+      s.id.startsWith("gj-sign-") ||
+      /^sign-\d+$/.test(s.id) ||
+      s.id.startsWith("sign-gj-");
+    if (isOsmSign) continue;
+    const p = mapPt({ x: s.x, z: s.z });
+    if (!p || !inside(p)) continue;
+    const zPt =
+      s.zoneX !== undefined && s.zoneZ !== undefined ? mapPt({ x: s.zoneX, z: s.zoneZ }) : undefined;
+    const relocated = {
+      ...s,
+      x: round2(p.x),
+      z: round2(p.z),
+      ...(zPt ? { zoneX: round2(zPt.x), zoneZ: round2(zPt.z) } : {}),
+    };
+    const { sign: cleanSign } = placeSignPostClearOfRoads(relocated, roadIndex);
+    const dup = baseSigns.some(
+      (ex) => ex.kind === cleanSign.kind && Math.hypot(ex.x - cleanSign.x, ex.z - cleanSign.z) < 5
+    );
+    if (!dup) {
+      baseSigns.push(cleanSign);
+      keptSignsCount += 1;
+    }
+  }
+
+  // Сохраняем пользовательские КТ, если они попадают на реальные улицы обновлённой карты
+  const candidateCps: RouteCheckpoint[] = [];
+  for (const cp of prevDef.checkpoints) {
+    const isAutoRoute = cp.id.startsWith("route-");
+    if (isAutoRoute && !canReproject) continue;
+    const p = mapPt({ x: cp.x, z: cp.z });
+    if (!p || !inside(p)) continue;
+    const snap = roads.length > 0 ? nearestRoadPoint(p.x, p.z, roads) : null;
+    if (snap && snap.dist <= snap.road.width * 0.65 + cp.radius + 4) {
+      // Мягко привязываем КТ к обновлённой геометрии улицы
+      const onRoad = snap.dist > snap.road.width * 0.55;
+      candidateCps.push({
+        ...cp,
+        x: round2(onRoad ? snap.x : p.x),
+        z: round2(onRoad ? snap.z : p.z),
+      });
+    }
+  }
+
+  const useKeptRoute = candidateCps.length >= 1;
+  let nextStart = importedDef.start;
+  if (useKeptRoute) {
+    const sp = mapPt({ x: prevDef.start.x, z: prevDef.start.z });
+    if (sp && inside(sp) && !bldGrid.queryCarHit(sp.x, sp.z, prevDef.start.h).hit) {
+      nextStart = { x: round2(sp.x), z: round2(sp.z), h: prevDef.start.h };
+    }
+  }
+
+  const mergedBase: CustomScenarioDef = {
+    ...importedDef,
+    title: prevDef.mapMeta ? prevDef.title : importedDef.title,
+    start: nextStart,
+    bays: keptBays,
+    signs: baseSigns,
+    checkpoints: useKeptRoute ? candidateCps : importedDef.checkpoints,
+  };
+
+  const fixed = useKeptRoute ? autoFixScenarioRoute(mergedBase).def : mergedBase;
+  return {
+    def: fixed,
+    keptBays: keptBays.length,
+    keptSigns: keptSignsCount,
+    keptCheckpoints: useKeptRoute ? fixed.checkpoints.length : 0,
+    reprojected,
+  };
 }
 
 /** Подгоняет точные (неквадратные!) границы `bounds` по всем объектам карты с отступом `pad` метров. */

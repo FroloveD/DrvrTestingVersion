@@ -986,8 +986,12 @@ export function SimulatorView({
       const spanX = Math.round(pack.bounds.maxX - pack.bounds.minX);
       const spanZ = Math.round(pack.bounds.maxZ - pack.bounds.minZ);
       const signsPart = pack.signs.length > 0 ? `, знаков ${pack.signs.length}` : "";
+      const deconfPart =
+        (pack.meta.resolvedConflictsCount ?? 0) > 0
+          ? `, согласовано ${pack.meta.resolvedConflictsCount}`
+          : "";
       onNotify(
-        `Загружен OSM (${spanX}×${spanZ} м): дорог ${pack.meta.roadsCount}, КТ ${pack.routeCheckpoints.length}, светофоров ${pack.meta.signalsCount}${signsPart}`
+        `Загружен OSM (${spanX}×${spanZ} м): дорог ${pack.meta.roadsCount}, КТ ${pack.routeCheckpoints.length}, светофоров ${pack.meta.signalsCount}${signsPart}${deconfPart}`
       );
     } catch (err) {
       onNotify(err instanceof Error ? err.message : "Ошибка разбора файла карты (.osm / JSON / GeoJSON)");
@@ -1005,6 +1009,11 @@ export function SimulatorView({
     return listRouteCandidates(customOsm.roads, customOsm.boundaryPolygon);
   }, [customOsm, scenarioId]);
 
+  const selectedOsmCandidate = useMemo(
+    () => (osmRouteCandidate ? osmCandidates.find((c) => c.id === osmRouteCandidate) : osmCandidates[0]),
+    [osmCandidates, osmRouteCandidate]
+  );
+
   const applyOsmRouteVariant = (candidateId: string, reverse: boolean) => {
     if (!customOsm) return;
     const built = buildRouteFromRoads(customOsm.roads, {
@@ -1017,16 +1026,23 @@ export function SimulatorView({
       onNotify("По выбранной улице не удалось собрать контрольные точки");
       return;
     }
+    const effectiveReverse = built.reverseBlocked ? false : reverse;
     setOsmRouteCandidate(candidateId);
-    setOsmRouteReverse(reverse);
+    setOsmRouteReverse(effectiveReverse);
     onCustomOsmChange({
       ...customOsm,
       suggestedStart: built.startPose ?? customOsm.suggestedStart,
       routeCheckpoints: built.checkpoints,
       routeRoadName: built.roadName,
     });
+    if (built.reverseBlocked) {
+      onNotify(
+        `«${built.roadName}» — односторонняя улица OSM: маршрут оставлен по разрешённому направлению (${built.checkpoints.length} КТ)`
+      );
+      return;
+    }
     onNotify(
-      `Маршрут перестроен: «${built.roadName}» (${built.checkpoints.length} КТ, ${Math.round(built.totalLengthM)} м${reverse ? ", реверс" : ""})`
+      `Маршрут перестроен: «${built.roadName}» (${built.checkpoints.length} КТ, ${Math.round(built.totalLengthM)} м${effectiveReverse ? ", реверс" : ""})`
     );
   };
 
@@ -1197,6 +1213,9 @@ export function SimulatorView({
               {Math.round(customOsm.bounds.maxX - customOsm.bounds.minX)}×
               {Math.round(customOsm.bounds.maxZ - customOsm.bounds.minZ)} м
               {customOsm.boundaryPolygon ? ` · контур ${customOsm.boundaryPolygon.length} т.` : ""}
+              {(customOsm.meta.resolvedConflictsCount ?? 0) > 0
+                ? ` · согласовано ${customOsm.meta.resolvedConflictsCount}`
+                : ""}
             </span>
 
             {osmCandidates.length > 0 && (
@@ -1209,7 +1228,8 @@ export function SimulatorView({
                 <option value="">Автовыбор улицы ({customOsm.routeRoadName || "главная"})</option>
                 {osmCandidates.slice(0, 12).map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} · {c.lengthM} м
+                    {c.oneway ? "→ " : ""}
+                    {c.name} · {c.lengthM} м{c.oneway ? " (1-стор.)" : ""}
                   </option>
                 ))}
               </select>
@@ -1218,10 +1238,15 @@ export function SimulatorView({
             <button
               type="button"
               className="btn btn-mini"
+              disabled={Boolean(selectedOsmCandidate?.oneway)}
               onClick={() => applyOsmRouteVariant(osmRouteCandidate, !osmRouteReverse)}
-              title="Развернуть направление маршрута по выбранной улице"
+              title={
+                selectedOsmCandidate?.oneway
+                  ? "Односторонняя улица OSM — реверс против потока отключён"
+                  : "Развернуть направление маршрута по выбранной улице"
+              }
             >
-              ⇄ Реверс
+              {selectedOsmCandidate?.oneway ? "→ 1-стор." : "⇄ Реверс"}
             </button>
 
             <button
@@ -1287,6 +1312,12 @@ export function SimulatorView({
                     </li>
                   ))}
                 </ul>
+              )}
+              {customOsm.meta.conflictNotes && customOsm.meta.conflictNotes.length > 0 && (
+                <div className="pt-1 border-t border-white/10 text-[10px] text-[#9bafbc]" data-testid="sim-osm-deconflict-notes">
+                  <span className="mono text-[#52d6bd] font-semibold">СОГЛАСОВАНИЕ С РЕАЛЬНОЙ КАРТОЙ:</span>{" "}
+                  {customOsm.meta.conflictNotes.join(" · ")}
+                </div>
               )}
             </div>
           )}
