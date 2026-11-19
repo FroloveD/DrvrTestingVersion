@@ -7,11 +7,13 @@
  */
 import * as THREE from "three";
 import type { ObstacleBox } from "../sim/types";
+import type { SpatialChunkBatcher } from "./staticBatcher";
 
 type BuildingStyle = "panel" | "brick" | "civic" | "commercial";
 
 export type CityEnvironmentPack = {
   facadeTemplates: Record<BuildingStyle, { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture }>;
+  facadeMats: Record<BuildingStyle, THREE.MeshStandardMaterial[]>;
   roofMat: THREE.MeshStandardMaterial;
   plinthMat: THREE.MeshStandardMaterial;
   corniceMat: THREE.MeshStandardMaterial;
@@ -25,6 +27,14 @@ export type CityEnvironmentPack = {
   soilMat: THREE.MeshStandardMaterial;
   foliageMats: THREE.MeshStandardMaterial[];
   spruceMat: THREE.MeshStandardMaterial;
+  protoGeos: {
+    pitRing: THREE.BufferGeometry;
+    soilDisc: THREE.BufferGeometry;
+    trunk: THREE.BufferGeometry;
+    limb: THREE.BufferGeometry;
+    spruceCone: THREE.BufferGeometry;
+    foliagePuff: THREE.BufferGeometry;
+  };
 };
 
 function hashString(s: string): number {
@@ -333,14 +343,49 @@ function makeFacadeTile(style: BuildingStyle): { map: THREE.CanvasTexture; bumpM
   return { map, bumpMap };
 }
 
-/** Создаёт общий набор текстур и материалов зданий РФ/СНГ и деревьев на один вызов `loadWorld`. */
+/** Палитра реалистичных оттенков фасадов РФ/СНГ (без кислотных цветов, с хорошей читаемостью знаков). */
+const RU_PALETTES: Record<BuildingStyle, number[]> = {
+  panel: [0xcfd8df, 0xd8cfc2, 0xc3d2dc, 0xd4d8d2, 0xcbc7d4],
+  brick: [0xb97b63, 0xc89a78, 0xd4c3a3, 0xa86c58, 0xc7b59b],
+  civic: [0xdad2be, 0xc8d4dd, 0xd8dfd4, 0xdfd3c3],
+  commercial: [0xb8c2cc, 0xc6ccd2, 0xaab6c2],
+};
+
+/** Создаёт общий пул текстур, 17 фасадных материалов и прототипов деревьев на один вызов `loadWorld`. */
 export function createCityEnvironmentPack(): CityEnvironmentPack {
+  const facadeTemplates: Record<BuildingStyle, { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture }> = {
+    panel: makeFacadeTile("panel"),
+    brick: makeFacadeTile("brick"),
+    civic: makeFacadeTile("civic"),
+    commercial: makeFacadeTile("commercial"),
+  };
+  const makeStyleMats = (style: BuildingStyle) => {
+    const tpl = facadeTemplates[style];
+    const roughness = style === "commercial" ? 0.62 : 0.82;
+    return RU_PALETTES[style].map(
+      (color) =>
+        new THREE.MeshStandardMaterial({
+          color,
+          map: tpl.map,
+          bumpMap: tpl.bumpMap,
+          bumpScale: 0.025,
+          roughness,
+        })
+    );
+  };
+
+  const pitRing = new THREE.RingGeometry(0.42, 0.56, 10);
+  pitRing.rotateX(-Math.PI / 2);
+  const soilDisc = new THREE.CircleGeometry(0.43, 10);
+  soilDisc.rotateX(-Math.PI / 2);
+
   return {
-    facadeTemplates: {
-      panel: makeFacadeTile("panel"),
-      brick: makeFacadeTile("brick"),
-      civic: makeFacadeTile("civic"),
-      commercial: makeFacadeTile("commercial"),
+    facadeTemplates,
+    facadeMats: {
+      panel: makeStyleMats("panel"),
+      brick: makeStyleMats("brick"),
+      civic: makeStyleMats("civic"),
+      commercial: makeStyleMats("commercial"),
     },
     roofMat: new THREE.MeshStandardMaterial({ map: makeRoofMembraneTexture(), roughness: 0.92 }),
     plinthMat: new THREE.MeshStandardMaterial({ color: 0x3e464f, roughness: 0.86 }),
@@ -360,18 +405,52 @@ export function createCityEnvironmentPack(): CityEnvironmentPack {
       new THREE.MeshStandardMaterial({ color: 0x5c8945, roughness: 0.84 }),
     ],
     spruceMat: new THREE.MeshStandardMaterial({ color: 0x234c37, roughness: 0.88 }),
+    protoGeos: {
+      pitRing,
+      soilDisc,
+      trunk: new THREE.CylinderGeometry(0.58, 1, 1, 7),
+      limb: new THREE.CylinderGeometry(0.56, 1, 1, 5),
+      spruceCone: new THREE.ConeGeometry(1, 1, 8),
+      foliagePuff: new THREE.DodecahedronGeometry(1, 0),
+    },
   };
 }
 
-/** Палитра реалистичных оттенков фасадов РФ/СНГ (без кислотных цветов, с хорошей читаемостью знаков). */
-const RU_PALETTES: Record<BuildingStyle, number[]> = {
-  panel: [0xcfd8df, 0xd8cfc2, 0xc3d2dc, 0xd4d8d2, 0xcbc7d4],
-  brick: [0xb97b63, 0xc89a78, 0xd4c3a3, 0xa86c58, 0xc7b59b],
-  civic: [0xdad2be, 0xc8d4dd, 0xd8dfd4, 0xdfd3c3],
-  commercial: [0xb8c2cc, 0xc6ccd2, 0xaab6c2],
-};
+/** Освобождает временные прототипы и возвращает полный список материалов/текстур пакета для `dispose`. */
+export function finalizeCityEnvironmentPack(env: CityEnvironmentPack): {
+  materials: THREE.Material[];
+  textures: THREE.Texture[];
+} {
+  Object.values(env.protoGeos).forEach((g) => g.dispose());
+  const materials: THREE.Material[] = [
+    ...env.facadeMats.panel,
+    ...env.facadeMats.brick,
+    ...env.facadeMats.civic,
+    ...env.facadeMats.commercial,
+    env.roofMat,
+    env.plinthMat,
+    env.corniceMat,
+    env.metalFlashMat,
+    env.balconyGlassMat,
+    env.balconyFrameMat,
+    env.doorMat,
+    env.apronMat,
+    env.barkMat,
+    env.birchMat,
+    env.soilMat,
+    ...env.foliageMats,
+    env.spruceMat,
+  ];
+  const textures: THREE.Texture[] = [];
+  for (const tpl of Object.values(env.facadeTemplates)) {
+    textures.push(tpl.map, tpl.bumpMap);
+  }
+  if (env.roofMat.map) textures.push(env.roofMat.map);
+  if (env.birchMat.map) textures.push(env.birchMat.map);
+  return { materials, textures };
+}
 
-function chooseBuildingStyle(obs: ObstacleBox, seed: number): { style: BuildingStyle; tint: number } {
+function chooseBuildingStyle(obs: ObstacleBox, seed: number): { style: BuildingStyle; mat: THREE.MeshStandardMaterial } {
   const lbl = (obs.label ?? "").toLowerCase();
   let style: BuildingStyle;
   if (lbl.includes("школ") || lbl.includes("мрэо") || lbl.includes("админ") || lbl.includes("корпус")) {
@@ -383,108 +462,76 @@ function chooseBuildingStyle(obs: ObstacleBox, seed: number): { style: BuildingS
   } else {
     style = seed % 2 === 0 ? "brick" : "panel";
   }
-  const list = RU_PALETTES[style];
-  return { style, tint: list[seed % list.length] };
+  return { style, mat: envMatPick(style, seed) };
 }
 
-/** Создаёт BoxGeometry здания с мировым масштабом окон отдельно для продольных и торцевых стен (без растяжения UV). */
-function makeScaledBuildingBox(w: number, h: number, l: number): THREE.BoxGeometry {
-  const geo = new THREE.BoxGeometry(w, h, l);
-  const uv = geo.attributes.uv;
-  if (uv) {
-    // 1 тайл = 4 проёма (~12.8 м) × 4 этажа (~12.4 м); округление до 0.25 даёт целое число окон и этажей!
-    const snapQuarter = (val: number) => Math.max(0.25, Math.round(val * 4) / 4);
-    const repY = snapQuarter(h / 12.4);
-    const repZ = snapQuarter(l / 12.8);
-    const repX = snapQuarter(w / 12.8);
-    for (let face = 0; face < 6; face++) {
-      if (face === 2 || face === 3) continue; // крыша и низ используют roofMat
-      const ru = face <= 1 ? repZ : repX;
-      const base = face * 4;
-      for (let k = 0; k < 4; k++) {
-        const idx = base + k;
-        uv.setXY(idx, uv.getX(idx) * ru, uv.getY(idx) * repY);
-      }
-    }
-    uv.needsUpdate = true;
-  }
-  return geo;
+let _activeEnv: CityEnvironmentPack | null = null;
+function envMatPick(style: BuildingStyle, seed: number): THREE.MeshStandardMaterial {
+  const list = _activeEnv!.facadeMats[style];
+  return list[seed % list.length];
 }
 
 /**
- * Строит детализированное здание РФ/СНГ (цоколь, отмостка, фасад с реальным масштабом окон,
- * подъезды с козырьками, застеклённые лоджии, карниз, парапет с отливом и надстройки кровли).
+ * Пакетно записывает детализированное здание РФ/СНГ (цоколь, отмостка, фасад с реальным масштабом окон,
+ * подъезды с козырьками, застеклённые лоджии, карниз, парапет с отливом и надстройки кровли) в пространственный чанк.
+ * Ноль отдельных `THREE.Mesh` на здание — десятки тысяч деталей сливаются в несколько draw calls на квартал!
  */
-export function buildRussianBuilding(obs: ObstacleBox, env: CityEnvironmentPack): THREE.Group {
+export function emitRussianBuilding(chunks: SpatialChunkBatcher, obs: ObstacleBox, env: CityEnvironmentPack): void {
+  _activeEnv = env;
   const seed = hashString(`${obs.id}:${Math.round(obs.cx)}:${Math.round(obs.cz)}`);
   const rand = makeRng(seed);
-  const { style, tint } = chooseBuildingStyle(obs, seed);
+  const { style, mat: wallMat } = chooseBuildingStyle(obs, seed);
 
   const w = Math.max(2, obs.halfX * 2);
   const l = Math.max(2, obs.halfZ * 2);
   const h = Math.max(3.2, obs.height);
+  const cx = obs.cx;
+  const cz = obs.cz;
+  const yaw = obs.h;
+  const sh = Math.sin(yaw);
+  const ch = Math.cos(yaw);
+  const wx = (lx: number, lz: number) => cx + lx * ch + lz * sh;
+  const wz = (lx: number, lz: number) => cz - lx * sh + lz * ch;
 
-  const g = new THREE.Group();
-  g.position.set(obs.cx, 0, obs.cz);
-  g.rotation.y = obs.h;
+  const batch = chunks.atBuilding(cx, cz, Math.hypot(w, l) * 0.5 + 1);
 
-  const tpl = env.facadeTemplates[style];
-  const wallMat = new THREE.MeshStandardMaterial({
-    color: tint,
-    map: tpl.map,
-    bumpMap: tpl.bumpMap,
-    bumpScale: 0.025,
-    roughness: style === "commercial" ? 0.62 : 0.82,
+  // 1. Основной объём: 4 стены с фасадом в мировом масштабе + верхняя грань рулонной кровли (без дна)
+  batch.addBox(wallMat, cx, h * 0.5, cz, w, h, l, yaw, {
+    castShadow: true,
+    receiveShadow: true,
+    roofMat: env.roofMat,
   });
 
-  // Основной объём: 4 стены с фасадом, верх (face 2) и низ (face 3) — рулонная кровля без окон
-  const materials: THREE.Material[] = [wallMat, wallMat, env.roofMat, env.roofMat, wallMat, wallMat];
-  const body = new THREE.Mesh(makeScaledBuildingBox(w, h, l), materials);
-  body.position.y = h * 0.5;
-  body.castShadow = true;
-  body.receiveShadow = true;
-  g.add(body);
-
-  // Бетонная отмостка и выступающий гранитный/штукатурный цоколь у основания
+  // 2. Бетонная отмостка и выступающий гранитный/штукатурный цоколь у основания
   const plinthH = Math.min(0.72, h * 0.14);
-  const plinth = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, plinthH, l + 0.12), env.plinthMat);
-  plinth.position.y = plinthH * 0.5;
-  plinth.receiveShadow = true;
-  g.add(plinth);
+  batch.addBox(env.plinthMat, cx, plinthH * 0.5, cz, w + 0.12, plinthH, l + 0.12, yaw, { receiveShadow: true });
+  batch.addFlatQuad(env.apronMat, cx, 0.016, cz, w + 0.9, l + 0.9, yaw, true);
 
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.9, l + 0.9), env.apronMat);
-  apron.rotation.x = -Math.PI / 2;
-  apron.position.y = 0.016;
-  apron.receiveShadow = true;
-  g.add(apron);
-
-  // Межэтажный карнизный поясок над первым этажом (для школ, МРЭО и кирпичных домов)
+  // 3. Межэтажный карнизный поясок и венчающий карниз
   if ((style === "civic" || style === "brick") && h >= 7.5) {
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(w + 0.16, 0.16, l + 0.16), env.corniceMat);
-    belt.position.y = 3.25;
-    g.add(belt);
+    batch.addBox(env.corniceMat, cx, 3.25, cz, w + 0.16, 0.16, l + 0.16, yaw);
   }
+  batch.addBox(env.corniceMat, cx, h - 0.06, cz, w + 0.24, 0.2, l + 0.24, yaw);
 
-  // Венчающий карниз и периметральный парапет плоской кровли с оцинкованным отливом
-  const cornice = new THREE.Mesh(new THREE.BoxGeometry(w + 0.24, 0.2, l + 0.24), env.corniceMat);
-  cornice.position.y = h - 0.06;
-  g.add(cornice);
-
+  // 4. Периметральный парапет плоской кровли с оцинкованным отливом
   const parH = h >= 9 ? 0.52 : 0.34;
   const parT = 0.24;
   if (w >= 4.5 && l >= 4.5) {
+    const py = h + parH * 0.5;
+    const zOff = l * 0.5 - parT * 0.5;
+    const xOff = w * 0.5 - parT * 0.5;
     for (const sgn of [-1, 1]) {
-      const pFront = new THREE.Mesh(new THREE.BoxGeometry(w, parH, parT), env.plinthMat);
-      pFront.position.set(0, h + parH * 0.5, sgn * (l * 0.5 - parT * 0.5));
-      const pSide = new THREE.Mesh(new THREE.BoxGeometry(parT, parH, l - parT * 2), env.plinthMat);
-      pSide.position.set(sgn * (w * 0.5 - parT * 0.5), h + parH * 0.5, 0);
-      const capF = new THREE.Mesh(new THREE.BoxGeometry(w + 0.08, 0.04, parT + 0.08), env.metalFlashMat);
-      capF.position.set(0, h + parH + 0.02, sgn * (l * 0.5 - parT * 0.5));
-      g.add(pFront, pSide, capF);
+      const fzPos = sgn * zOff;
+      const sxPos = sgn * xOff;
+      batch.addBox(env.plinthMat, wx(0, fzPos), py, wz(0, fzPos), w, parH, parT, yaw);
+      batch.addBox(env.plinthMat, wx(sxPos, 0), py, wz(sxPos, 0), parT, parH, l - parT * 2, yaw);
+      batch.addBox(env.metalFlashMat, wx(0, fzPos), h + parH + 0.02, wz(0, fzPos), w + 0.08, 0.04, parT + 0.08, yaw);
+      batch.addBox(env.metalFlashMat, wx(sxPos, 0), h + parH + 0.02, wz(sxPos, 0), parT + 0.08, 0.04, l - parT * 2, yaw);
     }
   }
 
-  // Надстройки на плоской крыше: лифтовая шахта (машинное отделение) и вентиляционные стояки
+  // 5. Надстройки на плоской крыше: лифтовая шахта (машинное отделение) и вентиляционные стояки
+  const longAlongZ = l >= w;
   if (w >= 8 && l >= 8 && h >= 8) {
     if (h >= 12) {
       const liftW = Math.min(3.6, w * 0.28);
@@ -492,128 +539,100 @@ export function buildRussianBuilding(obs: ObstacleBox, env: CityEnvironmentPack)
       const liftH = 2.05;
       const ox = (rand() - 0.5) * (w - liftW - 2.4) * 0.5;
       const oz = (rand() - 0.5) * (l - liftL - 2.4) * 0.5;
-      const liftBox = new THREE.Mesh(new THREE.BoxGeometry(liftW, liftH, liftL), env.corniceMat);
-      liftBox.position.set(ox, h + liftH * 0.5, oz);
-      liftBox.castShadow = true;
-      const liftCap = new THREE.Mesh(new THREE.BoxGeometry(liftW + 0.22, 0.12, liftL + 0.22), env.roofMat);
-      liftCap.position.set(ox, h + liftH + 0.06, oz);
-      g.add(liftBox, liftCap);
+      const lwx = wx(ox, oz);
+      const lwz = wz(ox, oz);
+      batch.addBox(env.corniceMat, lwx, h + liftH * 0.5, lwz, liftW, liftH, liftL, yaw);
+      batch.addBox(env.roofMat, lwx, h + liftH + 0.06, lwz, liftW + 0.22, 0.12, liftL + 0.22, yaw);
     }
 
-    const ventCount = Math.min(4, Math.max(1, Math.floor(Math.max(w, l) / 9)));
-    const longAlongZ = l >= w;
+    const ventCount = Math.min(3, Math.max(1, Math.floor(Math.max(w, l) / 11)));
     for (let vi = 0; vi < ventCount; vi++) {
       const pos = ((vi + 0.5) / ventCount - 0.5) * (Math.max(w, l) * 0.65);
-      const vx = longAlongZ ? (w * 0.16) : pos;
-      const vz = longAlongZ ? pos : (l * 0.16);
-      const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.15, 0.55), env.corniceMat);
-      shaft.position.set(vx, h + 0.575, vz);
-      const hood = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.08, 0.72), env.metalFlashMat);
-      hood.position.set(vx, h + 1.32, vz);
-      g.add(shaft, hood);
+      const lx = longAlongZ ? w * 0.16 : pos;
+      const lz = longAlongZ ? pos : l * 0.16;
+      const vwx = wx(lx, lz);
+      const vwz = wz(lx, lz);
+      batch.addBox(env.corniceMat, vwx, h + 0.575, vwz, 0.95, 1.15, 0.55, yaw);
+      batch.addBox(env.metalFlashMat, vwx, h + 1.24, vwz, 1.12, 0.08, 0.72, yaw);
     }
   }
 
-  // Подъезд с металлической дверью и бетонным козырьком + застеклённые балконы/лоджии (строго выше 3.4 м)
-  const longAlongZ = l >= w;
+  // 6. Подъезд с металлической дверью и бетонным козырьком + застеклённые лоджии (строго выше 3.6 м)
   const facadeSpan = longAlongZ ? l : w;
   const halfDepth = (longAlongZ ? w : l) * 0.5;
 
   if (facadeSpan >= 11 && h >= 6.5) {
     const entrances = style === "panel" || style === "brick" ? Math.min(3, Math.max(1, Math.floor(facadeSpan / 15))) : 1;
+    const doorYaw = longAlongZ ? yaw + Math.PI * 0.5 : yaw;
     for (let ei = 0; ei < entrances; ei++) {
       const along = ((ei + 0.5) / entrances - 0.5) * (facadeSpan * 0.68);
-      const door = new THREE.Mesh(new THREE.BoxGeometry(1.35, 2.25, 0.08), env.doorMat);
-      const canopy = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.13, 0.55), env.corniceMat);
-      if (longAlongZ) {
-        door.rotation.y = Math.PI / 2;
-        canopy.rotation.y = Math.PI / 2;
-        door.position.set(halfDepth + 0.03, 1.15, along);
-        canopy.position.set(halfDepth + 0.24, 2.48, along);
-      } else {
-        door.position.set(along, 1.15, halfDepth + 0.03);
-        canopy.position.set(along, 2.48, halfDepth + 0.24);
-      }
-      g.add(door, canopy);
+      const dlx = longAlongZ ? halfDepth + 0.03 : along;
+      const dlz = longAlongZ ? along : halfDepth + 0.03;
+      const clx = longAlongZ ? halfDepth + 0.24 : along;
+      const clz = longAlongZ ? along : halfDepth + 0.24;
+      batch.addBox(env.doorMat, wx(dlx, dlz), 1.15, wz(dlx, dlz), 1.35, 2.25, 0.08, doorYaw);
+      batch.addBox(env.corniceMat, wx(clx, clz), 2.48, wz(clx, clz), 2.1, 0.13, 0.55, doorYaw, { keepBottom: true });
     }
   }
 
-  // Застеклённые лоджии жилых домов (2–6 этажи, выступ 0.32 м на высоте >= 3.6 м — не задевают авто)
   if ((style === "panel" || style === "brick") && facadeSpan >= 12 && h >= 10.5) {
-    const cols = Math.min(4, Math.max(2, Math.floor(facadeSpan / 7.5)));
+    const cols = Math.min(4, Math.max(2, Math.floor(facadeSpan / 8)));
     const floors = Math.min(6, Math.floor((h - 3.6) / 3.1));
-    const balW = 2.55;
-    const balD = 0.34;
-    for (let cIdx = 0; cIdx < cols; cIdx++) {
-      const along = ((cIdx + 0.5) / cols - 0.5) * (facadeSpan * 0.76);
-      // Вертикальный эркер застеклённых лоджий — всего 2 меша на целый стояк (минимум draw calls!)
-      const stackH = floors * 3.05 - 0.35;
-      if (stackH < 2.2) continue;
+    const stackH = floors * 3.05 - 0.35;
+    if (stackH >= 2.2) {
+      const balW = 2.55;
+      const balD = 0.34;
       const baseY = 3.65 + stackH * 0.5;
-      const apronBox = new THREE.Mesh(
-        new THREE.BoxGeometry(longAlongZ ? balD : balW, stackH, longAlongZ ? balW : balD),
-        env.balconyFrameMat
-      );
-      const glassBox = new THREE.Mesh(
-        new THREE.BoxGeometry(longAlongZ ? balD + 0.03 : balW - 0.18, stackH - 0.3, longAlongZ ? balW - 0.18 : balD + 0.03),
-        env.balconyGlassMat
-      );
-      for (const side of [-1, 1]) {
-        const aClone = side === 1 ? apronBox : apronBox.clone();
-        const gClone = side === 1 ? glassBox : glassBox.clone();
-        if (longAlongZ) {
-          aClone.position.set(side * (halfDepth + balD * 0.45), baseY, along);
-          gClone.position.set(side * (halfDepth + balD * 0.45), baseY + 0.08, along);
-        } else {
-          aClone.position.set(along, baseY, side * (halfDepth + balD * 0.45));
-          gClone.position.set(along, baseY + 0.08, side * (halfDepth + balD * 0.45));
+      const asx = longAlongZ ? balD : balW;
+      const asz = longAlongZ ? balW : balD;
+      const gsx = longAlongZ ? balD + 0.03 : balW - 0.18;
+      const gsz = longAlongZ ? balW - 0.18 : balD + 0.03;
+      for (let cIdx = 0; cIdx < cols; cIdx++) {
+        const along = ((cIdx + 0.5) / cols - 0.5) * (facadeSpan * 0.76);
+        for (const side of [-1, 1]) {
+          const blx = longAlongZ ? side * (halfDepth + balD * 0.45) : along;
+          const blz = longAlongZ ? along : side * (halfDepth + balD * 0.45);
+          const bwx = wx(blx, blz);
+          const bwz = wz(blx, blz);
+          batch.addBox(env.balconyFrameMat, bwx, baseY, bwz, asx, stackH, asz, yaw, { keepBottom: true });
+          batch.addBox(env.balconyGlassMat, bwx, baseY + 0.08, bwz, gsx, stackH - 0.3, gsz, yaw);
         }
-        g.add(aClone, gClone);
       }
     }
   }
-
-  return g;
 }
 
 /**
- * Строит реалистичное городское дерево РФ/СНГ (липа/клён с многоярусной кроной, русская берёза или ель)
- * с развилкой ветвей и приствольной лункой у земли.
+ * Пакетно записывает реалистичное дерево РФ/СНГ (липа/клён, берёза с белой берестой или 4-ярусная ель)
+ * с развилкой ветвей и приствольной лункой прямо в пространственный чанк (0 отдельных `THREE.Mesh` на дерево).
  */
-export function buildRealisticTree(
+export function emitRealisticTree(
+  chunks: SpatialChunkBatcher,
   x: number,
   z: number,
   height: number,
   env: CityEnvironmentPack,
   idHint = ""
-): THREE.Group {
+): void {
   const seed = hashString(`${idHint}:${Math.round(x * 10)}:${Math.round(z * 10)}`);
   const rand = makeRng(seed);
-  const g = new THREE.Group();
-  g.position.set(x, 0, z);
-  g.rotation.y = rand() * Math.PI * 2;
-
+  const yaw = rand() * Math.PI * 2;
+  const syaw = Math.sin(yaw);
+  const cyaw = Math.cos(yaw);
   const h = Math.max(3.2, height * (0.94 + rand() * 0.22));
   const kindRoll = seed % 9;
   const isSpruce = kindRoll === 0;
   const isBirch = kindRoll === 1 || kindRoll === 2;
+  const pg = env.protoGeos;
 
-  // Приствольная лунка с тёмным грунтом и аккуратным каменным кольцом
-  const pitRing = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.56, 12), env.apronMat);
-  pitRing.rotation.x = -Math.PI / 2;
-  pitRing.position.y = 0.022;
-  const soil = new THREE.Mesh(new THREE.CircleGeometry(0.43, 12), env.soilMat);
-  soil.rotation.x = -Math.PI / 2;
-  soil.position.y = 0.021;
-  g.add(pitRing, soil);
+  const batch = chunks.at(x, z, h * 0.45);
+
+  // Приствольная лунка с тёмным грунтом и каменным кольцом
+  batch.addProto(env.apronMat, pg.pitRing, x, 0.022, z, 0, 0, 0, 1, 1, 1);
+  batch.addProto(env.soilMat, pg.soilDisc, x, 0.021, z, 0, 0, 0, 1, 1, 1);
 
   if (isSpruce) {
-    // Городская голубовато-зелёная ель (4 яруса хвои)
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.17, h * 0.35, 7), env.barkMat);
-    trunk.position.y = h * 0.175;
-    trunk.castShadow = true;
-    g.add(trunk);
-
+    batch.addProto(env.barkMat, pg.trunk, x, h * 0.175, z, 0, yaw, 0, 0.17, h * 0.35, 0.17, true);
     const tiers: Array<[number, number, number]> = [
       [0.34, 0.36, 0.38],
       [0.52, 0.3, 0.34],
@@ -621,48 +640,62 @@ export function buildRealisticTree(
       [0.84, 0.15, 0.26],
     ];
     for (const [fy, fr, fh] of tiers) {
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(h * fr, h * fh, 9), env.spruceMat);
-      cone.position.y = h * fy;
-      cone.castShadow = true;
-      g.add(cone);
+      batch.addProto(env.spruceMat, pg.spruceCone, x, h * fy, z, 0, yaw, 0, h * fr, h * fh, h * fr, true, true);
     }
-    return g;
+    return;
   }
 
-  // Ствол и две расходящиеся скелетные ветви (берёза или липа/клён)
   const trunkMat = isBirch ? env.birchMat : env.barkMat;
   const trunkH = h * (isBirch ? 0.54 : 0.45);
   const baseR = isBirch ? 0.14 : 0.2;
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(baseR * 0.58, baseR, trunkH, 8), trunkMat);
-  trunk.position.y = trunkH * 0.5;
-  trunk.castShadow = true;
-  g.add(trunk);
+  batch.addProto(trunkMat, pg.trunk, x, trunkH * 0.5, z, 0, yaw, 0, baseR, trunkH, baseR, true);
 
   for (const sgn of [-1, 1]) {
-    const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.08, trunkH * 0.42, 6), trunkMat);
-    limb.rotation.z = sgn * 0.52;
-    limb.position.set(sgn * 0.22, trunkH * 0.9, sgn * 0.06);
-    g.add(limb);
+    const lx = sgn * 0.22;
+    const lz = sgn * 0.06;
+    batch.addProto(
+      trunkMat,
+      pg.limb,
+      x + lx * cyaw + lz * syaw,
+      trunkH * 0.9,
+      z - lx * syaw + lz * cyaw,
+      0,
+      yaw,
+      sgn * 0.52,
+      0.08,
+      trunkH * 0.42,
+      0.08,
+      false,
+      false,
+      "YXZ"
+    );
   }
 
   // Многоярусная живая крона из 4 объёмов с естественной игрой оттенков листвы
   const baseR2 = h * (isBirch ? 0.25 : 0.3);
   const baseMatIdx = seed % env.foliageMats.length;
-  const puffs: Array<[number, number, number, number, number, number]> = [
-    [0, trunkH + baseR2 * 0.55, 0, baseR2 * 1.05, 0.88, 0],
-    [-baseR2 * 0.48, trunkH + baseR2 * 0.38, baseR2 * 0.26, baseR2 * 0.78, 0.86, 1],
-    [baseR2 * 0.46, trunkH + baseR2 * 0.44, -baseR2 * 0.28, baseR2 * 0.8, 0.9, 1],
-    [baseR2 * 0.06, trunkH + baseR2 * 1.12, baseR2 * 0.05, baseR2 * 0.74, isBirch ? 1.15 : 0.92, 2],
+  const puffs: Array<[number, number, number, number, number, number, boolean]> = [
+    [0, trunkH + baseR2 * 0.55, 0, baseR2 * 1.06, 0.88, 0, true],
+    [-baseR2 * 0.48, trunkH + baseR2 * 0.38, baseR2 * 0.26, baseR2 * 0.78, 0.86, 1, false],
+    [baseR2 * 0.46, trunkH + baseR2 * 0.44, -baseR2 * 0.28, baseR2 * 0.8, 0.9, 1, false],
+    [baseR2 * 0.06, trunkH + baseR2 * 1.12, baseR2 * 0.05, baseR2 * 0.74, isBirch ? 1.15 : 0.92, 2, true],
   ];
-  for (const [px, py, pz, r, sy, shadeStep] of puffs) {
+  for (const [px, py, pz, r, sy, shadeStep, casts] of puffs) {
     const mat = env.foliageMats[(baseMatIdx + shadeStep) % env.foliageMats.length];
-    const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), mat);
-    puff.scale.set(1, sy, 0.96);
-    puff.position.set(px, py, pz);
-    puff.castShadow = true;
-    puff.receiveShadow = true;
-    g.add(puff);
+    batch.addProto(
+      mat,
+      pg.foliagePuff,
+      x + px * cyaw + pz * syaw,
+      py,
+      z - px * syaw + pz * cyaw,
+      0,
+      yaw + shadeStep * 0.7,
+      0,
+      r,
+      r * sy,
+      r * 0.96,
+      casts,
+      true
+    );
   }
-
-  return g;
 }

@@ -1,8 +1,8 @@
 /**
  * @module render/roadInfra
  * @layer three-render
- * @role Процедурные 3D-дороги, тротуары, бордюры БР 100.30.15, разметка, переходы 1.14.1, светофоры Т.1/П.1 с консолью, знаки и уличная инфраструктура РФ/СНГ по ГОСТ.
- * @invariants #1 (координаты +Z вперёд, +X влево), #8 (100 % офлайн), #13 (статичность на холостом старте для зеркал).
+ * @role Пакетная 3D-генерация дорог, тротуаров, бордюров БР 100.30.15, разметки, переходов 1.14.1, светофоров Т.1/П.1, знаков и уличной инфраструктуры РФ/СНГ по ГОСТ.
+ * @invariants #1 (координаты +Z вперёд, +X влево), #8 (100 % офлайн), #13 (статичность на холостом старте, O(1) индекс и слияние мешей для быстрых OSM-карт).
  * @tests Смоук A, L, O, P (`tests/browser-smoke.mjs`)
  */
 import * as THREE from "three";
@@ -26,12 +26,12 @@ import {
   makeStormGrateTexture,
   makeTactilePavingTexture,
   makeThermoplasticTexture,
-  makeWorldUvCircle,
-  makeWorldUvPlane,
 } from "./roadTextures";
+import { RoadSpatialIndex, type SpatialChunkBatcher } from "./staticBatcher";
 
 export type GostSignalVisualHandle = {
   def: TrafficSignalDef;
+  lensGroup: THREE.Group;
   redMat: THREE.MeshBasicMaterial;
   yellowMat: THREE.MeshBasicMaterial;
   greenMat: THREE.MeshBasicMaterial;
@@ -64,567 +64,34 @@ export type RoadMaterialPack = {
   cw519RightMat: THREE.MeshBasicMaterial;
   cw519LeftMat: THREE.MeshBasicMaterial;
   luminaireGlowMat: THREE.MeshBasicMaterial;
+  coneOrangeMat: THREE.MeshStandardMaterial;
   reflRedMat: THREE.MeshBasicMaterial;
   reflWhiteMat: THREE.MeshBasicMaterial;
   reflYellowMat: THREE.MeshBasicMaterial;
   haloTex: THREE.CanvasTexture;
+  signFaceCache: Map<string, THREE.MeshBasicMaterial>;
+  fenceSolidCache: Map<number, THREE.MeshStandardMaterial>;
+  fenceRailCache: Map<number, THREE.MeshStandardMaterial>;
+  sharedLensGeo: THREE.CircleGeometry;
+  sharedHaloGeo: THREE.PlaneGeometry;
+  protos: {
+    cyl8: THREE.BufferGeometry;
+    taperPole: THREE.BufferGeometry;
+    cone10: THREE.BufferGeometry;
+    coneBandTop: THREE.BufferGeometry;
+    coneBandBot: THREE.BufferGeometry;
+    finial: THREE.BufferGeometry;
+    visor: THREE.BufferGeometry;
+    unitBox: THREE.BufferGeometry;
+    backplates: Record<SignBackplateForm, THREE.BufferGeometry>;
+  };
 };
 
-/** Создаёт общий пул ГОСТ-материалов и текстур на один вызов `loadWorld`. */
-export function createRoadMaterialPack(): RoadMaterialPack {
-  const asphalt = makeGostAsphaltMaps();
-  const paver = makeSidewalkPaverMaps();
-  const haloTex = makeSignalHaloTexture();
-
-  return {
-    asphaltMat: new THREE.MeshStandardMaterial({
-      map: asphalt.map,
-      bumpMap: asphalt.bumpMap,
-      bumpScale: 0.016,
-      roughness: 0.9,
-      metalness: 0.03,
-    }),
-    laneWearMat: new THREE.MeshBasicMaterial({
-      map: makeLaneWearTexture(),
-      transparent: true,
-      depthWrite: false,
-    }),
-    sidewalkMat: new THREE.MeshStandardMaterial({
-      map: paver.map,
-      bumpMap: paver.bumpMap,
-      bumpScale: 0.014,
-      roughness: 0.88,
-    }),
-    curbBwMat: new THREE.MeshStandardMaterial({ map: makeGostCurbTexture(true), roughness: 0.78 }),
-    curbGreyMat: new THREE.MeshStandardMaterial({ map: makeGostCurbTexture(false), roughness: 0.84 }),
-    tactileMat: new THREE.MeshStandardMaterial({ map: makeTactilePavingTexture(), roughness: 0.72 }),
-    whiteMarkMat: new THREE.MeshBasicMaterial({ map: makeThermoplasticTexture(false) }),
-    yellowMarkMat: new THREE.MeshBasicMaterial({ map: makeThermoplasticTexture(true) }),
-    arrowMat: new THREE.MeshBasicMaterial({
-      map: makeGostArrow118Texture(),
-      transparent: true,
-      depthWrite: false,
-    }),
-    manholeMat: new THREE.MeshBasicMaterial({
-      map: makeManholeTexture(),
-      transparent: true,
-      depthWrite: false,
-    }),
-    grateMat: new THREE.MeshBasicMaterial({ map: makeStormGrateTexture() }),
-    galvPoleMat: new THREE.MeshStandardMaterial({ color: 0x9aa6b4, metalness: 0.52, roughness: 0.42 }),
-    darkIronMat: new THREE.MeshStandardMaterial({ color: 0x2b333d, metalness: 0.45, roughness: 0.52 }),
-    concreteBaseMat: new THREE.MeshStandardMaterial({ color: 0x7d8690, roughness: 0.9 }),
-    signBackMat: new THREE.MeshStandardMaterial({ color: 0x7c8896, metalness: 0.45, roughness: 0.48 }),
-    signalBodyMat: new THREE.MeshStandardMaterial({ color: 0x151b23, roughness: 0.55, metalness: 0.2 }),
-    signalBorderMat: new THREE.MeshBasicMaterial({ color: 0xf1f5f9 }),
-    stopPlaqueMat: new THREE.MeshBasicMaterial({ map: makeStopPlaqueTexture(), transparent: true }),
-    cw519RightMat: new THREE.MeshBasicMaterial({ map: makeCrosswalkSignTexture(false), transparent: true }),
-    cw519LeftMat: new THREE.MeshBasicMaterial({ map: makeCrosswalkSignTexture(true), transparent: true }),
-    luminaireGlowMat: new THREE.MeshBasicMaterial({ color: 0xfef3c7 }),
-    reflRedMat: new THREE.MeshBasicMaterial({ color: 0xef4444 }),
-    reflWhiteMat: new THREE.MeshBasicMaterial({ color: 0xf8fafc }),
-    reflYellowMat: new THREE.MeshBasicMaterial({ color: 0xfacc15 }),
-    haloTex,
-  };
-}
-
-/** Создаёт BoxGeometry бордюра с повторяющимся шагом текстуры вдоль длины `len` (1 повтор = 2 м: 1 м белый + 1 м чёрный). */
-function makeCurbBoxGeo(thick: number, height: number, len: number, alongX = false): THREE.BoxGeometry {
-  const geo = new THREE.BoxGeometry(alongX ? len : thick, height, alongX ? thick : len);
-  const uv = geo.attributes.uv;
-  const rep = Math.max(0.5, len / 2.0);
-  if (uv) {
-    // В BoxGeometry грани: 0,1 (+X,-X: u по Z), 2,3 (+Y,-Y: u по X, v по Z), 4,5 (+Z,-Z: u по X)
-    for (let face = 0; face < 6; face++) {
-      const base = face * 4;
-      const stretchU = alongX ? face >= 2 : face <= 1;
-      const stretchV = !alongX && (face === 2 || face === 3);
-      for (let k = 0; k < 4; k++) {
-        const idx = base + k;
-        const u = uv.getX(idx);
-        const v = uv.getY(idx);
-        if (stretchV) {
-          // Поворачиваем UV верхней грани на 90°, чтобы чередование камней совпадало с боковой гранью
-          uv.setXY(idx, v * rep, u);
-        } else if (stretchU) {
-          uv.setXY(idx, u * rep, v);
-        }
-      }
-    }
-    uv.needsUpdate = true;
-  }
-  return geo;
-}
-
-/** Разбивает отрезок `[dStart, dEnd]` на непрерывные интервалы, где `isBlocked(d)` возвращает `false`. */
-function collectClearSpans(
-  dStart: number,
-  dEnd: number,
-  stepM: number,
-  minRunM: number,
-  isBlocked: (d: number) => boolean
-): Array<[number, number]> {
-  const span = dEnd - dStart;
-  if (span < minRunM) return [];
-  const samples = Math.max(2, Math.min(96, Math.ceil(span / stepM)));
-  const out: Array<[number, number]> = [];
-  let run0: number | null = null;
-  for (let s = 0; s <= samples; s++) {
-    const d = dStart + (span * s) / samples;
-    const blocked = isBlocked(d);
-    if (!blocked && run0 === null) {
-      run0 = d;
-    } else if (blocked && run0 !== null) {
-      if (d - run0 >= minRunM) out.push([run0, d]);
-      run0 = null;
-    }
-  }
-  if (run0 !== null && dEnd - run0 >= minRunM) out.push([run0, dEnd]);
-  return out;
-}
-
-/** Строит полотно дорог, следы наката, объёмные тротуары с плиткой, ГОСТ-бордюры, мосты 11ДО, люки и разметку ГОСТ Р 51256. */
-export function buildWorldRoadsAndSidewalks(
-  group: THREE.Group,
-  world: WorldData,
-  mats: RoadMaterialPack
-): void {
-  const isStreet = (roadId: string) =>
-    world.scenarioId === "city_osm" || (world.scenarioId === "custom" && roadId !== "custom-lot");
-
-  const surfaceStreets = world.roads.filter((r) => isStreet(r.id) && (r.layer ?? 0) === 0);
-
-  const inJunction = (px: number, pz: number, ownId: string, pad = 1.5): boolean => {
-    for (const other of surfaceStreets) {
-      if (other.id === ownId) continue;
-      const lim = other.width * 0.5 + pad;
-      const limSq = lim * lim;
-      for (let j = 0; j < other.points.length - 1; j++) {
-        const a = other.points[j];
-        const b = other.points[j + 1];
-        const abx = b.x - a.x;
-        const abz = b.z - a.z;
-        const lenSq = abx * abx + abz * abz;
-        const t = lenSq > 1e-6 ? Math.max(0, Math.min(1, ((px - a.x) * abx + (pz - a.z) * abz) / lenSq)) : 0;
-        const cx = a.x + abx * t;
-        const cz = a.z + abz * t;
-        if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= limSq) return true;
-      }
-    }
-    return false;
-  };
-
-  const inCrosswalk = (px: number, pz: number, pad = 0.9): boolean => {
-    for (const cw of world.crosswalks) {
-      const dx = px - cw.cx;
-      const dz = pz - cw.cz;
-      const along = Math.abs(dx * Math.sin(cw.h) + dz * Math.cos(cw.h));
-      const across = Math.abs(dx * Math.cos(cw.h) - dz * Math.sin(cw.h));
-      if (along <= Math.max(cw.length * 0.5, 1.8) + pad && across <= cw.width * 0.5 + pad + 2.4) return true;
-    }
-    return false;
-  };
-
-  const inBayOpening = (px: number, pz: number): boolean => {
-    for (const bay of world.bays) {
-      const dx = px - bay.cx;
-      const dz = pz - bay.cz;
-      const along = Math.abs(dx * Math.sin(bay.h) + dz * Math.cos(bay.h));
-      const across = Math.abs(dx * Math.cos(bay.h) - dz * Math.sin(bay.h));
-      if (along <= bay.length * 0.5 + 1.8 && across <= bay.width * 0.5 + 2.2) return true;
-    }
-    return false;
-  };
-
-  const nearControlZone = (px: number, pz: number): boolean => {
-    for (const sig of world.signals) {
-      if ((px - sig.stopLineX) ** 2 + (pz - sig.stopLineZ) ** 2 <= 18 * 18) return true;
-    }
-    for (const cw of world.crosswalks) {
-      if ((px - cw.cx) ** 2 + (pz - cw.cz) ** 2 <= 15 * 15) return true;
-    }
-    return false;
-  };
-
-  const addFlatMesh = (
-    geo: THREE.BufferGeometry,
-    mat: THREE.Material,
-    x: number,
-    y: number,
-    z: number,
-    angle: number,
-    recvShadow = false
-  ) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.rotation.order = "YXZ";
-    m.rotation.y = angle;
-    m.rotation.x = -Math.PI / 2;
-    m.position.set(x, y, z);
-    if (recvShadow) m.receiveShadow = true;
-    group.add(m);
-  };
-
-  let segSerial = 0;
-  for (const road of world.roads) {
-    const street = isStreet(road.id);
-    const layerVal = road.layer ?? 0;
-    const isBridge = street && layerVal > 0;
-    const layerLift = isBridge ? Math.min(0.24, layerVal * 0.08) : 0;
-    const isMinorService = road.highway === "service" || road.highway === "living_street";
-
-    // Круглые стыки асфальта и тротуарной плитки в вершинах улиц (мировые UV, 0 z-fighting)
-    if (street && road.points.length >= 2) {
-      const asphCapGeo = makeWorldUvCircle(road.width * 0.5, 18, 4.5);
-      const swCapGeo = !isBridge ? makeWorldUvCircle(road.width * 0.5 + 2.15, 16, 2.4) : null;
-      for (const vp of road.points) {
-        if (swCapGeo) {
-          addFlatMesh(swCapGeo, mats.sidewalkMat, vp.x, 0.005 + layerLift, vp.z, 0, true);
-        }
-        addFlatMesh(asphCapGeo, mats.asphaltMat, vp.x, 0.0118 + layerLift, vp.z, 0, true);
-      }
-    }
-
-    for (let i = 0; i < road.points.length - 1; i++) {
-      const p0 = road.points[i];
-      const p1 = road.points[i + 1];
-      const dx = p1.x - p0.x;
-      const dz = p1.z - p0.z;
-      const len = Math.hypot(dx, dz);
-      if (len < 0.5) continue;
-
-      const angle = Math.atan2(dx, dz);
-      const fx = dx / len;
-      const fz = dz / len;
-      // Левая нормаль (+X в локальной системе дороги)
-      const lx = fz;
-      const lz = -fx;
-      const mx = (p0.x + p1.x) * 0.5;
-      const mz = (p0.z + p1.z) * 0.5;
-      const microY = street ? (segSerial++ % 13) * 0.0001 : 0;
-
-      // 1. Основное полотно асфальтобетона ЩМА (мировой масштаб тайла 4.5 м)
-      const asphY = 0.012 + layerLift + microY;
-      addFlatMesh(makeWorldUvPlane(road.width, len, 4.5), mats.asphaltMat, mx, asphY, mz, angle, true);
-
-      // Для учебной площадки автодрома — аккуратная краевая разметка 1.2 и бетонная отбортовка периметра
-      if (!street) {
-        const rimPad = 0.14;
-        for (const side of [-1, 1]) {
-          addFlatMesh(
-            new THREE.PlaneGeometry(0.12, Math.max(0.5, len - 0.5)),
-            mats.whiteMarkMat,
-            mx + lx * side * (road.width * 0.5 - 0.22),
-            0.018,
-            mz + lz * side * (road.width * 0.5 - 0.22),
-            angle
-          );
-          const rim = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, len + 0.3), mats.concreteBaseMat);
-          rim.rotation.y = angle;
-          rim.position.set(
-            mx + lx * side * (road.width * 0.5 + rimPad),
-            0.03,
-            mz + lz * side * (road.width * 0.5 + rimPad)
-          );
-          rim.receiveShadow = true;
-          group.add(rim);
-        }
-        for (const endSign of [-1, 1]) {
-          const ex = mx + fx * endSign * (len * 0.5 + rimPad);
-          const ez = mz + fz * endSign * (len * 0.5 + rimPad);
-          const rimEnd = new THREE.Mesh(new THREE.BoxGeometry(road.width + 0.5, 0.06, 0.22), mats.concreteBaseMat);
-          rimEnd.rotation.y = angle;
-          rimEnd.position.set(ex, 0.03, ez);
-          rimEnd.receiveShadow = true;
-          group.add(rimEnd);
-        }
-        // Мягкий след наката по центральному проезду автодрома
-        if (len >= 12) {
-          addFlatMesh(makeWorldUvPlane(3.4, len - 1.5, 3.4, 6), mats.laneWearMat, mx, 0.015, mz, angle);
-        }
-        continue;
-      }
-
-      // 2. Тротуарная подложка + объёмные приподнятые тротуары и бордюр БР 100.30.15 по обеим сторонам улицы
-      if (!isBridge && !isMinorService) {
-        addFlatMesh(makeWorldUvPlane(road.width + 4.3, len, 2.4), mats.sidewalkMat, mx, 0.005 + microY, mz, angle, true);
-
-        const swW = 1.95;
-        const swH = 0.095;
-        const curbW = 0.17;
-        const curbH = 0.118;
-        for (const side of [-1, 1]) {
-          const curbOff = side * (road.width * 0.5 + curbW * 0.5 + 0.04);
-          const swOff = side * (road.width * 0.5 + curbW + swW * 0.5 + 0.04);
-          const spans = collectClearSpans(0.6, len - 0.6, 2.2, 2.6, (d) => {
-            const sx = p0.x + fx * d + lx * curbOff;
-            const sz = p0.z + fz * d + lz * curbOff;
-            return (
-              (layerVal === 0 && inJunction(sx, sz, road.id, 2.3)) ||
-              inCrosswalk(sx, sz, 1.1) ||
-              inBayOpening(sx, sz)
-            );
-          });
-          for (const [d0, d1] of spans) {
-            const rLen = d1 - d0;
-            const dMid = (d0 + d1) * 0.5;
-            const bx = p0.x + fx * dMid;
-            const bz = p0.z + fz * dMid;
-
-            // Верхняя грань приподнятого тротуара с плиткой + садовый поребрик БР 100.20.8 по внешней кромке
-            addFlatMesh(
-              makeWorldUvPlane(swW, rLen, 2.4),
-              mats.sidewalkMat,
-              bx + lx * swOff,
-              swH + microY,
-              bz + lz * swOff,
-              angle,
-              true
-            );
-            const backOff = swOff + side * (swW * 0.5 + 0.045);
-            const backRim = new THREE.Mesh(new THREE.BoxGeometry(0.09, swH, rLen), mats.concreteBaseMat);
-            backRim.rotation.y = angle;
-            backRim.position.set(bx + lx * backOff, swH * 0.5, bz + lz * backOff);
-            group.add(backRim);
-
-            // Бордюр БР 100.30.15: у перекрёстков и переходов — чёрно-белый ГОСТ, в середине квартала — бетонный
-            const useBw = nearControlZone(bx, bz);
-            const curb = new THREE.Mesh(
-              makeCurbBoxGeo(curbW, curbH, rLen, false),
-              useBw ? mats.curbBwMat : mats.curbGreyMat
-            );
-            curb.rotation.y = angle;
-            curb.position.set(bx + lx * curbOff, curbH * 0.5, bz + lz * curbOff);
-            curb.receiveShadow = true;
-            curb.castShadow = true;
-            group.add(curb);
-          }
-        }
-      } else if (isBridge) {
-        // 2б. Пролётное строение эстакады + металлическое барьерное ограждение 11ДО с катафотами КД-3
-        const deck = new THREE.Mesh(
-          new THREE.BoxGeometry(road.width + 0.9, 0.14, len),
-          mats.concreteBaseMat
-        );
-        deck.rotation.y = angle;
-        deck.position.set(mx, asphY - 0.075, mz);
-        group.add(deck);
-
-        for (const side of [-1, 1]) {
-          const gOff = side * (road.width * 0.5 + 0.24);
-          const beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.28, len), mats.galvPoleMat);
-          beam.rotation.y = angle;
-          beam.position.set(mx + lx * gOff, asphY + 0.56, mz + lz * gOff);
-          beam.castShadow = true;
-          group.add(beam);
-
-          const postCount = Math.min(28, Math.max(2, Math.floor(len / 4) + 1));
-          for (let pk = 0; pk < postCount; pk++) {
-            const pd = postCount === 1 ? len * 0.5 : (pk / (postCount - 1)) * len;
-            const px = p0.x + fx * pd + lx * gOff;
-            const pz = p0.z + fz * pd + lz * gOff;
-            const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.72, 0.1), mats.galvPoleMat);
-            post.rotation.y = angle;
-            post.position.set(px, asphY + 0.36, pz);
-            group.add(post);
-
-            // Катафот КД-3: справа по ходу красный, слева белый (ГОСТ Р 52289)
-            if (pk % 2 === 0) {
-              const refl = new THREE.Mesh(
-                new THREE.BoxGeometry(0.05, 0.1, 0.14),
-                side < 0 ? mats.reflRedMat : mats.reflWhiteMat
-              );
-              refl.rotation.y = angle;
-              refl.position.set(px - lx * side * 0.06, asphY + 0.58, pz - lz * side * 0.06);
-              group.add(refl);
-            }
-          }
-        }
-      }
-
-      // 3. Следы наката колёс по каждой полосе + чугунные люки ГОСТ 3634 и дождеприёмники
-      const laneCount = Math.max(1, Math.min(6, Math.round(road.lanes || 2)));
-      const laneW = (road.width - 0.5) / laneCount;
-      if (len >= 12 && !isMinorService) {
-        const wearSpans = collectClearSpans(2, len - 2, 3, 6, (d) =>
-          layerVal === 0 && inJunction(p0.x + fx * d, p0.z + fz * d, road.id, 1.2)
-        );
-        for (const [d0, d1] of wearSpans) {
-          const rLen = d1 - d0;
-          const dMid = (d0 + d1) * 0.5;
-          const bx = p0.x + fx * dMid;
-          const bz = p0.z + fz * dMid;
-          for (let li = 0; li < laneCount; li++) {
-            const laneOff = ((li + 0.5) / laneCount - 0.5) * (road.width - 0.5);
-            addFlatMesh(
-              makeWorldUvPlane(Math.min(3.1, laneW * 0.86), rLen, Math.min(3.1, laneW * 0.86), 8),
-              mats.laneWearMat,
-              bx + lx * laneOff,
-              asphY + 0.0032,
-              bz + lz * laneOff,
-              angle
-            );
-          }
-        }
-      }
-
-      // Люки и ливнёвые решётки (только на наземных улицах, вне перекрёстков и переходов)
-      if (!isBridge && !isMinorService && len >= 34) {
-        const mhStep = 42;
-        for (let d = 18; d < len - 14; d += mhStep) {
-          const cx = p0.x + fx * d;
-          const cz = p0.z + fz * d;
-          if (inJunction(cx, cz, road.id, 4) || inCrosswalk(cx, cz, 3) || inBayOpening(cx, cz)) continue;
-          const mhOff = -laneW * 0.35;
-          addFlatMesh(
-            new THREE.PlaneGeometry(0.76, 0.76),
-            mats.manholeMat,
-            cx + lx * mhOff,
-            asphY + 0.0055,
-            cz + lz * mhOff,
-            angle
-          );
-          // Прилотковая ливнёвая решётка у правого бордюра
-          const gOff = -(road.width * 0.5 - 0.28);
-          addFlatMesh(
-            new THREE.PlaneGeometry(0.42, 0.82),
-            mats.grateMat,
-            cx + fx * 6 + lx * gOff,
-            asphY + 0.0055,
-            cz + fz * 6 + lz * gOff,
-            angle
-          );
-        }
-      }
-
-      // 4. Горизонтальная дорожная разметка ГОСТ Р 51256-2018
-      const markY = 0.022 + layerLift + microY;
-      const isMarkBlocked = (d: number) => {
-        const px = p0.x + fx * d;
-        const pz = p0.z + fz * d;
-        return (layerVal === 0 && inJunction(px, pz, road.id, 1.45)) || inCrosswalk(px, pz, 0.7);
-      };
-
-      // 4а. Краевая сплошная линия 1.2 по обеим кромкам проезжей части (для городских и магистральных улиц)
-      if (!isMinorService && road.width >= 6.8 && len > 10) {
-        const edgeInset = road.width * 0.5 - 0.28;
-        for (const side of [-1, 1]) {
-          const eSpans = collectClearSpans(1.8, len - 1.8, 2.6, 3.0, (d) => {
-            const ex = p0.x + fx * d + lx * side * edgeInset;
-            const ez = p0.z + fz * d + lz * side * edgeInset;
-            return (
-              (layerVal === 0 && inJunction(ex, ez, road.id, 1.9)) ||
-              inCrosswalk(ex, ez, 0.7) ||
-              inBayOpening(ex, ez)
-            );
-          });
-          for (const [d0, d1] of eSpans) {
-            const dMid = (d0 + d1) * 0.5;
-            addFlatMesh(
-              new THREE.PlaneGeometry(0.12, d1 - d0),
-              mats.whiteMarkMat,
-              p0.x + fx * dMid + lx * side * edgeInset,
-              markY,
-              p0.z + fz * dMid + lz * side * edgeInset,
-              angle
-            );
-          }
-        }
-      }
-
-      // 4б. Осевая (1.1 одинарная / 1.3 двойная сплошная / 1.5 прерывистая) и межполосная (1.5 / 1.6) разметка
-      if (laneCount >= 2 && len > 8) {
-        const endPad = Math.min(3.6, len * 0.18);
-        const emitDashedLine = (latOffset: number) => {
-          const dashCount = Math.floor(len / 5.5);
-          for (let k = 0; k < dashCount; k++) {
-            const d = ((k + 0.5) / dashCount) * len;
-            if (isMarkBlocked(d)) continue;
-            const px = p0.x + fx * d + lx * latOffset;
-            const pz = p0.z + fz * d + lz * latOffset;
-            // Линия приближения 1.6 (удлинённый штрих) вблизи стоп-линий и переходов
-            const dashLen = nearControlZone(px, pz) ? 3.4 : 2.1;
-            addFlatMesh(new THREE.PlaneGeometry(0.13, dashLen), mats.whiteMarkMat, px, markY, pz, angle);
-          }
-        };
-
-        if (road.oneway) {
-          // На односторонней улице все полосы попутные — разделяем их прерывистой 1.5
-          for (let div = 1; div < laneCount; div++) {
-            const off = (div / laneCount - 0.5) * (road.width - 0.5);
-            emitDashedLine(off);
-          }
-        } else {
-          const isDoubleSolid = laneCount >= 4 || (road.hasSolidCenter && road.width >= 12.5);
-          if (isDoubleSolid || road.hasSolidCenter) {
-            const cSpans = collectClearSpans(endPad, len - endPad, 2.5, 2.2, isMarkBlocked);
-            for (const [d0, d1] of cSpans) {
-              const rLen = d1 - d0;
-              const dMid = (d0 + d1) * 0.5;
-              const cx = p0.x + fx * dMid;
-              const cz = p0.z + fz * dMid;
-              if (isDoubleSolid) {
-                // Разметка 1.3 — двойная сплошная (две линии по 0.12 м с зазором 0.14 м)
-                for (const s of [-0.13, 0.13]) {
-                  addFlatMesh(
-                    new THREE.PlaneGeometry(0.12, rLen),
-                    mats.whiteMarkMat,
-                    cx + lx * s,
-                    markY,
-                    cz + lz * s,
-                    angle
-                  );
-                }
-              } else {
-                addFlatMesh(new THREE.PlaneGeometry(0.14, rLen), mats.whiteMarkMat, cx, markY, cz, angle);
-              }
-            }
-          } else {
-            emitDashedLine(0);
-          }
-
-          // Межполосная прерывистая 1.5 для 4+ полосных проспектов
-          if (laneCount >= 4) {
-            const halfLanes = Math.floor(laneCount / 2);
-            for (let sub = 1; sub < halfLanes; sub++) {
-              const off = (sub / laneCount) * (road.width - 0.5);
-              emitDashedLine(off);
-              emitDashedLine(-off);
-            }
-          }
-        }
-      }
-
-      // 4в. Вытянутые ГОСТ-стрелы направления 1.18 на односторонних улицах (по центру каждой полосы)
-      if (road.oneway && len >= 16) {
-        const arrowCount = Math.min(8, Math.max(1, Math.floor(len / 28)));
-        for (let aIdx = 0; aIdx < arrowCount; aIdx++) {
-          const d = ((aIdx + 0.5) / arrowCount) * len;
-          if (isMarkBlocked(d)) continue;
-          const bx = p0.x + fx * d;
-          const bz = p0.z + fz * d;
-          for (let li = 0; li < laneCount; li++) {
-            const off = laneCount === 1 ? 0 : ((li + 0.5) / laneCount - 0.5) * (road.width - 0.6);
-            addFlatMesh(
-              new THREE.PlaneGeometry(0.85, 3.1),
-              mats.arrowMat,
-              bx + lx * off,
-              markY + 0.001,
-              bz + lz * off,
-              angle + Math.PI
-            );
-          }
-        }
-      }
-    }
-  }
-}
-
-/** Создаёт фигурную металлическую подложку дорожного знака строго по форме ГОСТ (без квадратных углов сзади). */
-function makeSignBackplateGeo(form: SignBackplateForm, size: number): THREE.BufferGeometry {
-  const r = size * 0.47;
+function createUnitBackplate(form: SignBackplateForm): THREE.BufferGeometry {
+  const r = 0.47;
   switch (form) {
     case "circle":
-      return new THREE.CircleGeometry(r, 24);
+      return new THREE.CircleGeometry(r, 20);
     case "octagon": {
       const sh = new THREE.Shape();
       for (let i = 0; i < 8; i++) {
@@ -656,231 +123,719 @@ function makeSignBackplateGeo(form: SignBackplateForm, size: number): THREE.Buff
       return new THREE.ShapeGeometry(sh);
     }
     case "rect_living":
-      return new THREE.PlaneGeometry(size * 0.9, size * 0.82);
+      return new THREE.PlaneGeometry(0.9, 0.82);
     case "shield_519":
-      return new THREE.PlaneGeometry(size * 0.95, size * 0.95);
+      return new THREE.PlaneGeometry(0.95, 0.95);
     case "square":
-      return new THREE.PlaneGeometry(size * 0.89, size * 0.89);
+      return new THREE.PlaneGeometry(0.89, 0.89);
   }
 }
 
-/** Собирает оцинкованную стойку ГОСТ с бетонным стаканом, заглушкой и двумя хомутами крепления. */
-function addSignPoleHardware(g: THREE.Group, poleH: number, signY: number, mats: RoadMaterialPack): void {
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.18, 10), mats.concreteBaseMat);
-  base.position.y = 0.09;
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.042, poleH, 10), mats.galvPoleMat);
-  pole.position.y = poleH * 0.5;
-  pole.castShadow = true;
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.04, 10), mats.darkIronMat);
-  cap.position.y = poleH + 0.015;
-  g.add(base, pole, cap);
+/** Создаёт общий пул ГОСТ-материалов, кешей знаков/ограждений и единичных прототипов на `loadWorld`. */
+export function createRoadMaterialPack(): RoadMaterialPack {
+  const asphalt = makeGostAsphaltMaps();
+  const paver = makeSidewalkPaverMaps();
+  const haloTex = makeSignalHaloTexture();
 
+  const visor = new THREE.CylinderGeometry(0.127, 0.127, 0.16, 10, 1, true, -Math.PI * 0.55, Math.PI * 1.1);
+  visor.rotateX(-Math.PI / 2);
+
+  return {
+    asphaltMat: new THREE.MeshStandardMaterial({
+      map: asphalt.map,
+      bumpMap: asphalt.bumpMap,
+      bumpScale: 0.016,
+      roughness: 0.9,
+      metalness: 0.03,
+    }),
+    laneWearMat: new THREE.MeshBasicMaterial({ map: makeLaneWearTexture(), transparent: true, depthWrite: false }),
+    sidewalkMat: new THREE.MeshStandardMaterial({
+      map: paver.map,
+      bumpMap: paver.bumpMap,
+      bumpScale: 0.014,
+      roughness: 0.88,
+    }),
+    curbBwMat: new THREE.MeshStandardMaterial({ map: makeGostCurbTexture(true), roughness: 0.78 }),
+    curbGreyMat: new THREE.MeshStandardMaterial({ map: makeGostCurbTexture(false), roughness: 0.84 }),
+    tactileMat: new THREE.MeshStandardMaterial({ map: makeTactilePavingTexture(), roughness: 0.72 }),
+    whiteMarkMat: new THREE.MeshBasicMaterial({ map: makeThermoplasticTexture(false) }),
+    yellowMarkMat: new THREE.MeshBasicMaterial({ map: makeThermoplasticTexture(true) }),
+    arrowMat: new THREE.MeshBasicMaterial({ map: makeGostArrow118Texture(), transparent: true, depthWrite: false }),
+    manholeMat: new THREE.MeshBasicMaterial({ map: makeManholeTexture(), transparent: true, depthWrite: false }),
+    grateMat: new THREE.MeshBasicMaterial({ map: makeStormGrateTexture() }),
+    galvPoleMat: new THREE.MeshStandardMaterial({ color: 0x9aa6b4, metalness: 0.52, roughness: 0.42 }),
+    darkIronMat: new THREE.MeshStandardMaterial({ color: 0x2b333d, metalness: 0.45, roughness: 0.52 }),
+    concreteBaseMat: new THREE.MeshStandardMaterial({ color: 0x7d8690, roughness: 0.9 }),
+    signBackMat: new THREE.MeshStandardMaterial({ color: 0x7c8896, metalness: 0.45, roughness: 0.48 }),
+    signalBodyMat: new THREE.MeshStandardMaterial({ color: 0x151b23, roughness: 0.55, metalness: 0.2 }),
+    signalBorderMat: new THREE.MeshBasicMaterial({ color: 0xf1f5f9 }),
+    stopPlaqueMat: new THREE.MeshBasicMaterial({ map: makeStopPlaqueTexture(), transparent: true, alphaTest: 0.08 }),
+    cw519RightMat: new THREE.MeshBasicMaterial({ map: makeCrosswalkSignTexture(false), transparent: true, alphaTest: 0.08 }),
+    cw519LeftMat: new THREE.MeshBasicMaterial({ map: makeCrosswalkSignTexture(true), transparent: true, alphaTest: 0.08 }),
+    luminaireGlowMat: new THREE.MeshBasicMaterial({ color: 0xfef3c7 }),
+    coneOrangeMat: new THREE.MeshStandardMaterial({ color: 0xf95b12, roughness: 0.42 }),
+    reflRedMat: new THREE.MeshBasicMaterial({ color: 0xef4444 }),
+    reflWhiteMat: new THREE.MeshBasicMaterial({ color: 0xf8fafc }),
+    reflYellowMat: new THREE.MeshBasicMaterial({ color: 0xfacc15 }),
+    haloTex,
+    signFaceCache: new Map(),
+    fenceSolidCache: new Map(),
+    fenceRailCache: new Map(),
+    sharedLensGeo: new THREE.CircleGeometry(1, 14),
+    sharedHaloGeo: new THREE.PlaneGeometry(1, 1),
+    protos: {
+      cyl8: new THREE.CylinderGeometry(1, 1, 1, 8),
+      taperPole: new THREE.CylinderGeometry(0.68, 1, 1, 8),
+      cone10: new THREE.ConeGeometry(0.135, 1, 10),
+      coneBandTop: new THREE.CylinderGeometry(0.028, 0.049, 1, 10),
+      coneBandBot: new THREE.CylinderGeometry(0.071, 0.089, 1, 10),
+      finial: new THREE.OctahedronGeometry(0.052, 0),
+      visor,
+      unitBox: new THREE.BoxGeometry(1, 1, 1),
+      backplates: {
+        circle: createUnitBackplate("circle"),
+        octagon: createUnitBackplate("octagon"),
+        triangle_down: createUnitBackplate("triangle_down"),
+        diamond: createUnitBackplate("diamond"),
+        rect_living: createUnitBackplate("rect_living"),
+        shield_519: createUnitBackplate("shield_519"),
+        square: createUnitBackplate("square"),
+      },
+    },
+  };
+}
+
+/** Освобождает временные прототипы и возвращает все материалы/текстуры/общие геометрии пакета для `dispose`. */
+export function finalizeRoadMaterialPack(mats: RoadMaterialPack): {
+  materials: THREE.Material[];
+  textures: THREE.Texture[];
+  geometries: THREE.BufferGeometry[];
+} {
+  mats.protos.cyl8.dispose();
+  mats.protos.taperPole.dispose();
+  mats.protos.cone10.dispose();
+  mats.protos.coneBandTop.dispose();
+  mats.protos.coneBandBot.dispose();
+  mats.protos.finial.dispose();
+  mats.protos.visor.dispose();
+  mats.protos.unitBox.dispose();
+  Object.values(mats.protos.backplates).forEach((g) => g.dispose());
+
+  const materials: THREE.Material[] = [
+    mats.asphaltMat,
+    mats.laneWearMat,
+    mats.sidewalkMat,
+    mats.curbBwMat,
+    mats.curbGreyMat,
+    mats.tactileMat,
+    mats.whiteMarkMat,
+    mats.yellowMarkMat,
+    mats.arrowMat,
+    mats.manholeMat,
+    mats.grateMat,
+    mats.galvPoleMat,
+    mats.darkIronMat,
+    mats.concreteBaseMat,
+    mats.signBackMat,
+    mats.signalBodyMat,
+    mats.signalBorderMat,
+    mats.stopPlaqueMat,
+    mats.cw519RightMat,
+    mats.cw519LeftMat,
+    mats.luminaireGlowMat,
+    mats.coneOrangeMat,
+    mats.reflRedMat,
+    mats.reflWhiteMat,
+    mats.reflYellowMat,
+    ...mats.signFaceCache.values(),
+    ...mats.fenceSolidCache.values(),
+    ...mats.fenceRailCache.values(),
+  ];
+  const textures = new Set<THREE.Texture>([mats.haloTex]);
+  for (const m of materials) {
+    const sm = m as THREE.MeshStandardMaterial;
+    for (const t of [sm.map, sm.bumpMap, sm.roughnessMap, sm.alphaMap]) {
+      if (t) textures.add(t);
+    }
+  }
+  return {
+    materials,
+    textures: [...textures],
+    geometries: [mats.sharedLensGeo, mats.sharedHaloGeo],
+  };
+}
+
+function collectClearSpans(
+  dStart: number,
+  dEnd: number,
+  stepM: number,
+  minRunM: number,
+  isBlocked: (d: number) => boolean
+): Array<[number, number]> {
+  const span = dEnd - dStart;
+  if (span < minRunM) return [];
+  const samples = Math.max(2, Math.min(64, Math.ceil(span / stepM)));
+  const out: Array<[number, number]> = [];
+  let run0: number | null = null;
+  for (let s = 0; s <= samples; s++) {
+    const d = dStart + (span * s) / samples;
+    const blocked = isBlocked(d);
+    if (!blocked && run0 === null) {
+      run0 = d;
+    } else if (blocked && run0 !== null) {
+      if (d - run0 >= minRunM) out.push([run0, d]);
+      run0 = null;
+    }
+  }
+  if (run0 !== null && dEnd - run0 >= minRunM) out.push([run0, dEnd]);
+  return out;
+}
+
+/**
+ * Пакетно строит полотно дорог, следы наката, объёмные тротуары с плиткой, ГОСТ-бордюры БР 100.30.15,
+ * эстакады 11ДО, люки и разметку ГОСТ Р 51256 с O(1) пространственным индексом и слиянием по чанкам.
+ */
+export function buildWorldRoadsAndSidewalks(
+  roadChunks: SpatialChunkBatcher,
+  detailChunks: SpatialChunkBatcher,
+  world: WorldData,
+  mats: RoadMaterialPack
+): void {
+  const isStreet = (roadId: string) =>
+    world.scenarioId === "city_osm" || (world.scenarioId === "custom" && roadId !== "custom-lot");
+
+  const surfaceStreets = world.roads.filter((r) => isStreet(r.id) && (r.layer ?? 0) === 0);
+  const spatial = new RoadSpatialIndex(surfaceStreets, world.crosswalks, world.bays, world.signals);
+  // Дедупликация круглых стыков в общих узлах улиц (экономит ~55 % треугольников на перекрёстках)
+  const emittedCaps = new Set<string>();
+
+  let segSerial = 0;
+  for (const road of world.roads) {
+    const street = isStreet(road.id);
+    const layerVal = road.layer ?? 0;
+    const isBridge = street && layerVal > 0;
+    const layerLift = isBridge ? Math.min(0.24, layerVal * 0.08) : 0;
+    const isMinorService = road.highway === "service" || road.highway === "living_street";
+
+    if (street && road.points.length >= 2) {
+      const capR = road.width * 0.5;
+      const capSegs = isMinorService ? 10 : 14;
+      const wBucket = Math.round(road.width);
+      for (let pi = 0; pi < road.points.length; pi++) {
+        const vp = road.points[pi];
+        const capKey = `${layerVal}:${wBucket}:${Math.round(vp.x)}:${Math.round(vp.z)}`;
+        if (emittedCaps.has(capKey)) continue;
+        emittedCaps.add(capKey);
+        const rb = roadChunks.at(vp.x, vp.z, capR + 2.4);
+        if (!isBridge && !isMinorService) {
+          rb.addWorldUvDisc(mats.sidewalkMat, vp.x, 0.005 + layerLift, vp.z, capR + 2.15, 12, 2.4, true);
+        }
+        rb.addWorldUvDisc(mats.asphaltMat, vp.x, 0.0118 + layerLift, vp.z, capR, capSegs, 4.5, true);
+      }
+    }
+
+    for (let i = 0; i < road.points.length - 1; i++) {
+      const p0 = road.points[i];
+      const p1 = road.points[i + 1];
+      const dx = p1.x - p0.x;
+      const dz = p1.z - p0.z;
+      const len = Math.hypot(dx, dz);
+      if (len < 0.5) continue;
+
+      const angle = Math.atan2(dx, dz);
+      const fx = dx / len;
+      const fz = dz / len;
+      const lx = fz;
+      const lz = -fx;
+      const mx = (p0.x + p1.x) * 0.5;
+      const mz = (p0.z + p1.z) * 0.5;
+      const microY = street ? (segSerial++ % 13) * 0.0001 : 0;
+      const halfSpan = Math.max(len, road.width) * 0.5 + 2.2;
+
+      // 1. Основное полотно асфальтобетона ЩМА (мировой масштаб 4.5 м)
+      const asphY = 0.012 + layerLift + microY;
+      const rBatch = roadChunks.at(mx, mz, halfSpan);
+      rBatch.addWorldUvQuad(mats.asphaltMat, mx, asphY, mz, road.width, len, angle, 4.5, 4.5, true);
+
+      if (!street) {
+        const rimPad = 0.14;
+        const dBatch = detailChunks.at(mx, mz, halfSpan);
+        for (const side of [-1, 1]) {
+          dBatch.addFlatQuad(
+            mats.whiteMarkMat,
+            mx + lx * side * (road.width * 0.5 - 0.22),
+            0.018,
+            mz + lz * side * (road.width * 0.5 - 0.22),
+            0.12,
+            Math.max(0.5, len - 0.5),
+            angle
+          );
+          dBatch.addBox(
+            mats.concreteBaseMat,
+            mx + lx * side * (road.width * 0.5 + rimPad),
+            0.03,
+            mz + lz * side * (road.width * 0.5 + rimPad),
+            0.22,
+            0.06,
+            len + 0.3,
+            angle,
+            { receiveShadow: true }
+          );
+        }
+        for (const endSign of [-1, 1]) {
+          dBatch.addBox(
+            mats.concreteBaseMat,
+            mx + fx * endSign * (len * 0.5 + rimPad),
+            0.03,
+            mz + fz * endSign * (len * 0.5 + rimPad),
+            road.width + 0.5,
+            0.06,
+            0.22,
+            angle,
+            { receiveShadow: true }
+          );
+        }
+        if (len >= 12) {
+          dBatch.addWorldUvQuad(mats.laneWearMat, mx, 0.015, mz, 3.4, len - 1.5, angle, 3.4, 6, false, true);
+        }
+        continue;
+      }
+
+      // 2. Тротуары с плиткой + бордюр БР 100.30.15 / эстакада 11ДО с катафотами КД-3
+      if (!isBridge && !isMinorService) {
+        rBatch.addWorldUvQuad(mats.sidewalkMat, mx, 0.005 + microY, mz, road.width + 4.3, len, angle, 2.4, 2.4, true);
+
+        const swW = 1.95;
+        const swH = 0.095;
+        const curbW = 0.17;
+        const curbH = 0.118;
+        for (const side of [-1, 1]) {
+          const curbOff = side * (road.width * 0.5 + curbW * 0.5 + 0.04);
+          const swOff = side * (road.width * 0.5 + curbW + swW * 0.5 + 0.04);
+          const backOff = swOff + side * (swW * 0.5 + 0.045);
+          const spans = collectClearSpans(0.6, len - 0.6, 2.5, 2.6, (d) => {
+            const sx = p0.x + fx * d + lx * curbOff;
+            const sz = p0.z + fz * d + lz * curbOff;
+            return (
+              (layerVal === 0 && spatial.inJunction(sx, sz, road.id, 2.3)) ||
+              spatial.inCrosswalk(sx, sz, 1.1) ||
+              spatial.inBayOpening(sx, sz)
+            );
+          });
+          for (const [d0, d1] of spans) {
+            const rLen = d1 - d0;
+            const dMid = (d0 + d1) * 0.5;
+            const bx = p0.x + fx * dMid;
+            const bz = p0.z + fz * dMid;
+            const dBatch = detailChunks.at(bx, bz, rLen * 0.5 + swW + 1);
+
+            dBatch.addWorldUvQuad(
+              mats.sidewalkMat,
+              bx + lx * swOff,
+              swH + microY,
+              bz + lz * swOff,
+              swW,
+              rLen,
+              angle,
+              2.4,
+              2.4,
+              true
+            );
+            dBatch.addBox(
+              mats.concreteBaseMat,
+              bx + lx * backOff,
+              swH * 0.5,
+              bz + lz * backOff,
+              0.09,
+              swH,
+              rLen,
+              angle
+            );
+            const useBw = spatial.nearControlZone(bx, bz);
+            dBatch.addBox(
+              useBw ? mats.curbBwMat : mats.curbGreyMat,
+              bx + lx * curbOff,
+              curbH * 0.5,
+              bz + lz * curbOff,
+              curbW,
+              curbH,
+              rLen,
+              angle,
+              { receiveShadow: true, curbTileM: 2.0, curbAlongX: false }
+            );
+          }
+        }
+      } else if (isBridge) {
+        rBatch.addBox(mats.concreteBaseMat, mx, asphY - 0.075, mz, road.width + 0.9, 0.14, len, angle, {
+          keepBottom: true,
+        });
+        for (const side of [-1, 1]) {
+          const gOff = side * (road.width * 0.5 + 0.24);
+          rBatch.addBox(
+            mats.galvPoleMat,
+            mx + lx * gOff,
+            asphY + 0.56,
+            mz + lz * gOff,
+            0.12,
+            0.28,
+            len,
+            angle
+          );
+          const postCount = Math.min(28, Math.max(2, Math.floor(len / 4.2) + 1));
+          for (let pk = 0; pk < postCount; pk++) {
+            const pd = postCount === 1 ? len * 0.5 : (pk / (postCount - 1)) * len;
+            const px = p0.x + fx * pd + lx * gOff;
+            const pz = p0.z + fz * pd + lz * gOff;
+            const dBatch = detailChunks.at(px, pz, 1);
+            dBatch.addBox(mats.galvPoleMat, px, asphY + 0.36, pz, 0.1, 0.72, 0.1, angle);
+            if (pk % 2 === 0) {
+              dBatch.addBox(
+                side < 0 ? mats.reflRedMat : mats.reflWhiteMat,
+                px - lx * side * 0.06,
+                asphY + 0.58,
+                pz - lz * side * 0.06,
+                0.05,
+                0.1,
+                0.14,
+                angle
+              );
+            }
+          }
+        }
+      }
+
+      // 3. Следы наката колёс, чугунные люки ГОСТ 3634 и дождеприёмники
+      const laneCount = Math.max(1, Math.min(6, Math.round(road.lanes || 2)));
+      const laneW = (road.width - 0.5) / laneCount;
+      if (len >= 12 && !isMinorService) {
+        const wearW = Math.min(3.1, laneW * 0.86);
+        const wearSpans = collectClearSpans(2, len - 2, 3.2, 6, (d) =>
+          layerVal === 0 && spatial.inJunction(p0.x + fx * d, p0.z + fz * d, road.id, 1.2)
+        );
+        for (const [d0, d1] of wearSpans) {
+          const rLen = d1 - d0;
+          const dMid = (d0 + d1) * 0.5;
+          const bx = p0.x + fx * dMid;
+          const bz = p0.z + fz * dMid;
+          const dBatch = detailChunks.at(bx, bz, rLen * 0.5 + road.width * 0.5);
+          for (let li = 0; li < laneCount; li++) {
+            const laneOff = ((li + 0.5) / laneCount - 0.5) * (road.width - 0.5);
+            dBatch.addWorldUvQuad(
+              mats.laneWearMat,
+              bx + lx * laneOff,
+              asphY + 0.0032,
+              bz + lz * laneOff,
+              wearW,
+              rLen,
+              angle,
+              wearW,
+              8,
+              false,
+              true
+            );
+          }
+        }
+      }
+
+      if (!isBridge && !isMinorService && len >= 34) {
+        const mhOff = -laneW * 0.35;
+        const gOff = -(road.width * 0.5 - 0.28);
+        for (let d = 18; d < len - 14; d += 44) {
+          const cx = p0.x + fx * d;
+          const cz = p0.z + fz * d;
+          if (spatial.inJunction(cx, cz, road.id, 4) || spatial.inCrosswalk(cx, cz, 3) || spatial.inBayOpening(cx, cz)) {
+            continue;
+          }
+          const dBatch = detailChunks.at(cx, cz, 8);
+          dBatch.addFlatQuad(mats.manholeMat, cx + lx * mhOff, asphY + 0.0055, cz + lz * mhOff, 0.76, 0.76, angle);
+          dBatch.addFlatQuad(
+            mats.grateMat,
+            cx + fx * 6 + lx * gOff,
+            asphY + 0.0055,
+            cz + fz * 6 + lz * gOff,
+            0.42,
+            0.82,
+            angle
+          );
+        }
+      }
+
+      // 4. Горизонтальная дорожная разметка ГОСТ Р 51256-2018 (1.1, 1.2, 1.3, 1.5, 1.6, 1.18)
+      const markY = 0.022 + layerLift + microY;
+      const isMarkBlocked = (d: number) => {
+        const px = p0.x + fx * d;
+        const pz = p0.z + fz * d;
+        return (layerVal === 0 && spatial.inJunction(px, pz, road.id, 1.45)) || spatial.inCrosswalk(px, pz, 0.7);
+      };
+
+      if (!isMinorService && road.width >= 6.8 && len > 10) {
+        const edgeInset = road.width * 0.5 - 0.28;
+        for (const side of [-1, 1]) {
+          const eSpans = collectClearSpans(1.8, len - 1.8, 2.8, 3.0, (d) => {
+            const ex = p0.x + fx * d + lx * side * edgeInset;
+            const ez = p0.z + fz * d + lz * side * edgeInset;
+            return (
+              (layerVal === 0 && spatial.inJunction(ex, ez, road.id, 1.9)) ||
+              spatial.inCrosswalk(ex, ez, 0.7) ||
+              spatial.inBayOpening(ex, ez)
+            );
+          });
+          for (const [d0, d1] of eSpans) {
+            const rLen = d1 - d0;
+            const dMid = (d0 + d1) * 0.5;
+            const ex = p0.x + fx * dMid + lx * side * edgeInset;
+            const ez = p0.z + fz * dMid + lz * side * edgeInset;
+            detailChunks.at(ex, ez, rLen * 0.5 + 1).addFlatQuad(mats.whiteMarkMat, ex, markY, ez, 0.12, rLen, angle);
+          }
+        }
+      }
+
+      if (laneCount >= 2 && len > 8 && !isMinorService) {
+        const endPad = Math.min(3.6, len * 0.18);
+        const emitDashedLine = (latOffset: number) => {
+          const dashCount = Math.floor(len / 5.5);
+          for (let k = 0; k < dashCount; k++) {
+            const d = ((k + 0.5) / dashCount) * len;
+            if (isMarkBlocked(d)) continue;
+            const px = p0.x + fx * d + lx * latOffset;
+            const pz = p0.z + fz * d + lz * latOffset;
+            const dashLen = spatial.nearControlZone(px, pz) ? 3.4 : 2.1;
+            detailChunks.at(px, pz, 2).addFlatQuad(mats.whiteMarkMat, px, markY, pz, 0.13, dashLen, angle);
+          }
+        };
+
+        if (road.oneway) {
+          for (let div = 1; div < laneCount; div++) {
+            emitDashedLine((div / laneCount - 0.5) * (road.width - 0.5));
+          }
+        } else {
+          const isDoubleSolid = laneCount >= 4 || (road.hasSolidCenter && road.width >= 12.5);
+          if (isDoubleSolid || road.hasSolidCenter) {
+            const cSpans = collectClearSpans(endPad, len - endPad, 2.8, 2.2, isMarkBlocked);
+            for (const [d0, d1] of cSpans) {
+              const rLen = d1 - d0;
+              const dMid = (d0 + d1) * 0.5;
+              const cx = p0.x + fx * dMid;
+              const cz = p0.z + fz * dMid;
+              const dBatch = detailChunks.at(cx, cz, rLen * 0.5 + 1);
+              if (isDoubleSolid) {
+                for (const s of [-0.13, 0.13]) {
+                  dBatch.addFlatQuad(mats.whiteMarkMat, cx + lx * s, markY, cz + lz * s, 0.12, rLen, angle);
+                }
+              } else {
+                dBatch.addFlatQuad(mats.whiteMarkMat, cx, markY, cz, 0.14, rLen, angle);
+              }
+            }
+          } else {
+            emitDashedLine(0);
+          }
+
+          if (laneCount >= 4) {
+            const halfLanes = Math.floor(laneCount / 2);
+            for (let sub = 1; sub < halfLanes; sub++) {
+              const off = (sub / laneCount) * (road.width - 0.5);
+              emitDashedLine(off);
+              emitDashedLine(-off);
+            }
+          }
+        }
+      }
+
+      if (road.oneway && !isMinorService && len >= 16) {
+        const arrowCount = Math.min(8, Math.max(1, Math.floor(len / 28)));
+        for (let aIdx = 0; aIdx < arrowCount; aIdx++) {
+          const d = ((aIdx + 0.5) / arrowCount) * len;
+          if (isMarkBlocked(d)) continue;
+          const bx = p0.x + fx * d;
+          const bz = p0.z + fz * d;
+          const dBatch = detailChunks.at(bx, bz, road.width * 0.5 + 2);
+          for (let li = 0; li < laneCount; li++) {
+            const off = laneCount === 1 ? 0 : ((li + 0.5) / laneCount - 0.5) * (road.width - 0.6);
+            dBatch.addFlatQuad(
+              mats.arrowMat,
+              bx + lx * off,
+              markY + 0.001,
+              bz + lz * off,
+              0.85,
+              3.1,
+              angle + Math.PI
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
+/** Пакетно добавляет оцинкованную стойку ГОСТ с бетонным стаканом, заглушкой и двумя хомутами крепления. */
+function emitSignPoleHardware(
+  detailChunks: SpatialChunkBatcher,
+  x: number,
+  z: number,
+  yaw: number,
+  poleH: number,
+  signY: number,
+  mats: RoadMaterialPack
+): void {
+  const b = detailChunks.at(x, z, 1.5);
+  const sh = Math.sin(yaw);
+  const ch = Math.cos(yaw);
+  b.addProto(mats.concreteBaseMat, mats.protos.taperPole, x, 0.09, z, 0, yaw, 0, 0.14, 0.18, 0.14);
+  b.addProto(mats.galvPoleMat, mats.protos.cyl8, x, poleH * 0.5, z, 0, yaw, 0, 0.039, poleH, 0.039);
+  b.addProto(mats.darkIronMat, mats.protos.cyl8, x, poleH + 0.015, z, 0, yaw, 0, 0.044, 0.04, 0.044);
   for (const dy of [-0.17, 0.17]) {
-    const clamp = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.045, 0.09), mats.darkIronMat);
-    clamp.position.set(0, signY + dy, -0.02);
-    g.add(clamp);
+    b.addBox(mats.darkIronMat, x - sh * 0.02, signY + dy, z - ch * 0.02, 0.12, 0.045, 0.09, yaw);
   }
 }
 
-/** Строит дорожный знак ГОСТ Р 52290-2004 на оцинкованной стойке с фигурной подложкой и хомутами. */
-export function buildGostRoadSign(group: THREE.Group, sign: RoadSignDef, mats: RoadMaterialPack): void {
-  const g = new THREE.Group();
-  g.position.set(sign.x, 0, sign.z);
-  g.rotation.y = sign.h;
+function getCachedSignFaceMat(sign: RoadSignDef, mats: RoadMaterialPack): THREE.MeshBasicMaterial {
+  const key = `${sign.kind}:${sign.limitKmh ?? ""}:${sign.label ?? ""}`;
+  let mat = mats.signFaceCache.get(key);
+  if (!mat) {
+    mat = new THREE.MeshBasicMaterial({ map: makeRoadSignTexture(sign), transparent: true, alphaTest: 0.08 });
+    mats.signFaceCache.set(key, mat);
+  }
+  return mat;
+}
 
+/** Пакетно строит дорожный знак ГОСТ Р 52290-2004 (с кешированием текстур одинаковых знаков на крупных OSM-картах). */
+export function buildGostRoadSign(detailChunks: SpatialChunkBatcher, sign: RoadSignDef, mats: RoadMaterialPack): void {
   const size = sign.kind === "crosswalk" ? 0.84 : 0.74;
   const signY = 2.52;
-  addSignPoleHardware(g, 2.86, signY, mats);
+  const sh = Math.sin(sign.h);
+  const ch = Math.cos(sign.h);
+  emitSignPoleHardware(detailChunks, sign.x, sign.z, sign.h, 2.86, signY, mats);
 
-  const front = new THREE.Mesh(
-    new THREE.PlaneGeometry(size, size),
-    new THREE.MeshBasicMaterial({ map: makeRoadSignTexture(sign), transparent: true, alphaTest: 0.08 })
-  );
-  // Лицевая сторона смотрит к -Z (навстречу водителю, движущемуся вдоль +Z)
-  front.position.set(0, signY, -0.056);
-  front.rotation.y = Math.PI;
-
-  const back = new THREE.Mesh(makeSignBackplateGeo(getSignBackplateForm(sign.kind), size), mats.signBackMat);
-  back.position.set(0, signY, -0.046);
-  back.castShadow = true;
-
-  g.add(front, back);
-  group.add(g);
+  const b = detailChunks.at(sign.x, sign.z, 1.5);
+  const faceMat = getCachedSignFaceMat(sign, mats);
+  // Лицевая сторона смотрит к -Z локальной системы знака (yaw + PI)
+  b.addVerticalQuad(faceMat, sign.x - sh * 0.056, signY, sign.z - ch * 0.056, size, size, sign.h + Math.PI);
+  const backGeo = mats.protos.backplates[getSignBackplateForm(sign.kind)];
+  b.addProto(mats.signBackMat, backGeo, sign.x - sh * 0.046, signY, sign.z - ch * 0.046, 0, sign.h, 0, size, size, 1);
 }
 
-/** Строит знак 3.24 «Ограничение скорости» для встроенных `speedZones` (ориентирован к подъезжающему потоку). */
+/** Пакетно строит знак 3.24 «Ограничение скорости» для встроенных `speedZones`. */
 export function buildGostSpeedSign(
-  group: THREE.Group,
+  detailChunks: SpatialChunkBatcher,
   limitKmh: number,
   x: number,
   z: number,
   h: number,
   mats: RoadMaterialPack
 ): void {
-  const g = new THREE.Group();
-  g.position.set(x, 0, z);
-  g.rotation.y = h;
-
+  const key = `speed324:${limitKmh}`;
+  let faceMat = mats.signFaceCache.get(key);
+  if (!faceMat) {
+    faceMat = new THREE.MeshBasicMaterial({
+      map: makeGostSpeedLimitTexture(limitKmh),
+      transparent: true,
+      alphaTest: 0.08,
+    });
+    mats.signFaceCache.set(key, faceMat);
+  }
   const size = 0.74;
   const signY = 2.52;
-  addSignPoleHardware(g, 2.86, signY, mats);
+  const sh = Math.sin(h);
+  const ch = Math.cos(h);
+  emitSignPoleHardware(detailChunks, x, z, h, 2.86, signY, mats);
 
-  const tex = makeGostSpeedLimitTexture(limitKmh);
-  const faceMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.08 });
-  const front = new THREE.Mesh(new THREE.PlaneGeometry(size, size), faceMat);
-  front.position.set(0, signY, -0.056);
-  front.rotation.y = Math.PI;
-
-  const back = new THREE.Mesh(new THREE.CircleGeometry(size * 0.47, 24), mats.signBackMat);
-  back.position.set(0, signY, -0.046);
-  back.castShadow = true;
-
-  g.add(front, back);
-  group.add(g);
+  const b = detailChunks.at(x, z, 1.5);
+  b.addVerticalQuad(faceMat, x - sh * 0.056, signY, z - ch * 0.056, size, size, h + Math.PI);
+  b.addProto(mats.signBackMat, mats.protos.backplates.circle, x - sh * 0.046, signY, z - ch * 0.046, 0, h, 0, size, size, 1);
 }
 
-/** Строит пешеходный переход ГОСТ 1.14.1 (бело-жёлтая «зебра»), тактильную плитку и знаки 5.19.1/5.19.2 на обеих сторонах. */
-export function buildGostCrosswalk(group: THREE.Group, cw: CrosswalkDef, mats: RoadMaterialPack): void {
-  const cwGroup = new THREE.Group();
-  cwGroup.position.set(cw.cx, 0.026, cw.cz);
-  cwGroup.rotation.y = cw.h;
+/** Пакетно строит пешеходный переход ГОСТ 1.14.1 (бело-жёлтая «зебра», тактильная плитка и знаки 5.19.1/5.19.2). */
+export function buildGostCrosswalk(detailChunks: SpatialChunkBatcher, cw: CrosswalkDef, mats: RoadMaterialPack): void {
+  const sh = Math.sin(cw.h);
+  const ch = Math.cos(cw.h);
+  const wx = (lx: number, lz: number) => cw.cx + lx * ch + lz * sh;
+  const wz = (lx: number, lz: number) => cw.cz - lx * sh + lz * ch;
+  const b = detailChunks.at(cw.cx, cw.cz, Math.max(cw.width, cw.length) * 0.5 + 2);
 
-  // Бело-жёлтая разметка 1.14.1 по ГОСТ Р 51256 (чередование белых и жёлтых полос термопластика)
   const usableW = Math.max(1.8, cw.width - 0.8);
   const stripes = Math.max(3, Math.floor(cw.width / 0.82));
   for (let i = 0; i < stripes; i++) {
     const sx = ((i + 0.5) / stripes - 0.5) * usableW;
     const isYellow = i % 2 === 1;
-    const stripe = new THREE.Mesh(
-      new THREE.PlaneGeometry(isYellow ? 0.36 : 0.44, cw.length),
-      isYellow ? mats.yellowMarkMat : mats.whiteMarkMat
+    b.addFlatQuad(
+      isYellow ? mats.yellowMarkMat : mats.whiteMarkMat,
+      wx(sx, 0),
+      isYellow ? 0.0255 : 0.026,
+      wz(sx, 0),
+      isYellow ? 0.36 : 0.44,
+      cw.length,
+      cw.h
     );
-    stripe.rotation.x = -Math.PI / 2;
-    stripe.position.set(sx, isYellow ? -0.0005 : 0, 0);
-    cwGroup.add(stripe);
   }
 
-  // Жёлтая рифлёная тактильная плитка ГОСТ Р 52875 на обоих сходах с тротуара
   const tactLen = Math.min(2.8, cw.length * 0.78);
   for (const side of [-1, 1]) {
-    const tact = new THREE.Mesh(makeWorldUvPlane(0.62, tactLen, 0.62), mats.tactileMat);
-    tact.rotation.x = -Math.PI / 2;
-    tact.position.set(side * (cw.width * 0.5 + 0.58), 0.078, 0);
-    tact.receiveShadow = true;
-    cwGroup.add(tact);
+    const lx = side * (cw.width * 0.5 + 0.58);
+    b.addWorldUvQuad(mats.tactileMat, wx(lx, 0), 0.104, wz(lx, 0), 0.62, tactLen, cw.h, 0.62, 0.62, true);
   }
 
-  // Двусторонние знаки 5.19.1 и 5.19.2 на флуоресцентных жёлто-зелёных щитах ГОСТ справа и слева от перехода
-  const addDual519Post = (px: number, pz: number, frontIs5191: boolean) => {
-    const post = new THREE.Group();
-    post.position.set(px, -0.026, pz);
+  const emitDual519 = (lx: number, lz: number, frontIs5191: boolean) => {
+    const px = wx(lx, lz);
+    const pz = wz(lx, lz);
     const signY = 2.58;
-    addSignPoleHardware(post, 2.95, signY, mats);
-
-    const core = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.82, 0.028), mats.signBackMat);
-    core.position.set(0, signY, 0);
-    core.castShadow = true;
-
-    const f1 = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.84, 0.84),
-      frontIs5191 ? mats.cw519RightMat : mats.cw519LeftMat
+    emitSignPoleHardware(detailChunks, px, pz, cw.h, 2.95, signY, mats);
+    const pb = detailChunks.at(px, pz, 1.5);
+    pb.addBox(mats.signBackMat, px, signY, pz, 0.82, 0.82, 0.028, cw.h);
+    pb.addVerticalQuad(
+      frontIs5191 ? mats.cw519RightMat : mats.cw519LeftMat,
+      px - sh * 0.018,
+      signY,
+      pz - ch * 0.018,
+      0.84,
+      0.84,
+      cw.h + Math.PI
     );
-    f1.position.set(0, signY, -0.018);
-    f1.rotation.y = Math.PI;
-
-    const f2 = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.84, 0.84),
-      frontIs5191 ? mats.cw519LeftMat : mats.cw519RightMat
+    pb.addVerticalQuad(
+      frontIs5191 ? mats.cw519LeftMat : mats.cw519RightMat,
+      px + sh * 0.018,
+      signY,
+      pz + ch * 0.018,
+      0.84,
+      0.84,
+      cw.h
     );
-    f2.position.set(0, signY, 0.018);
-
-    post.add(core, f1, f2);
-    cwGroup.add(post);
   };
 
-  addDual519Post(-cw.width * 0.5 - 0.95, -cw.length * 0.5 - 0.55, true);
-  addDual519Post(cw.width * 0.5 + 0.95, cw.length * 0.5 + 0.55, false);
-
-  group.add(cwGroup);
+  emitDual519(-cw.width * 0.5 - 0.95, -cw.length * 0.5 - 0.55, true);
+  emitDual519(cw.width * 0.5 + 0.95, cw.length * 0.5 + 0.55, false);
 }
 
-/** Собирает трёхсекционную транспортную головку светофора Т.1 по ГОСТ (белый кант + козырьки + LED-линзы + ореол). */
-function makeSignalHeadT1(
-  scale: number,
-  mats: RoadMaterialPack,
-  redMat: THREE.MeshBasicMaterial,
-  yellowMat: THREE.MeshBasicMaterial,
-  greenMat: THREE.MeshBasicMaterial,
-  redHaloMat: THREE.MeshBasicMaterial,
-  yellowHaloMat: THREE.MeshBasicMaterial,
-  greenHaloMat: THREE.MeshBasicMaterial
-): THREE.Group {
-  const head = new THREE.Group();
-  const w = 0.36 * scale;
-  const h = 1.06 * scale;
-  const d = 0.22 * scale;
-
-  // Белый световозвращающий фоновый экран (кант) по ГОСТ Р 52282
-  const screen = new THREE.Mesh(new THREE.BoxGeometry(w + 0.09 * scale, h + 0.09 * scale, 0.022), mats.signalBorderMat);
-  screen.position.z = -d * 0.42;
-  // Чёрный корпус светофора
-  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats.signalBodyMat);
-  body.castShadow = true;
-  head.add(screen, body);
-
-  const lensR = 0.118 * scale;
-  const lensGeo = new THREE.CircleGeometry(lensR, 18);
-  const haloGeo = new THREE.PlaneGeometry(lensR * 3.5, lensR * 3.5);
-  // Полукруглый солнцезащитный козырёк (бленда) над каждой линзой
-  const visorGeo = new THREE.CylinderGeometry(
-    lensR * 1.08,
-    lensR * 1.08,
-    0.16 * scale,
-    14,
-    1,
-    true,
-    -Math.PI * 0.55,
-    Math.PI * 1.1
-  );
-
-  const items: Array<[number, THREE.MeshBasicMaterial, THREE.MeshBasicMaterial]> = [
-    [0.33 * scale, redMat, redHaloMat],
-    [0, yellowMat, yellowHaloMat],
-    [-0.33 * scale, greenMat, greenHaloMat],
-  ];
-  for (const [ly, lMat, hMat] of items) {
-    const lens = new THREE.Mesh(lensGeo, lMat);
-    lens.position.set(0, ly, -d * 0.5 - 0.006);
-    lens.rotation.y = Math.PI;
-
-    const halo = new THREE.Mesh(haloGeo, hMat);
-    halo.position.set(0, ly, -d * 0.5 - 0.014);
-    halo.rotation.y = Math.PI;
-
-    const visor = new THREE.Mesh(visorGeo, mats.signalBodyMat);
-    visor.rotation.order = "YXZ";
-    visor.rotation.x = Math.PI / 2;
-    visor.rotation.z = Math.PI;
-    visor.position.set(0, ly + lensR * 0.08, -d * 0.5 - 0.075 * scale);
-
-    head.add(lens, halo, visor);
-  }
-  return head;
-}
-
-/** Строит светофорный пост ГОСТ Р 52282: стоп-линия 1.12, опора, табличка 6.16 «СТОП», Т.1, Г-консоль и П.1. */
+/**
+ * Строит светофорный пост ГОСТ Р 52282: все статические элементы (стоп-линия 1.12, опора, Г-консоль, корпуса,
+ * фоновые экраны, козырьки и табличка 6.16 «СТОП») сливаются в чанк, а динамические LED-линзы выносятся в лёгкую группу.
+ */
 export function buildGostTrafficSignal(
-  group: THREE.Group,
+  detailChunks: SpatialChunkBatcher,
+  dynamicParent: THREE.Group,
   sig: TrafficSignalDef,
   mats: RoadMaterialPack
 ): GostSignalVisualHandle {
-  // Широкая стоп-линия 1.12 (0.40 м)
-  const stopLine = new THREE.Mesh(new THREE.PlaneGeometry(sig.stopLineWidth, 0.42), mats.whiteMarkMat);
-  stopLine.rotation.order = "YXZ";
-  stopLine.rotation.y = sig.h;
-  stopLine.rotation.x = -Math.PI / 2;
-  stopLine.position.set(sig.stopLineX, 0.029, sig.stopLineZ);
-  group.add(stopLine);
+  // Стоп-линия 1.12
+  detailChunks
+    .at(sig.stopLineX, sig.stopLineZ, sig.stopLineWidth * 0.5 + 1)
+    .addFlatQuad(mats.whiteMarkMat, sig.stopLineX, 0.029, sig.stopLineZ, sig.stopLineWidth, 0.42, sig.h);
+
+  const sh = Math.sin(sig.h);
+  const ch = Math.cos(sig.h);
+  const wx = (lx: number, lz: number) => sig.x + lx * ch + lz * sh;
+  const wz = (lx: number, lz: number) => sig.z - lx * sh + lz * ch;
+  const b = detailChunks.at(sig.x, sig.z, 5);
+
+  const hasMastArm = sig.stopLineWidth >= 4.0;
+  const poleH = hasMastArm ? 5.65 : 4.15;
+
+  // Опора, фундамент, фланец, клеммный шкаф и табличка 6.16 «СТОП» — в общий статический бакет
+  b.addProto(mats.concreteBaseMat, mats.protos.taperPole, sig.x, 0.12, sig.z, 0, sig.h, 0, 0.23, 0.24, 0.23);
+  b.addProto(mats.darkIronMat, mats.protos.cyl8, sig.x, 0.26, sig.z, 0, sig.h, 0, 0.165, 0.05, 0.165);
+  b.addProto(mats.galvPoleMat, mats.protos.taperPole, sig.x, poleH * 0.5, sig.z, 0, sig.h, 0, 0.095, poleH, 0.095);
+  b.addBox(mats.galvPoleMat, wx(0, 0.1), 1.25, wz(0, 0.1), 0.24, 0.38, 0.16, sig.h);
+  b.addVerticalQuad(mats.stopPlaqueMat, wx(0, -0.105), 2.28, wz(0, -0.105), 0.62, 0.24, sig.h + Math.PI);
+  b.addVerticalQuad(mats.signBackMat, wx(0, -0.095), 2.28, wz(0, -0.095), 0.6, 0.22, sig.h);
 
   const redMat = new THREE.MeshBasicMaterial({ color: 0x380c0c });
   const yellowMat = new THREE.MeshBasicMaterial({ color: 0x382b08 });
@@ -900,104 +855,121 @@ export function buildGostTrafficSignal(
   const pedRedMat = new THREE.MeshBasicMaterial({ color: 0x380c0c });
   const pedGreenMat = new THREE.MeshBasicMaterial({ color: 0x08351d });
 
-  const g = new THREE.Group();
-  g.position.set(sig.x, 0, sig.z);
-  g.rotation.y = sig.h;
+  const lensGroup = new THREE.Group();
+  lensGroup.position.set(sig.x, 0, sig.z);
+  lensGroup.rotation.y = sig.h;
 
-  const hasMastArm = sig.stopLineWidth >= 4.0;
-  const poleH = hasMastArm ? 5.65 : 4.15;
+  const addHeadT1 = (hx: number, hy: number, hz: number, scale: number) => {
+    const w = 0.36 * scale;
+    const h = 1.06 * scale;
+    const d = 0.22 * scale;
+    b.addBox(mats.signalBorderMat, wx(hx, hz - d * 0.42), hy, wz(hx, hz - d * 0.42), w + 0.09 * scale, h + 0.09 * scale, 0.022, sig.h);
+    b.addBox(mats.signalBodyMat, wx(hx, hz), hy, wz(hx, hz), w, h, d, sig.h, { keepBottom: true });
 
-  // Бетонный фундамент, анкерный фланец, гранёная оцинкованная опора и клеммный шкаф
-  const found = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.23, 0.24, 8), mats.concreteBaseMat);
-  found.position.y = 0.12;
-  const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.17, 0.05, 8), mats.darkIronMat);
-  flange.position.y = 0.26;
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.095, poleH, 8), mats.galvPoleMat);
-  pole.position.y = poleH * 0.5;
-  pole.castShadow = true;
-  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.38, 0.16), mats.galvPoleMat);
-  cabinet.position.set(0, 1.25, 0.1);
-  g.add(found, flange, pole, cabinet);
+    const lensR = 0.118 * scale;
+    const items: Array<[number, THREE.MeshBasicMaterial, THREE.MeshBasicMaterial]> = [
+      [0.33 * scale, redMat, redHaloMat],
+      [0, yellowMat, yellowHaloMat],
+      [-0.33 * scale, greenMat, greenHaloMat],
+    ];
+    for (const [ly, lMat, hMat] of items) {
+      const vz = hz - d * 0.5 - 0.075 * scale;
+      b.addProto(mats.signalBodyMat, mats.protos.visor, wx(hx, vz), hy + ly + lensR * 0.08, wz(hx, vz), 0, sig.h, 0, scale, scale, scale);
 
-  // Табличка 6.16 «СТОП» на опоре под основной секцией
-  const stopPlaque = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.24), mats.stopPlaqueMat);
-  stopPlaque.position.set(0, 2.28, -0.105);
-  stopPlaque.rotation.y = Math.PI;
-  const stopBack = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.22), mats.signBackMat);
-  stopBack.position.set(0, 2.28, -0.095);
-  g.add(stopPlaque, stopBack);
+      const lens = new THREE.Mesh(mats.sharedLensGeo, lMat);
+      lens.scale.set(lensR, lensR, 1);
+      lens.position.set(hx, hy + ly, hz - d * 0.5 - 0.006);
+      lens.rotation.y = Math.PI;
 
-  // Основная правая головка Т.1 на уровне глаз водителя (y = 3.35 м)
-  const mainHead = makeSignalHeadT1(
-    1.0,
-    mats,
+      const halo = new THREE.Mesh(mats.sharedHaloGeo, hMat);
+      const hs = lensR * 3.5;
+      halo.scale.set(hs, hs, 1);
+      halo.position.set(hx, hy + ly, hz - d * 0.5 - 0.014);
+      halo.rotation.y = Math.PI;
+      lensGroup.add(lens, halo);
+    }
+  };
+
+  addHeadT1(0, 3.38, -0.14, 1.0);
+
+  if (hasMastArm) {
+    const armSpan = Math.min(3.4, Math.max(2.2, sig.stopLineWidth * 0.62));
+    b.addProto(
+      mats.galvPoleMat,
+      mats.protos.cyl8,
+      wx(armSpan * 0.5, 0),
+      poleH - 0.15,
+      wz(armSpan * 0.5, 0),
+      0,
+      sig.h,
+      -Math.PI / 2,
+      0.06,
+      armSpan,
+      0.06,
+      false,
+      false,
+      "YXZ"
+    );
+    b.addProto(
+      mats.galvPoleMat,
+      mats.protos.cyl8,
+      wx(0.42, 0),
+      poleH - 0.56,
+      wz(0.42, 0),
+      0,
+      sig.h,
+      -Math.PI / 4,
+      0.028,
+      1.15,
+      0.028,
+      false,
+      false,
+      "YXZ"
+    );
+    addHeadT1(armSpan - 0.25, poleH - 0.22, -0.14, 1.12);
+  }
+
+  // Пешеходная секция П.1
+  const pedYaw = sig.h + Math.PI * 0.5;
+  b.addBox(mats.signalBodyMat, wx(0.18, 0), 2.52, wz(0.18, 0), 0.24, 0.52, 0.16, pedYaw, { keepBottom: true });
+  b.addBox(mats.signalBorderMat, wx(0.112, 0), 2.52, wz(0.112, 0), 0.29, 0.57, 0.016, pedYaw);
+  for (const [pyOff, pMat] of [
+    [0.12, pedRedMat],
+    [-0.12, pedGreenMat],
+  ] as const) {
+    const pl = new THREE.Mesh(mats.sharedLensGeo, pMat);
+    pl.scale.set(0.078, 0.078, 1);
+    pl.position.set(0.096, 2.52 + pyOff, 0);
+    pl.rotation.y = -Math.PI * 0.5;
+    lensGroup.add(pl);
+  }
+
+  dynamicParent.add(lensGroup);
+  return {
+    def: sig,
+    lensGroup,
     redMat,
     yellowMat,
     greenMat,
     redHaloMat,
     yellowHaloMat,
-    greenHaloMat
-  );
-  mainHead.position.set(0, 3.38, -0.14);
-  g.add(mainHead);
-
-  // Выносная Г-образная консоль с дублирующей головкой Т.1 (Ø300 мм) над полосой движения
-  if (hasMastArm) {
-    const armSpan = Math.min(3.4, Math.max(2.2, sig.stopLineWidth * 0.62));
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.066, armSpan, 8), mats.galvPoleMat);
-    arm.rotation.z = -Math.PI / 2;
-    arm.position.set(armSpan * 0.5, poleH - 0.15, 0);
-    arm.castShadow = true;
-
-    // Раскос жёсткости консоли
-    const brace = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1.15, 6), mats.galvPoleMat);
-    brace.rotation.z = -Math.PI / 4;
-    brace.position.set(0.42, poleH - 0.56, 0);
-
-    const overHead = makeSignalHeadT1(
-      1.12,
-      mats,
-      redMat,
-      yellowMat,
-      greenMat,
-      redHaloMat,
-      yellowHaloMat,
-      greenHaloMat
-    );
-    overHead.position.set(armSpan - 0.25, poleH - 0.22, -0.14);
-    g.add(arm, brace, overHead);
-  }
-
-  // Боковая двухсекционная пешеходная головка П.1 (обращена поперёк дороги к переходящим)
-  const pedHead = new THREE.Group();
-  pedHead.position.set(0.18, 2.52, 0);
-  pedHead.rotation.y = Math.PI / 2;
-  const pedBox = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.52, 0.16), mats.signalBodyMat);
-  const pedBorder = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.57, 0.016), mats.signalBorderMat);
-  pedBorder.position.z = -0.068;
-  const pLensGeo = new THREE.CircleGeometry(0.078, 14);
-  const pRed = new THREE.Mesh(pLensGeo, pedRedMat);
-  pRed.position.set(0, 0.12, -0.084);
-  pRed.rotation.y = Math.PI;
-  const pGrn = new THREE.Mesh(pLensGeo, pedGreenMat);
-  pGrn.position.set(0, -0.12, -0.084);
-  pGrn.rotation.y = Math.PI;
-  pedHead.add(pedBorder, pedBox, pRed, pGrn);
-  g.add(pedHead);
-
-  group.add(g);
-  return { def: sig, redMat, yellowMat, greenMat, redHaloMat, yellowHaloMat, greenHaloMat, pedRedMat, pedGreenMat };
+    greenHaloMat,
+    pedRedMat,
+    pedGreenMat,
+  };
 }
 
-/** Определяет угол поворота мачты освещения в сторону ближайшей проезжей части. */
 function findAimAngleToNearestRoad(x: number, z: number, world: WorldData): number {
-  let bestD2 = Infinity;
+  let bestD2 = 900; // смотрим только в радиусе 30 м
   let bestDx = 1;
   let bestDz = 0;
   for (const r of world.roads) {
-    for (let i = 0; i < r.points.length - 1; i++) {
-      const a = r.points[i];
-      const b = r.points[i + 1];
+    const pts = r.points;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      if (Math.min(a.x, b.x) - x > 30 || x - Math.max(a.x, b.x) > 30) continue;
+      if (Math.min(a.z, b.z) - z > 30 || z - Math.max(a.z, b.z) > 30) continue;
       const abx = b.x - a.x;
       const abz = b.z - a.z;
       const lenSq = abx * abx + abz * abz;
@@ -1016,246 +988,181 @@ function findAimAngleToNearestRoad(x: number, z: number, world: WorldData): numb
 }
 
 /**
- * Строит элементы дорожной инфраструктуры РФ/СНГ (`cone`, `pole`, `fence`, `island`, `curb`).
- * Возвращает `true`, если препятствие отрисовано (здания, деревья и авто остаются за `SceneController`).
+ * Пакетно записывает элементы уличной инфраструктуры РФ/СНГ (`cone`, `pole`, `fence`, `island`, `curb`) в чанки.
+ * Ноль отдельных `THREE.Mesh` на секции заборов, столбики, мачты, конусы и бордюры!
  */
 export function buildGostStreetProp(
-  group: THREE.Group,
+  detailChunks: SpatialChunkBatcher,
   obs: ObstacleBox,
   world: WorldData,
   mats: RoadMaterialPack
 ): boolean {
-  if (obs.kind === "cone") {
-    // Сигнальный дорожный конус КС-2.2 по ГОСТ 32758: резиновая восьмиугольная база + 2 белые световозвращающие полосы
-    const g = new THREE.Group();
-    g.position.set(obs.cx, 0, obs.cz);
-    const h = Math.max(0.45, obs.height);
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.2, 0.045, 8), mats.darkIronMat);
-    base.position.y = 0.0225;
-    base.receiveShadow = true;
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(0.135, h, 14),
-      new THREE.MeshStandardMaterial({ color: 0xf95b12, roughness: 0.42 })
-    );
-    cone.position.y = h * 0.5 + 0.035;
-    cone.castShadow = true;
+  const p = mats.protos;
 
-    const addBand = (fracY: number, bh: number) => {
-      const yTop = fracY + bh * 0.5;
-      const yBot = fracY - bh * 0.5;
-      const rAt = (f: number) => Math.max(0.02, 0.137 * (1 - f));
-      const band = new THREE.Mesh(
-        new THREE.CylinderGeometry(rAt(yTop), rAt(yBot), h * bh, 14),
-        mats.reflWhiteMat
-      );
-      band.position.y = 0.035 + h * fracY;
-      g.add(band);
-    };
-    addBand(0.72, 0.15);
-    addBand(0.42, 0.13);
-    g.add(base, cone);
-    group.add(g);
+  if (obs.kind === "cone") {
+    const b = detailChunks.at(obs.cx, obs.cz, 1);
+    const h = Math.max(0.45, obs.height);
+    b.addProto(mats.darkIronMat, p.taperPole, obs.cx, 0.0225, obs.cz, 0, 0, 0, 0.2, 0.045, 0.2, false, true);
+    b.addProto(mats.coneOrangeMat, p.cone10, obs.cx, h * 0.5 + 0.035, obs.cz, 0, 0, 0, 1, h, 1, true);
+    b.addProto(mats.reflWhiteMat, p.coneBandTop, obs.cx, 0.035 + h * 0.72, obs.cz, 0, 0, 0, 1, h * 0.15, 1);
+    b.addProto(mats.reflWhiteMat, p.coneBandBot, obs.cx, 0.035 + h * 0.42, obs.cz, 0, 0, 0, 1, h * 0.13, 1);
     return true;
   }
 
   if (obs.kind === "pole") {
-    const g = new THREE.Group();
-    g.position.set(obs.cx, 0, obs.cz);
-
+    const b = detailChunks.at(obs.cx, obs.cz, 2.5);
     if (obs.height >= 2.2) {
-      // Городская мачта уличного освещения ОГК с тумбой, выносным кронштейном и LED-светильником
-      g.rotation.y = findAimAngleToNearestRoad(obs.cx, obs.cz, world);
+      const yaw = findAimAngleToNearestRoad(obs.cx, obs.cz, world);
+      const sh = Math.sin(yaw);
+      const ch = Math.cos(yaw);
       const h = Math.max(4.6, obs.height * 1.45);
-      const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.17, 0.85, 8), mats.darkIronMat);
-      plinth.position.y = 0.425;
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.105, h - 0.7, 8), mats.galvPoleMat);
-      shaft.position.y = 0.7 + (h - 0.7) * 0.5;
-      shaft.castShadow = true;
-
-      // Наклонный выносной кронштейн в сторону проезжей части (+Z группы)
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.045, 1.35, 7), mats.galvPoleMat);
-      arm.rotation.x = Math.PI * 0.37;
-      arm.position.set(0, h + 0.18, 0.58);
-
-      // Литой корпус светодиодного консольного светильника и светящийся рассеиватель
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 0.62), mats.darkIronMat);
-      lamp.position.set(0, h + 0.42, 1.28);
-      const diffuser = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.48), mats.luminaireGlowMat);
-      diffuser.rotation.x = Math.PI / 2;
-      diffuser.position.set(0, h + 0.372, 1.28);
-
-      g.add(plinth, shaft, arm, lamp, diffuser);
+      b.addProto(mats.darkIronMat, p.taperPole, obs.cx, 0.425, obs.cz, 0, yaw, 0, 0.17, 0.85, 0.17);
+      b.addProto(mats.galvPoleMat, p.taperPole, obs.cx, 0.7 + (h - 0.7) * 0.5, obs.cz, 0, yaw, 0, 0.105, h - 0.7, 0.105);
+      b.addProto(
+        mats.galvPoleMat,
+        p.cyl8,
+        obs.cx + sh * 0.58,
+        h + 0.18,
+        obs.cz + ch * 0.58,
+        Math.PI * 0.37,
+        yaw,
+        0,
+        0.04,
+        1.35,
+        0.04,
+        false,
+        false,
+        "YXZ"
+      );
+      const lx = obs.cx + sh * 1.28;
+      const lz = obs.cz + ch * 1.28;
+      b.addBox(mats.darkIronMat, lx, h + 0.42, lz, 0.28, 0.09, 0.62, yaw, { keepBottom: true });
+      b.addBox(mats.luminaireGlowMat, lx, h + 0.372, lz, 0.22, 0.012, 0.48, yaw, { keepBottom: true });
     } else {
-      // Чугунный дорожный/антипарковочный столбик ГОСТ со световозвращающими поясками
       const h = Math.max(0.75, obs.height);
       const r = Math.max(0.065, Math.min(0.11, Math.min(obs.halfX, obs.halfZ)));
-      const collar = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.35, r * 1.5, 0.08, 10), mats.darkIronMat);
-      collar.position.y = 0.04;
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.92, r, h, 10), mats.darkIronMat);
-      body.position.y = h * 0.5;
-      body.castShadow = true;
-      const top = new THREE.Mesh(new THREE.SphereGeometry(r * 0.96, 10, 8), mats.darkIronMat);
-      top.position.y = h;
-      const bandW = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.97, r * 0.97, 0.065, 10), mats.reflWhiteMat);
-      bandW.position.y = h * 0.78;
-      const bandR = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.98, r * 0.98, 0.045, 10), mats.reflRedMat);
-      bandR.position.y = h * 0.66;
-      g.add(collar, body, top, bandW, bandR);
+      b.addProto(mats.darkIronMat, p.taperPole, obs.cx, 0.04, obs.cz, 0, 0, 0, r * 1.48, 0.08, r * 1.48);
+      b.addProto(mats.darkIronMat, p.cyl8, obs.cx, h * 0.5, obs.cz, 0, 0, 0, r, h, r, true);
+      b.addProto(mats.darkIronMat, p.finial, obs.cx, h + r * 0.3, obs.cz, 0, 0, 0, r * 16, r * 12, r * 16);
+      b.addProto(mats.reflWhiteMat, p.cyl8, obs.cx, h * 0.78, obs.cz, 0, 0, 0, r * 1.03, 0.065, r * 1.03);
+      b.addProto(mats.reflRedMat, p.cyl8, obs.cx, h * 0.66, obs.cz, 0, 0, 0, r * 1.04, 0.045, r * 1.04);
     }
-    group.add(g);
     return true;
   }
 
   if (obs.kind === "fence") {
-    const fg = new THREE.Group();
-    fg.position.set(obs.cx, 0, obs.cz);
-    fg.rotation.y = obs.h;
     const alongX = obs.halfX >= obs.halfZ;
     const span = (alongX ? obs.halfX : obs.halfZ) * 2;
     const h = Math.max(0.65, obs.height);
+    const sh = Math.sin(obs.h);
+    const ch = Math.cos(obs.h);
+    const ptX = (pos: number) => obs.cx + (alongX ? pos * ch : pos * sh);
+    const ptZ = (pos: number) => obs.cz + (alongX ? -pos * sh : pos * ch);
+    const b = detailChunks.at(obs.cx, obs.cz, span * 0.5 + 1);
 
     if (h >= 1.65) {
-      // Глухой секционный забор (профлист / бетонная ограда) на столбах с верхней планкой
-      const panelMat = new THREE.MeshStandardMaterial({
-        color: obs.color ?? 0x4b5b66,
-        roughness: 0.62,
-        metalness: 0.28,
+      const hex = obs.color ?? 0x4b5b66;
+      let panelMat = mats.fenceSolidCache.get(hex);
+      if (!panelMat) {
+        panelMat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.62, metalness: 0.28 });
+        mats.fenceSolidCache.set(hex, panelMat);
+      }
+      b.addBox(panelMat, obs.cx, h * 0.5 + 0.04, obs.cz, alongX ? span : 0.06, h - 0.12, alongX ? 0.06 : span, obs.h, {
+        castShadow: true,
+        receiveShadow: true,
       });
-      const panel = new THREE.Mesh(
-        new THREE.BoxGeometry(alongX ? span : 0.06, h - 0.12, alongX ? 0.06 : span),
-        panelMat
-      );
-      panel.position.y = h * 0.5 + 0.04;
-      panel.castShadow = true;
-      panel.receiveShadow = true;
-      const capRail = new THREE.Mesh(
-        new THREE.BoxGeometry(alongX ? span + 0.04 : 0.11, 0.05, alongX ? 0.11 : span + 0.04),
-        mats.darkIronMat
-      );
-      capRail.position.y = h;
-      fg.add(panel, capRail);
-
-      const posts = Math.max(2, Math.min(20, Math.round(span / 2.5) + 1));
+      b.addBox(mats.darkIronMat, obs.cx, h, obs.cz, alongX ? span + 0.04 : 0.11, 0.05, alongX ? 0.11 : span + 0.04, obs.h);
+      const posts = Math.max(2, Math.min(18, Math.round(span / 2.6) + 1));
       for (let i = 0; i < posts; i++) {
         const pos = posts === 1 ? 0 : (i / (posts - 1) - 0.5) * Math.max(0.2, span - 0.1);
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, h + 0.04, 0.1), mats.darkIronMat);
-        post.position.set(alongX ? pos : 0, (h + 0.04) * 0.5, alongX ? 0 : pos);
-        fg.add(post);
+        b.addBox(mats.darkIronMat, ptX(pos), (h + 0.04) * 0.5, ptZ(pos), 0.1, h + 0.04, 0.1, obs.h);
       }
     } else {
-      // Городское пешеходное перильное ограждение ПО-2 ГОСТ (стойки с шариками + поручни + крестовые секции)
-      const railMat = new THREE.MeshStandardMaterial({
-        color: obs.color ?? 0x6b7785,
-        metalness: 0.42,
-        roughness: 0.48,
-      });
-      for (const ry of [h * 0.92, h * 0.76, h * 0.18]) {
-        const rail = new THREE.Mesh(
-          new THREE.BoxGeometry(alongX ? span : 0.055, 0.05, alongX ? 0.055 : span),
-          railMat
-        );
-        rail.position.y = ry;
-        rail.castShadow = true;
-        fg.add(rail);
+      const hex = obs.color ?? 0x6b7785;
+      let railMat = mats.fenceRailCache.get(hex);
+      if (!railMat) {
+        railMat = new THREE.MeshStandardMaterial({ color: hex, metalness: 0.42, roughness: 0.48 });
+        mats.fenceRailCache.set(hex, railMat);
       }
-      const sections = Math.max(1, Math.min(22, Math.round(span / 1.9)));
+      for (const ry of [h * 0.92, h * 0.76, h * 0.18]) {
+        b.addBox(railMat, obs.cx, ry, obs.cz, alongX ? span : 0.055, 0.05, alongX ? 0.055 : span, obs.h, {
+          keepBottom: true,
+        });
+      }
+      const sections = Math.max(1, Math.min(18, Math.round(span / 2.1)));
       const secLen = span / sections;
       const diagH = h * 0.56;
       const diagLen = Math.hypot(secLen * 0.86, diagH);
       const diagTilt = Math.atan2(diagH, secLen * 0.86);
+      const barYaw = alongX ? obs.h : obs.h + Math.PI * 0.5;
 
       for (let i = 0; i <= sections; i++) {
         const pos = -span * 0.5 + i * secLen;
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.075, h, 0.075), railMat);
-        post.position.set(alongX ? pos : 0, h * 0.5, alongX ? 0 : pos);
-        post.castShadow = true;
-        const finial = new THREE.Mesh(new THREE.SphereGeometry(0.052, 8, 6), railMat);
-        finial.position.set(alongX ? pos : 0, h + 0.035, alongX ? 0 : pos);
-        fg.add(post, finial);
+        const px = ptX(pos);
+        const pz = ptZ(pos);
+        b.addBox(railMat, px, h * 0.5, pz, 0.075, h, 0.075, obs.h);
+        b.addProto(railMat, p.finial, px, h + 0.035, pz, 0, obs.h, 0, 1, 1, 1);
 
         if (i < sections && secLen >= 0.7) {
           const mid = pos + secLen * 0.5;
+          const mx = ptX(mid);
+          const mz = ptZ(mid);
           for (const sgn of [-1, 1]) {
-            const bar = new THREE.Mesh(new THREE.BoxGeometry(diagLen, 0.035, 0.035), railMat);
-            if (alongX) {
-              bar.rotation.z = sgn * diagTilt;
-              bar.position.set(mid, h * 0.47, 0);
-            } else {
-              bar.rotation.order = "YXZ";
-              bar.rotation.y = Math.PI / 2;
-              bar.rotation.z = sgn * diagTilt;
-              bar.position.set(0, h * 0.47, mid);
-            }
-            fg.add(bar);
+            b.addProto(railMat, p.unitBox, mx, h * 0.47, mz, 0, barYaw, sgn * diagTilt, diagLen, 0.035, 0.035, false, false, "YXZ");
           }
         }
       }
     }
-    group.add(fg);
     return true;
   }
 
   if (obs.kind === "island") {
-    // Направляющий островок безопасности в чёрно-белом ГОСТ-бордюре с плиткой/газоном и сигнальными катафотами
-    const ig = new THREE.Group();
-    ig.position.set(obs.cx, 0, obs.cz);
-    ig.rotation.y = obs.h;
     const h = Math.max(0.15, obs.height);
     const w = obs.halfX * 2;
     const l = obs.halfZ * 2;
-
-    const curb = new THREE.Mesh(makeCurbBoxGeo(w, h, l, w > l), mats.curbBwMat);
-    curb.position.y = h * 0.5;
-    curb.receiveShadow = true;
-    curb.castShadow = true;
-    ig.add(curb);
-
+    const sh = Math.sin(obs.h);
+    const ch = Math.cos(obs.h);
+    const b = detailChunks.at(obs.cx, obs.cz, Math.max(w, l) * 0.5 + 1);
+    b.addBox(mats.curbBwMat, obs.cx, h * 0.5, obs.cz, w, h, l, obs.h, {
+      receiveShadow: true,
+      curbTileM: 2.0,
+      curbAlongX: w > l,
+    });
     if (obs.halfX > 0.28 && obs.halfZ > 0.28) {
-      const top = new THREE.Mesh(makeWorldUvPlane(w - 0.34, l - 0.34, 2.0), mats.sidewalkMat);
-      top.rotation.x = -Math.PI / 2;
-      top.position.y = h + 0.012;
-      top.receiveShadow = true;
-      ig.add(top);
-
-      // Компактные сигнальные столбики-делиниаторы с жёлтым катафотом на торцах островка
+      b.addWorldUvQuad(mats.sidewalkMat, obs.cx, h + 0.012, obs.cz, w - 0.34, l - 0.34, obs.h, 2.0, 2.0, true);
       if (Math.max(w, l) >= 2.2) {
         const alongZ = l >= w;
         const off = (alongZ ? obs.halfZ : obs.halfX) - 0.28;
+        const dYaw = alongZ ? obs.h : obs.h + Math.PI * 0.5;
         for (const sgn of [-1, 1]) {
-          const delin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.52, 0.05), mats.darkIronMat);
-          const refl = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.26, 0.06), mats.reflYellowMat);
-          const px = alongZ ? 0 : sgn * off;
-          const pz = alongZ ? sgn * off : 0;
-          delin.position.set(px, h + 0.26, pz);
-          refl.position.set(px, h + 0.34, pz);
-          if (!alongZ) {
-            delin.rotation.y = Math.PI / 2;
-            refl.rotation.y = Math.PI / 2;
-          }
-          ig.add(delin, refl);
+          const lx = alongZ ? 0 : sgn * off;
+          const lz = alongZ ? sgn * off : 0;
+          const dx = obs.cx + lx * ch + lz * sh;
+          const dz = obs.cz - lx * sh + lz * ch;
+          b.addBox(mats.darkIronMat, dx, h + 0.26, dz, 0.12, 0.52, 0.05, dYaw);
+          b.addBox(mats.reflYellowMat, dx, h + 0.34, dz, 0.09, 0.26, 0.06, dYaw);
         }
       }
     }
-    group.add(ig);
     return true;
   }
 
   if (obs.kind === "curb") {
-    // Бордюрный камень БР 100.30.15 с чёрно-белой покраской ГОСТ (на автодроме и у карманов) или бетонной расшивкой
     const alongX = obs.halfX >= obs.halfZ;
     const len = (alongX ? obs.halfX : obs.halfZ) * 2;
-    const thick = (alongX ? obs.halfZ : obs.halfX) * 2;
     const isBoundaryCurb = obs.id.startsWith("boundary-curb-");
     const useBw = !isBoundaryCurb || world.roads.length <= 1;
-    const mesh = new THREE.Mesh(
-      makeCurbBoxGeo(thick, obs.height, len, alongX),
-      useBw ? mats.curbBwMat : mats.curbGreyMat
+    detailChunks.at(obs.cx, obs.cz, len * 0.5 + 1).addBox(
+      useBw ? mats.curbBwMat : mats.curbGreyMat,
+      obs.cx,
+      obs.height * 0.5,
+      obs.cz,
+      obs.halfX * 2,
+      obs.height,
+      obs.halfZ * 2,
+      obs.h,
+      { receiveShadow: true, curbTileM: 2.0, curbAlongX: alongX }
     );
-    mesh.position.set(obs.cx, obs.height * 0.5, obs.cz);
-    mesh.rotation.y = obs.h;
-    mesh.receiveShadow = true;
-    mesh.castShadow = true;
-    group.add(mesh);
     return true;
   }
 

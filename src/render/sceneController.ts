@@ -16,9 +16,10 @@
 import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
 import {
-  buildRealisticTree,
-  buildRussianBuilding,
   createCityEnvironmentPack,
+  emitRealisticTree,
+  emitRussianBuilding,
+  finalizeCityEnvironmentPack,
   makeCloudySkyTexture,
   type CityEnvironmentPack,
 } from "./cityBuildings";
@@ -30,10 +31,12 @@ import {
   buildGostTrafficSignal,
   buildWorldRoadsAndSidewalks,
   createRoadMaterialPack,
+  finalizeRoadMaterialPack,
   type GostSignalVisualHandle,
   type RoadMaterialPack,
 } from "./roadInfra";
 import { makeGostBayStencilTexture, makeUrbanGrassTexture } from "./roadTextures";
+import { SpatialChunkBatcher, type WorldChunkHandle } from "./staticBatcher";
 import {
   buildDetailedCar,
   buildDetailedPedestrian,
@@ -137,12 +140,23 @@ export class SceneController {
   private readonly sun: THREE.DirectionalLight;
   private readonly groundMesh: THREE.Mesh;
   private readonly worldGroup = new THREE.Group();
-  private readonly buildingMeshes: THREE.Object3D[] = [];
+  private readonly roadChunks: WorldChunkHandle[] = [];
+  private readonly detailChunks: WorldChunkHandle[] = [];
+  private readonly worldPoolMaterials: THREE.Material[] = [];
+  private readonly worldPoolTextures: THREE.Texture[] = [];
+  private readonly worldPoolGeometries: THREE.BufferGeometry[] = [];
   private readonly signalVisuals: SignalVisual[] = [];
   private readonly pedVisuals: PedestrianVisual[] = [];
+  private readonly parkedCarRoots: THREE.Object3D[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
   private readonly bayVisuals: BayVisual[] = [];
   private readonly playerRig: CarRig;
+  private isLargeWorld = false;
+  private totalBuildings = 0;
+  private shadowDirty = true;
+  private lastShadowX = Number.NaN;
+  private lastShadowZ = Number.NaN;
+  private lastShadowH = Number.NaN;
 
   // Прогнозная траектория Аккермана
   private readonly trajGroup = new THREE.Group();
@@ -207,6 +221,8 @@ export class SceneController {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Управляемое обновление карты теней: пересчитывается при движении/смене мира, без лишних проходов в покое
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
 
@@ -291,10 +307,10 @@ export class SceneController {
     // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир без пересечения крыши/салона;
     // боковые дополнительно видят наружную кромку автомобиля, но не корпуса зеркал.
     this.rearRT = new THREE.WebGLRenderTarget(320, 96, { depthBuffer: true });
-    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 130);
+    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 112);
     this.rearBuf = new Uint8Array(320 * 96 * 4);
     this.sideRT = new THREE.WebGLRenderTarget(320, 160, { depthBuffer: true });
-    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 130);
+    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 105);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
 
@@ -358,43 +374,66 @@ export class SceneController {
     } else {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       this.renderer.shadowMap.enabled = true;
-      this.sun.shadow.mapSize.set(2048, 2048);
+      const sz = this.isLargeWorld ? 1024 : 2048;
+      this.sun.shadow.mapSize.set(sz, sz);
     }
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
+    this.shadowDirty = true;
   }
 
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
-    this.disposeGroup(this.worldGroup);
-    this.buildingMeshes.length = 0;
+    this.clearWorldResources();
+    this.roadChunks.length = 0;
+    this.detailChunks.length = 0;
     this.signalVisuals.length = 0;
     this.pedVisuals.length = 0;
+    this.parkedCarRoots.length = 0;
     this.checkpointMeshes.length = 0;
     this.bayVisuals.length = 0;
+    this.totalBuildings = 0;
+    this.shadowDirty = true;
+    this.lastShadowX = Number.NaN;
+    this.lastShadowZ = Number.NaN;
+    this.lastShadowH = Number.NaN;
+    this.cockpitRearPrimed = false;
+    this.cockpitSidePrimed = false;
 
-    // Подгоняем травяную подложку и дальность камеры под реальные размеры карты (вплоть до 6×6 км)
+    // Подгоняем травяную подложку, карту теней и дальность камеры под реальные размеры карты (вплоть до 6×6 км)
     const spanX = Math.max(120, world.bounds.maxX - world.bounds.minX);
     const spanZ = Math.max(120, world.bounds.maxZ - world.bounds.minZ);
     const maxSpan = Math.max(spanX, spanZ);
+    this.isLargeWorld = maxSpan > 380 || world.obstacles.length > 180 || world.roads.length > 40;
+    if (this.qualityPreset === "high") {
+      const targetMapSize = this.isLargeWorld ? 1024 : 2048;
+      if (this.sun.shadow.mapSize.x !== targetMapSize) {
+        this.sun.shadow.mapSize.set(targetMapSize, targetMapSize);
+        this.sun.shadow.map?.dispose();
+        this.sun.shadow.map = null;
+      }
+    }
     const midX = (world.bounds.minX + world.bounds.maxX) * 0.5;
     const midZ = (world.bounds.minZ + world.bounds.maxZ) * 0.5;
     this.groundMesh.position.set(midX, -0.02, midZ);
     this.groundMesh.scale.set(Math.max(1400, spanX + 900), Math.max(1400, spanZ + 900), 1);
 
-    const targetFar = maxSpan > 340 ? Math.min(2400, Math.max(520, maxSpan * 0.85)) : 420;
+    const targetFar = maxSpan > 340 ? Math.min(1100, Math.max(480, maxSpan * 0.65)) : 420;
     if (this.camera.far !== targetFar) {
       this.camera.far = targetFar;
       this.camera.updateProjectionMatrix();
     }
     if (this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.near = maxSpan > 340 ? 110 : 75;
-      this.scene.fog.far = maxSpan > 340 ? Math.min(560, Math.max(280, maxSpan * 0.55)) : 220;
+      this.scene.fog.near = maxSpan > 340 ? 115 : 80;
+      this.scene.fog.far = maxSpan > 340 ? 340 : 235;
     }
 
     const roadMats = createRoadMaterialPack();
     const cityEnv = createCityEnvironmentPack();
+    // Пространственные чанки сливают десятки тысяч дорог, зданий, деревьев, заборов и знаков в считаные draw calls
+    const roadChunkBatcher = new SpatialChunkBatcher(240);
+    const detailChunkBatcher = new SpatialChunkBatcher(165);
     const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
     const learnerTex = this.sharedTextures[2] as THREE.CanvasTexture;
     const civilPlateTex = this.sharedTextures[5] as THREE.CanvasTexture;
@@ -498,7 +537,7 @@ export class SceneController {
     }
 
     // Дороги, следы наката, объёмные тротуары с плиткой, ГОСТ-бордюры БР 100.30.15, эстакады 11ДО, люки и разметка ГОСТ Р 51256
-    buildWorldRoadsAndSidewalks(this.worldGroup, world, roadMats);
+    buildWorldRoadsAndSidewalks(roadChunkBatcher, detailChunkBatcher, world, roadMats);
 
     // Парковочные боксы (перпендикулярные и параллельные)
     for (const bay of world.bays) {
@@ -562,38 +601,52 @@ export class SceneController {
 
     // Препятствия: автопарк, здания РФ/СНГ (панельные/кирпичные/адм.), многоярусные деревья и инфраструктура ГОСТ
     for (const obs of world.obstacles) {
-      this.addObstacleMesh(obs, world, roadMats, cityEnv, shadowTex, learnerTex, civilPlateTex, clusterTex);
+      this.addObstacleMesh(
+        obs,
+        world,
+        detailChunkBatcher,
+        roadMats,
+        cityEnv,
+        shadowTex,
+        learnerTex,
+        civilPlateTex,
+        clusterTex
+      );
     }
 
     // Светофоры ГОСТ Р 52282 (Т.1 + Г-консоль + П.1 + табличка 6.16 «СТОП») и стоп-линии 1.12
     for (const sig of world.signals) {
-      this.signalVisuals.push(buildGostTrafficSignal(this.worldGroup, sig, roadMats));
+      this.signalVisuals.push(buildGostTrafficSignal(detailChunkBatcher, this.worldGroup, sig, roadMats));
     }
 
     // Пешеходные переходы ГОСТ 1.14.1 (бело-жёлтая «зебра», тактильная плитка, знаки 5.19.1/5.19.2) и пешеходы
     world.crosswalks.forEach((cw, cwIdx) => {
-      buildGostCrosswalk(this.worldGroup, cw, roadMats);
+      buildGostCrosswalk(detailChunkBatcher, cw, roadMats);
       const pedVis = buildDetailedPedestrian(cw.id, cwIdx, shadowTex);
       this.worldGroup.add(pedVis.group);
       this.pedVisuals.push(pedVis);
     });
 
-    // Дорожные знаки ГОСТ Р 52290-2004 (все 12 классов, фигурная подложка, хомуты и ориентация по потоку sign.h)
+    // Дорожные знаки ГОСТ Р 52290-2004 (все 12 классов, кеш текстур, фигурная подложка и ориентация sign.h)
     const renderedSignIds = new Set<string>();
     for (const sign of world.signs ?? []) {
       renderedSignIds.add(`${SIGN_SPEED_ZONE_PREFIX}${sign.id}`);
-      buildGostRoadSign(this.worldGroup, sign, roadMats);
+      buildGostRoadSign(detailChunkBatcher, sign, roadMats);
     }
 
     // Знаки ограничения скорости 3.24 (для встроенных сценариев без дублирования world.signs)
     for (const sz of world.speedZones) {
       if (renderedSignIds.has(sz.id)) continue;
       const aimH = Math.atan2(sz.x - sz.signX, sz.z - sz.signZ);
-      // Поток движется от знака к центру зоны скорости (вдоль оси улицы)
-      const snappedH = Math.abs(Math.cos(aimH)) >= Math.abs(Math.sin(aimH))
-        ? (Math.cos(aimH) >= 0 ? 0 : Math.PI)
-        : (Math.sin(aimH) >= 0 ? Math.PI / 2 : -Math.PI / 2);
-      buildGostSpeedSign(this.worldGroup, sz.limitKmh, sz.signX, sz.signZ, snappedH, roadMats);
+      const snappedH =
+        Math.abs(Math.cos(aimH)) >= Math.abs(Math.sin(aimH))
+          ? Math.cos(aimH) >= 0
+            ? 0
+            : Math.PI
+          : Math.sin(aimH) >= 0
+            ? Math.PI / 2
+            : -Math.PI / 2;
+      buildGostSpeedSign(detailChunkBatcher, sz.limitKmh, sz.signX, sz.signZ, snappedH, roadMats);
     }
 
     // Контрольные точки маршрута (двойной дорожный маркер с красным контуром для STOP и бирюзовым для финиша)
@@ -636,9 +689,19 @@ export class SceneController {
               [-13, -8], [13, -8], [-13, 13], [13, 13], [0, -14], [0, 18],
             ];
       treeCoords.forEach(([tx, tz], tIdx) => {
-        this.worldGroup.add(buildRealisticTree(tx, tz, 4.8, cityEnv, `${world.scenarioId}-t${tIdx}`));
+        emitRealisticTree(detailChunkBatcher, tx, tz, 4.8, cityEnv, `${world.scenarioId}-t${tIdx}`);
       });
     }
+
+    // Сливаем статическую геометрию по чанкам (десятки тысяч примитивов -> считаные draw calls!) и регистрируем ресурсы пулов
+    this.roadChunks.push(...roadChunkBatcher.flush(this.worldGroup));
+    this.detailChunks.push(...detailChunkBatcher.flush(this.worldGroup));
+
+    const roadRes = finalizeRoadMaterialPack(roadMats);
+    const cityRes = finalizeCityEnvironmentPack(cityEnv);
+    this.worldPoolMaterials.push(...roadRes.materials, ...cityRes.materials);
+    this.worldPoolTextures.push(...roadRes.textures, ...cityRes.textures);
+    this.worldPoolGeometries.push(...roadRes.geometries);
 
     this.resetOrbit();
     this.camLookTarget.set(world.start.x, 1.0, world.start.z);
@@ -647,6 +710,7 @@ export class SceneController {
   private addObstacleMesh(
     obs: ObstacleBox,
     world: WorldData,
+    detailChunks: SpatialChunkBatcher,
     roadMats: RoadMaterialPack,
     cityEnv: CityEnvironmentPack,
     shadowTex: THREE.CanvasTexture,
@@ -668,23 +732,22 @@ export class SceneController {
       rig.root.position.set(obs.cx, 0, obs.cz);
       rig.root.rotation.y = obs.h;
       this.worldGroup.add(rig.root);
+      this.parkedCarRoots.push(rig.root);
       return;
     }
 
-    // Дорожная инфраструктура ГОСТ РФ/СНГ (конусы КС-2.2, мачты ОГК / столбики, ограждения ПО-2, островки, бордюры БР 100.30.15)
-    if (buildGostStreetProp(this.worldGroup, obs, world, roadMats)) {
+    if (buildGostStreetProp(detailChunks, obs, world, roadMats)) {
       return;
     }
 
     if (obs.kind === "building") {
-      const bld = buildRussianBuilding(obs, cityEnv);
-      this.worldGroup.add(bld);
-      this.buildingMeshes.push(bld);
+      emitRussianBuilding(detailChunks, obs, cityEnv);
+      this.totalBuildings++;
       return;
     }
 
     if (obs.kind === "tree") {
-      this.worldGroup.add(buildRealisticTree(obs.cx, obs.cz, Math.max(3.4, obs.height), cityEnv, obs.id));
+      emitRealisticTree(detailChunks, obs.cx, obs.cz, Math.max(3.4, obs.height), cityEnv, obs.id);
     }
   }
 
@@ -739,21 +802,43 @@ export class SceneController {
       rig.headSpotR.intensity = inten;
     }
 
-    // Подвижная тень солнца вокруг автомобиля
-    this.sun.position.set(state.x + 26, 44, state.z - 20);
-    this.sun.target.position.set(state.x, 0, state.z);
-
-    // 2. Отсечение дальних зданий по радиусу (оптимизация под школьные ПК)
-    const r2 = opts.drawRadius * opts.drawRadius;
-    let vis = 0;
-    for (const bm of this.buildingMeshes) {
-      const dx = bm.position.x - state.x;
-      const dz = bm.position.z - state.z;
-      const show = dx * dx + dz * dz <= r2;
-      bm.visible = show;
-      if (show) vis++;
+    // Подвижная тень солнца: пересчитывается при старте и реальном смещении/повороте машины (0 лишних GPU-проходов в покое)
+    if (this.renderer.shadowMap.enabled) {
+      const movedSq = (state.x - this.lastShadowX) ** 2 + (state.z - this.lastShadowZ) ** 2;
+      const turned = Math.abs(state.h - this.lastShadowH);
+      if (this.shadowDirty || ((movedSq >= 0.16 || turned >= 0.03) && this.frameCounter % 3 === 0)) {
+        this.sun.position.set(state.x + 26, 44, state.z - 20);
+        this.sun.target.position.set(state.x, 0, state.z);
+        this.lastShadowX = state.x;
+        this.lastShadowZ = state.z;
+        this.lastShadowH = state.h;
+        this.shadowDirty = false;
+        this.renderer.shadowMap.needsUpdate = true;
+      }
     }
-    this.visibleBuildings = vis;
+
+    // 2. Мгновенное отсечение дальних чанков (здания, деревья, заборы, разметка, знаки, дороги) — O(число чанков)
+    const zoomBonus = opts.cameraMode === "top" || opts.cameraMode === "orbit" ? this.orbitDist * 1.4 : 0;
+    const baseDetailR = opts.drawRadius + 30 + zoomBonus;
+    const baseRoadR = opts.drawRadius + 185 + zoomBonus;
+    let visBld = 0;
+    for (let i = 0; i < this.detailChunks.length; i++) {
+      const ch = this.detailChunks[i];
+      const dx = ch.cx - state.x;
+      const dz = ch.cz - state.z;
+      const lim = baseDetailR + ch.radius;
+      const show = dx * dx + dz * dz <= lim * lim;
+      ch.group.visible = show;
+      if (show) visBld += ch.buildingCount;
+    }
+    for (let i = 0; i < this.roadChunks.length; i++) {
+      const ch = this.roadChunks[i];
+      const dx = ch.cx - state.x;
+      const dz = ch.cz - state.z;
+      const lim = baseRoadR + ch.radius;
+      ch.group.visible = dx * dx + dz * dz <= lim * lim;
+    }
+    this.visibleBuildings = visBld;
 
     // 3. Подсветка линий свободных боксов
     for (const bv of this.bayVisuals) {
@@ -770,8 +855,14 @@ export class SceneController {
       }
     }
 
-    // 4. Светофоры (Т.1 + Г-консоль + ореол + пешеходная секция П.1), пешеходы и контрольные точки
+    // 4. Светофоры и пешеходы (с радиусным отсечением для крупных OSM-карт) и контрольные точки
+    const sigLimitSq = (baseDetailR + 24) * (baseDetailR + 24);
     for (const sv of this.signalVisuals) {
+      const sdx = sv.def.x - state.x;
+      const sdz = sv.def.z - state.z;
+      const visSig = sdx * sdx + sdz * sdz <= sigLimitSq;
+      sv.lensGroup.visible = visSig;
+      if (!visSig) continue;
       const { phase } = getTrafficLightPhase(sv.def, state.time);
       const redOn = phase === "red" || phase === "red_yellow";
       const yelOn = phase === "yellow" || phase === "red_yellow";
@@ -782,16 +873,21 @@ export class SceneController {
       sv.redHaloMat.opacity = redOn ? 0.65 : 0;
       sv.yellowHaloMat.opacity = yelOn ? 0.58 : 0;
       sv.greenHaloMat.opacity = grnOn ? 0.62 : 0;
-      // Пешеходная секция П.1: зелёный горит строго при красном транспортном сигнале
       const pedGo = phase === "red";
       sv.pedRedMat.color.setHex(pedGo ? 0x380c0c : 0xff3b3b);
       sv.pedGreenMat.color.setHex(pedGo ? 0x22e584 : 0x08351d);
     }
 
+    const pedLimitSq = (opts.drawRadius + 24) * (opts.drawRadius + 24);
     for (let i = 0; i < this.pedVisuals.length; i++) {
       const pv = this.pedVisuals[i];
       const cw = world.crosswalks[i];
       if (!cw) continue;
+      const cdx = cw.cx - state.x;
+      const cdz = cw.cz - state.z;
+      const visPed = cdx * cdx + cdz * cdz <= pedLimitSq;
+      pv.group.visible = visPed;
+      if (!visPed) continue;
       const pose = getPedestrianPose(cw, state.time);
       pv.group.position.set(pose.x, 0, pose.z);
       pv.group.rotation.y = pose.h;
@@ -800,6 +896,14 @@ export class SceneController {
       pv.legR.rotation.x = -swing;
       pv.armL.rotation.x = -swing * 0.72;
       pv.armR.rotation.x = swing * 0.72;
+    }
+
+    const carLimitSq = (baseDetailR + 12) * (baseDetailR + 12);
+    for (let i = 0; i < this.parkedCarRoots.length; i++) {
+      const carObj = this.parkedCarRoots[i];
+      const pdx = carObj.position.x - state.x;
+      const pdz = carObj.position.z - state.z;
+      carObj.visible = pdx * pdx + pdz * pdz <= carLimitSq;
     }
 
     const activeCp = world.checkpoints[state.currentCheckpointIndex];
@@ -839,52 +943,43 @@ export class SceneController {
     this.playerRig.chassis.updateWorldMatrix(true, false);
     this.updateCamera(state, opts.cameraMode);
 
-    // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели
+    // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели.
+    // При shadowMap.autoUpdate=false Three.js сам сбрасывает needsUpdate после ровно одного прохода теней на кадр
+    // (включая самый первый кадр после loadWorld, так что зеркала сразу получают актуальные тени).
     this.frameCounter++;
     const inCockpit = opts.cameraMode === "cockpit";
     this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors);
 
     if (inCockpit && (opts.showRearMirror || opts.showMirrors)) {
-      const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
-      this.renderer.shadowMap.autoUpdate = false;
-      const stride = this.qualityPreset === "low" ? 3 : 2;
-      try {
-        if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
-          this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
-          this.cockpitRearPrimed = true;
+      const stride = this.qualityPreset === "low" ? 4 : this.isLargeWorld ? 3 : 2;
+      if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
+        this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
+        this.cockpitRearPrimed = true;
+      }
+      // Боковые зеркала настроены по методике автошколы: внутренняя кромка показывает борт своего авто, остальное — полосу и бордюр
+      const mountX = CAR.width / 2 + 0.13;
+      if (opts.showMirrors) {
+        const prime = !this.cockpitSidePrimed;
+        if (prime || this.frameCounter % stride === 0) {
+          this.renderMirrorTarget(this.cockpitLeftRT, this.sideCam, mountX, 0.945, 0.65, -0.37, -0.105, 44);
         }
-        // Боковые зеркала настроены по методике автошколы: внутренняя кромка показывает борт своего авто, остальное — полосу и бордюр
-        const mountX = CAR.width / 2 + 0.13;
-        if (opts.showMirrors) {
-          const prime = !this.cockpitSidePrimed;
-          if (prime || this.frameCounter % stride === 0) {
-            this.renderMirrorTarget(this.cockpitLeftRT, this.sideCam, mountX, 0.945, 0.65, -0.37, -0.105, 44);
-          }
-          if (prime || this.frameCounter % stride === 1) {
-            this.renderMirrorTarget(this.cockpitRightRT, this.sideCam, -mountX, 0.945, 0.65, 0.37, -0.105, 44);
-          }
-          this.cockpitSidePrimed = true;
+        if (prime || this.frameCounter % stride === 1) {
+          this.renderMirrorTarget(this.cockpitRightRT, this.sideCam, -mountX, 0.945, 0.65, 0.37, -0.105, 44);
         }
-      } finally {
-        this.renderer.shadowMap.autoUpdate = prevShadowAuto;
+        this.cockpitSidePrimed = true;
       }
     } else if (!inCockpit && mirrors && (opts.showMirrors || opts.showRearMirror)) {
-      const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
-      this.renderer.shadowMap.autoUpdate = false;
-      try {
-        if (opts.showRearMirror && mirrors.rear && this.frameCounter % 2 === 0) {
-          this.renderInto(this.rearRT, this.rearCam, this.rearBuf, 0, 1.24, 0.25, 0, -0.08, 38, mirrors.rear);
-        }
-        // Камеры направлены назад и наружу: +X слева, −X справа. Не «смотрят» сквозь дверь.
-        const mountX = CAR.width / 2 + 0.14;
-        if (opts.showMirrors && mirrors.left && this.frameCounter % 3 === 0) {
-          this.renderInto(this.sideRT, this.sideCam, this.sideBuf, mountX, 0.92, 0.49, -0.53, -0.10, 44, mirrors.left);
-        }
-        if (opts.showMirrors && mirrors.right && this.frameCounter % 3 === 1) {
-          this.renderInto(this.sideRT, this.sideCam, this.sideBuf, -mountX, 0.92, 0.49, 0.53, -0.10, 44, mirrors.right);
-        }
-      } finally {
-        this.renderer.shadowMap.autoUpdate = prevShadowAuto;
+      const rearStride = this.isLargeWorld ? 3 : 2;
+      const sideStride = this.isLargeWorld ? 4 : 3;
+      if (opts.showRearMirror && mirrors.rear && this.frameCounter % rearStride === 0) {
+        this.renderInto(this.rearRT, this.rearCam, this.rearBuf, 0, 1.24, 0.25, 0, -0.08, 38, mirrors.rear);
+      }
+      const mountX = CAR.width / 2 + 0.14;
+      if (opts.showMirrors && mirrors.left && this.frameCounter % sideStride === 0) {
+        this.renderInto(this.sideRT, this.sideCam, this.sideBuf, mountX, 0.92, 0.49, -0.53, -0.10, 44, mirrors.left);
+      }
+      if (opts.showMirrors && mirrors.right && this.frameCounter % sideStride === 1) {
+        this.renderInto(this.sideRT, this.sideCam, this.sideBuf, -mountX, 0.92, 0.49, 0.53, -0.10, 44, mirrors.right);
       }
     }
 
@@ -1072,7 +1167,7 @@ export class SceneController {
         fps: 60,
         p95FrameMs: 16.6,
         visibleBuildings: this.visibleBuildings,
-        totalBuildings: this.buildingMeshes.length,
+        totalBuildings: this.totalBuildings,
       };
     }
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -1082,16 +1177,29 @@ export class SceneController {
       fps: Math.round(1000 / Math.max(1, avg)),
       p95FrameMs: Number(p95.toFixed(1)),
       visibleBuildings: this.visibleBuildings,
-      totalBuildings: this.buildingMeshes.length,
+      totalBuildings: this.totalBuildings,
     };
   }
 
+  private clearWorldResources(): void {
+    this.disposeGroup(this.worldGroup);
+    this.worldPoolGeometries.forEach((g) => g.dispose());
+    this.worldPoolMaterials.forEach((m) => m.dispose());
+    this.worldPoolTextures.forEach((t) => {
+      if (!this.sharedTextures.includes(t)) t.dispose();
+    });
+    this.worldPoolGeometries.length = 0;
+    this.worldPoolMaterials.length = 0;
+    this.worldPoolTextures.length = 0;
+  }
+
   private disposeGroup(group: THREE.Group): void {
+    const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     const textures = new Set<THREE.Texture>();
     group.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.geometry) geometries.add(mesh.geometry);
       if (mesh.material) {
         const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const m of list) {
@@ -1103,6 +1211,7 @@ export class SceneController {
         }
       }
     });
+    geometries.forEach((g) => g.dispose());
     materials.forEach((m) => m.dispose());
     textures.forEach((t) => t.dispose());
     group.clear();
@@ -1110,7 +1219,7 @@ export class SceneController {
 
   dispose(): void {
     this.syncPhysicalMirrorMaterials(false, false);
-    this.disposeGroup(this.worldGroup);
+    this.clearWorldResources();
     this.disposeGroup(this.playerRig.root);
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
