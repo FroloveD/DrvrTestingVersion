@@ -19,7 +19,7 @@ import {
 import { cropOsmPackToPolygon, parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import { findRoadNetworkPath, roadGeometryPoints } from "../maps/route";
-import { buildExamRouteRecord, fingerprintOsmScenario, isExamRouteRecord } from "../maps/routeCatalog";
+import { buildExamRouteRecord, fingerprintOsmScenario, isExamRouteRecord, reviseExamRouteRecord } from "../maps/routeCatalog";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
@@ -944,6 +944,13 @@ export const extraCases: SelfTestCase[] = [
       );
       assert(!reverse.ok && reverse.error.includes("one-way"),
         "Путь против one-way должен быть отклонён с понятной причиной");
+      const shortReverse = findRoadNetworkPath([{
+        id: "oneway-short",
+        points: [{ x: 0, z: 0 }, { x: 0, z: 100 }],
+        width: 8, lanes: 2, highway: "secondary", oneway: true,
+      }], { x: 0, z: 60 }, { x: 0, z: 58 }, 10);
+      assert(!shortReverse.connected && shortReverse.wrongWay,
+        "Даже короткий путь против one-way на одном длинном сегменте должен блокироваться");
       assert(record.checkpoints.length >= 2 && record.checkpoints[record.checkpoints.length - 1]?.requireStop === true,
         "Нужны промежуточные КТ и финальная КТ с остановкой");
       assert(record.scenarioSnapshot.mapMeta?.attribution === "© OpenStreetMap contributors",
@@ -955,6 +962,28 @@ export const extraCases: SelfTestCase[] = [
       assert((record.maneuvers?.length ?? 0) >= 1 && record.checkpoints.some((checkpoint) => Boolean(checkpoint.requireSignal)),
         "Поворот должен выделяться отдельной контрольной точкой с требованием указателя");
       assert(isExamRouteRecord(record), "Корректная запись должна проходить проверку формата");
+      const editedCheckpoints = record.checkpoints.map((checkpoint, index) => index === 0
+        ? { ...checkpoint, instruction: "Проверить перекрёсток и выполнить задание инструктора.", requireSignal: "left" as const }
+        : checkpoint);
+      const revised = reviseExamRouteRecord(record, "Маршрут после редактора", editedCheckpoints, "2026-11-19T01:00:00.000Z");
+      assert(revised.ok, revised.ok ? "" : revised.error);
+      if (revised.ok) {
+        assert(revised.record.scenarioSnapshot.title === revised.record.title, "Название snapshot должно обновляться вместе с записью");
+        assert(revised.record.scenarioSnapshot.checkpoints[0].instruction === editedCheckpoints[0].instruction,
+          "Изменённые задания КТ должны попасть в исполняемый snapshot");
+        assert(isExamRouteRecord(revised.record), "Отредактированный маршрут должен проходить проверку формата");
+      }
+      const withoutFinalStop = editedCheckpoints.map((checkpoint, index) =>
+        index === editedCheckpoints.length - 1 ? { ...checkpoint, requireStop: false } : checkpoint);
+      const invalidEdit = reviseExamRouteRecord(record, "Неверный финиш", withoutFinalStop, "2026-11-19T01:00:00.000Z");
+      assert(!invalidEdit.ok, "Финиш маршрута должен сохранять обязательную остановку");
+      const withEditorLot = { ...source, roads: [...source.roads!, { ...source.roads![0], id: "custom-lot" }] };
+      const lotRoute = buildExamRouteRecord(
+        withEditorLot, mainRoad.points[0], sideRoad.points[sideRoad.points.length - 1],
+        "Маршрут с редакторской площадкой", "route-test-32-lot", "2026-11-19T00:00:00.000Z", 45
+      );
+      assert(lotRoute.ok && isExamRouteRecord(lotRoute.record),
+        "Редакторская площадка не должна ломать fingerprint маршрута и snapshot");
       assert(!isExamRouteRecord({ ...record, path: [] }), "Повреждённый путь должен отклоняться");
       const changed = {
         ...source,

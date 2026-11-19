@@ -11,11 +11,12 @@ import {
   buildExamRouteRecord,
   fingerprintOsmScenario,
   isExamRouteRecord,
+  reviseExamRouteRecord,
   type ExamRouteRecord,
 } from "../maps/routeCatalog";
 import { deleteRouteRecord, loadRouteCatalog, saveRouteRecord } from "../storage/routeCatalogStore";
 import { downloadJson, Icon } from "./Icons";
-import type { Vec2 } from "../sim/types";
+import type { RouteCheckpoint, Vec2 } from "../sim/types";
 
 type Props = {
   sourceDef: CustomScenarioDef;
@@ -58,6 +59,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const [title, setTitle] = useState("");
   const [spacing, setSpacing] = useState(90);
   const [preview, setPreview] = useState<ReturnType<typeof buildExamRouteRecord> | null>(null);
+  const [editing, setEditing] = useState<{ id: string; title: string; checkpoints: RouteCheckpoint[] } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const bounds = useMemo(() => mapBounds(sourceDef), [sourceDef]);
@@ -142,6 +144,31 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     await deleteRouteRecord(route.id);
     setRoutes((current) => current.filter((item) => item.id !== route.id));
     onNotify(`Маршрут «${route.title}» удалён`);
+  };
+
+  const patchEditingCheckpoint = (checkpointId: string, patch: Partial<RouteCheckpoint>) => {
+    setEditing((current) => current ? {
+      ...current,
+      checkpoints: current.checkpoints.map((point) =>
+        point.id === checkpointId ? { ...point, ...patch } : point
+      ),
+    } : current);
+  };
+
+  const handleSaveEdit = async (route: ExamRouteRecord) => {
+    if (!editing || editing.id !== route.id) return;
+    const revised = reviseExamRouteRecord(route, editing.title, editing.checkpoints, new Date().toISOString());
+    if (!revised.ok) { onNotify(revised.error); return; }
+    try {
+      const savedBackend = await saveRouteRecord(revised.record);
+      setRoutes((current) => current.map((item) => item.id === route.id ? revised.record : item));
+      setBackend(savedBackend);
+      setWarning(savedBackend === "memory" ? "IndexedDB недоступна: изменения останутся только до закрытия вкладки." : null);
+      setEditing(null);
+      onNotify(savedBackend === "indexeddb" ? "Изменения маршрута сохранены" : "Изменения сохранены только в памяти вкладки");
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : "Не удалось сохранить изменения маршрута");
+    }
   };
 
   const handleImport = async (file: File) => {
@@ -299,10 +326,65 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                 </div>
                 <div className="flex flex-wrap items-start gap-2">
                   <button type="button" className="btn btn-mini btn-primary" onClick={() => onOpenRoute(route.scenarioSnapshot)}><Icon name="play" size={13} /> Открыть</button>
+                  <button type="button" className="btn btn-mini" data-testid="route-edit-button" onClick={() => setEditing({
+                    id: route.id, title: route.title, checkpoints: route.checkpoints.map((point) => ({ ...point })),
+                  })}><Icon name="edit" size={13} /> Редактировать</button>
                   <button type="button" className="btn btn-mini" onClick={() => downloadJson(`${route.id}.json`, route, onNotify)} title="Экспорт маршрута"><Icon name="download" size={13} /></button>
                   <button type="button" className="btn btn-mini btn-danger" onClick={() => void handleDelete(route)} title="Удалить маршрут"><Icon name="trash" size={13} /></button>
                 </div>
               </div>
+              {editing?.id === route.id && (
+                <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+                  <label className="block text-xs text-[#8fa2ae]">Название маршрута
+                    <input data-testid="route-edit-title" value={editing.title} maxLength={80}
+                      onChange={(event) => setEditing((current) => current ? { ...current, title: event.target.value } : current)}
+                      className="field mt-1 w-full" />
+                  </label>
+                  <div className="text-xs font-bold text-white">Контрольные точки и задания</div>
+                  {editing.checkpoints.map((checkpoint, index) => {
+                    const isFinish = index === editing.checkpoints.length - 1;
+                    return (
+                      <div key={checkpoint.id} className="rounded-lg border border-white/10 bg-black/10 p-3 grid md:grid-cols-[minmax(0,1fr)_110px_minmax(150px,180px)] gap-3">
+                        <label className="text-xs text-[#8fa2ae]">КТ {index + 1} {isFinish ? "· Финиш" : ""}
+                          <textarea data-testid={`route-edit-checkpoint-${index}`} value={checkpoint.instruction} maxLength={180} rows={2}
+                            onChange={(event) => patchEditingCheckpoint(checkpoint.id, { instruction: event.target.value })}
+                            className="field mt-1 w-full resize-y" />
+                        </label>
+                        <label className="text-xs text-[#8fa2ae]">Радиус, м
+                          <input type="number" min={3} max={30} step={0.5} value={checkpoint.radius}
+                            onChange={(event) => patchEditingCheckpoint(checkpoint.id, { radius: Number(event.target.value) })}
+                            className="field mt-1 w-full" />
+                        </label>
+                        <div className="space-y-2">
+                          <label className="block text-xs text-[#8fa2ae]">Указатель поворота
+                            <select value={checkpoint.requireSignal ?? "none"}
+                              onChange={(event) => patchEditingCheckpoint(checkpoint.id, {
+                                requireSignal: event.target.value === "none" ? undefined : event.target.value as "left" | "right",
+                              })} className="field mt-1 w-full">
+                              <option value="none">Не требуется</option><option value="left">Левый</option><option value="right">Правый</option>
+                            </select>
+                          </label>
+                          <label className="flex items-center gap-2 text-xs text-[#b9c9d3]">
+                            <input type="checkbox" checked={Boolean(checkpoint.requireStop)} disabled={isFinish}
+                              onChange={(event) => patchEditingCheckpoint(checkpoint.id, { requireStop: event.target.checked })} />
+                            {isFinish ? "Остановка на финише обязательна" : "Требовать остановку"}
+                          </label>
+                          {!isFinish && editing.checkpoints.length > 2 && (
+                            <button type="button" className="btn btn-mini btn-danger"
+                              onClick={() => setEditing((current) => current && current.id === route.id
+                                ? { ...current, checkpoints: current.checkpoints.filter((point) => point.id !== checkpoint.id) } : current)}>Удалить КТ</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" className="btn btn-primary btn-mini" onClick={() => void handleSaveEdit(route)}>Сохранить изменения</button>
+                    <button type="button" className="btn btn-mini" onClick={() => setEditing(null)}>Отмена</button>
+                  </div>
+                  <p className="text-[10px] text-[#8fa2ae]">Финишная точка всегда требует остановки. Геометрия маршрута и исходная OSM-карта при редактировании не меняются.</p>
+                </div>
+              )}
             </article>
           ))}
         </div>

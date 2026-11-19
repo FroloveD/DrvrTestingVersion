@@ -634,9 +634,19 @@ export function findRoadNetworkPath(
   let suspectedWrongWay = false;
   if (snapA.road.id === snapB.road.id) {
     const r = snapA.road;
+    const distanceAlong = (snap: NonNullable<typeof snapA>): number => {
+      let distance = 0;
+      for (let i = 0; i < snap.segIndex; i++) {
+        distance += Math.hypot(r.points[i + 1].x - r.points[i].x, r.points[i + 1].z - r.points[i].z);
+      }
+      const a = r.points[snap.segIndex], b = r.points[snap.segIndex + 1];
+      return distance + Math.hypot(b.x - a.x, b.z - a.z) * snap.t;
+    };
     const posA = snapA.segIndex + snapA.t;
     const posB = snapB.segIndex + snapB.t;
-    if (r.oneway && posA > posB + 0.04) {
+    const distanceA = distanceAlong(snapA);
+    const distanceB = distanceAlong(snapB);
+    if (r.oneway && distanceA > distanceB + 0.75) {
       // Движение против одностороннего потока — ищем легальный объезд по графу дорог
       suspectedWrongWay = true;
     } else {

@@ -5,7 +5,7 @@
  * @invariants #1 (метрические координаты), #7 (чистое ядро), #8 (офлайн), #9 (атрибуция ODbL), #15 (снимок мира для реплея).
  * @tests T32
  */
-import { isInsideWorldBoundary, isValidBoundaryPolygon } from "./boundary";
+import { closestPointOnSegment, isInsideWorldBoundary, isValidBoundaryPolygon } from "./boundary";
 import { findRoadNetworkPath, nearestRoadPoint, polylineLength, samplePolyline } from "./route";
 import { SpatialGrid } from "../sim/spatialGrid";
 import type { CustomScenarioDef } from "../scenarios/custom";
@@ -77,7 +77,8 @@ export function fingerprintOsmScenario(source: CustomScenarioDef): string {
     origin: source.mapMeta?.origin,
     bounds: source.bounds,
     boundaryPolygon: source.boundaryPolygon,
-    roads: source.roads ?? [],
+    // Редакторская площадка не входит в автомобильный граф и не сохраняется в route snapshot.
+    roads: (source.roads ?? []).filter((road) => road.id !== "custom-lot"),
     obstacles: source.obstacles,
     signs: source.signs ?? [],
     signals: source.signals ?? [],
@@ -353,20 +354,25 @@ export function isExamRouteRecord(value: unknown): value is ExamRouteRecord {
     !snapshot.bounds || !snapshot.start ||
     !Array.isArray(snapshot.roads) || snapshot.roads.length === 0 ||
     !Array.isArray(snapshot.obstacles) ||
+    !Array.isArray(snapshot.checkpoints) ||
+    snapshot.title !== route.title ||
+    JSON.stringify(snapshot.checkpoints) !== JSON.stringify(route.checkpoints) ||
     !Array.isArray(route.path) || route.path.length < 2 ||
     !route.path.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z)) ||
     !Number.isFinite(route.lengthM) || route.lengthM! < 25 ||
     !route.start || !Number.isFinite(route.start.x) || !Number.isFinite(route.start.z) ||
     !route.finish || !Number.isFinite(route.finish.x) || !Number.isFinite(route.finish.z) ||
     !Array.isArray(route.roadNames) || !route.roadNames.every((name) => typeof name === "string") ||
-    !Array.isArray(route.checkpoints) || route.checkpoints.length < 2 ||
+    !Array.isArray(route.checkpoints) || route.checkpoints.length < 2 || route.checkpoints.length > 16 ||
+    route.checkpoints[route.checkpoints.length - 1]?.requireStop !== true ||
     !route.checkpoints.every((point) =>
-      typeof point.id === "string" &&
-      typeof point.instruction === "string" &&
+      typeof point.id === "string" && point.id.length > 0 &&
+      typeof point.instruction === "string" && point.instruction.trim().length > 0 &&
       Number.isFinite(point.x) &&
       Number.isFinite(point.z) &&
       Number.isFinite(point.radius) &&
-      point.radius > 0
+      point.radius >= 3 && point.radius <= 30 &&
+      (point.requireSignal === undefined || point.requireSignal === "left" || point.requireSignal === "right")
     ) ||
     (route.maneuvers !== undefined && (!Array.isArray(route.maneuvers) || !route.maneuvers.every((item) =>
       item && typeof item.id === "string" &&
@@ -376,4 +382,74 @@ export function isExamRouteRecord(value: unknown): value is ExamRouteRecord {
     )))
   ) return false;
   return fingerprintOsmScenario(snapshot as CustomScenarioDef) === route.mapFingerprint;
+}
+
+export type RouteEditResult =
+  | { ok: true; record: ExamRouteRecord }
+  | { ok: false; error: string };
+
+/** Обновляет задания КТ и синхронно сохраняет их в исполняемом snapshot. */
+export function reviseExamRouteRecord(
+  source: ExamRouteRecord,
+  title: string,
+  checkpoints: readonly RouteCheckpoint[],
+  updatedAt: string
+): RouteEditResult {
+  if (!isExamRouteRecord(source)) return { ok: false, error: "Исходная запись маршрута повреждена." };
+  const cleanTitle = title.trim().slice(0, 80);
+  if (!cleanTitle) return { ok: false, error: "Название маршрута не может быть пустым." };
+  if (!Number.isFinite(Date.parse(updatedAt))) return { ok: false, error: "Некорректная дата изменения маршрута." };
+  if (!Array.isArray(checkpoints) || checkpoints.length < 2 || checkpoints.length > 16) {
+    return { ok: false, error: "В маршруте должно остаться от 2 до 16 контрольных точек." };
+  }
+
+  const ids = new Set<string>();
+  const polygon = isValidBoundaryPolygon(source.scenarioSnapshot.boundaryPolygon)
+    ? source.scenarioSnapshot.boundaryPolygon
+    : undefined;
+  const normalized: RouteCheckpoint[] = [];
+  for (let i = 0; i < checkpoints.length; i++) {
+    const point = checkpoints[i];
+    const instruction = typeof point.instruction === "string" ? point.instruction.trim() : "";
+    if (!point.id || ids.has(point.id)) return { ok: false, error: "ID контрольных точек должны быть уникальными." };
+    ids.add(point.id);
+    if (!instruction || instruction.length > 180) {
+      return { ok: false, error: `КТ ${i + 1}: инструкция должна содержать от 1 до 180 символов.` };
+    }
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.z) ||
+        !Number.isFinite(point.radius) || point.radius < 3 || point.radius > 30) {
+      return { ok: false, error: `КТ ${i + 1}: координаты или радиус вне диапазона.` };
+    }
+    if (point.requireSignal !== undefined && point.requireSignal !== "left" && point.requireSignal !== "right") {
+      return { ok: false, error: `КТ ${i + 1}: неизвестное требование указателя.` };
+    }
+    if (i === checkpoints.length - 1 && point.requireStop !== true) {
+      return { ok: false, error: "Финишная контрольная точка должна требовать полной остановки." };
+    }
+    if (!isInsideWorldBoundary(point.x, point.z, source.scenarioSnapshot.bounds, polygon)) {
+      return { ok: false, error: `КТ ${i + 1} находится за границей сохранённой карты.` };
+    }
+    let nearestSq = Infinity;
+    for (let j = 0; j < source.path.length - 1; j++) {
+      const a = source.path[j], b = source.path[j + 1];
+      nearestSq = Math.min(nearestSq, closestPointOnSegment(point.x, point.z, a.x, a.z, b.x, b.z).distSq);
+    }
+    if (nearestSq > 400) return { ok: false, error: `КТ ${i + 1} слишком далеко от линии маршрута.` };
+    normalized.push({ ...point, instruction, radius: Number(point.radius.toFixed(1)) });
+  }
+
+  const record: ExamRouteRecord = {
+    ...source,
+    title: cleanTitle,
+    updatedAt,
+    checkpoints: normalized,
+    scenarioSnapshot: {
+      ...source.scenarioSnapshot,
+      title: cleanTitle,
+      checkpoints: normalized.map((point) => ({ ...point })),
+    },
+  };
+  return isExamRouteRecord(record)
+    ? { ok: true, record }
+    : { ok: false, error: "Изменённый маршрут не прошёл проверку целостности." };
 }

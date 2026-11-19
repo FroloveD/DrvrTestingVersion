@@ -1152,20 +1152,30 @@ try {
         check("P3 маршрут сохраняется в каталоге", saved);
         const count = await readRouteCount();
         check("P4 запись маршрута находится в отдельной IndexedDB", count === 1, `записей: ${count}`);
+        await page.getByTestId("route-edit-button").first().click();
+        await page.getByTestId("route-edit-title").fill("Маршрут P · редакция");
+        await page.getByTestId("route-edit-checkpoint-0").fill("Проверить перекрёсток и выполнить задание инструктора.");
+        await page.getByRole("button", { name: /Сохранить изменения/ }).click();
+        const edited = await until(async () => (await low(page)).includes("маршрут p · редакция"), 5000, 100);
+        check("P5 редактор сохраняет название и задания контрольных точек", edited);
         await page.getByRole("button", { name: /Открыть/ }).first().click();
         const opened = await until(async () => {
           const body = await low(page);
-          return body.includes("маршрут p") && body.includes("osm ·");
+          return body.includes("маршрут p · редакция") && body.includes("osm ·");
         }, 5000, 100);
-        check("P5 сохранённый маршрут открывается в 3D-тренажёре", opened);
+        check("P6 сохранённый маршрут открывается в 3D-тренажёре", opened);
         await tab(page, "Каталог маршрутов");
         await page.reload();
         await tab(page, "Каталог маршрутов");
         const restored = await until(async () => (await low(page)).includes("улица каталожная"), 5000, 100);
-        check("P6 маршрут сохраняется после перезагрузки", restored);
+        check("P7 маршрут сохраняется после перезагрузки", restored);
+        await page.getByTestId("route-edit-button").first().click();
+        const savedInstruction = await page.getByTestId("route-edit-checkpoint-0").inputValue();
+        check("P8 изменения контрольных точек переживают перезагрузку",
+          savedInstruction === "Проверить перекрёсток и выполнить задание инструктора.", savedInstruction);
       }
     }
-    check("P7 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    check("P9 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
   } catch (e) {
     check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
