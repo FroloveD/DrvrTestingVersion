@@ -19,7 +19,12 @@ const [, , httpUrl, fileUrl, shotDir] = process.argv;
 fs.mkdirSync(shotDir, { recursive: true });
 let failed = 0;
 const check = (name, ok, extra = "") => {
-  if (!ok) failed++;
+  if (!ok) {
+    failed++;
+    if (process.env.GITHUB_ACTIONS) {
+      console.log(`::error title=SMOKE::${name}${extra ? " — " + extra.replace(/\r?\n/g, " ") : ""}`);
+    }
+  }
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -968,9 +973,9 @@ try {
     buffer: Buffer.from(routeOsmXml),
   });
   await sleep(600);
-  const simBar = await page.getByTestId("sim-osm-route-bar").innerText();
+  const simBar = (await page.getByTestId("sim-osm-route-bar").innerText()).toLowerCase();
   check("P1 после загрузки OSM в 3D-тренажёре активна панель проверки маршрута и неквадратный размер",
-    simBar.includes("Маршрут:") && simBar.includes("КТ") && !simBar.includes("240×240"),
+    simBar.includes("маршрут:") && simBar.includes("кт") && !simBar.includes("240×240"),
     simBar.slice(0, 140));
 
   await page.getByTestId("sim-osm-open-editor").click();
@@ -990,9 +995,9 @@ try {
   await page.getByTestId("editor-route-reverse-toggle").check();
   await page.getByTestId("editor-build-route-btn").click();
   await sleep(300);
-  const revStatus = await page.getByTestId("route-check-status").innerText();
+  const revStatus = (await page.getByTestId("route-check-status").innerText()).toLowerCase();
   check("P3 реверс и перестроение маршрута по улице OSM проходят проверку",
-    revStatus.includes("Маршрут проверен"), revStatus);
+    revStatus.includes("маршрут проверен"), revStatus);
 
   // 4. Построение неквадратного коридора маршрута и обрезка внешней улицы/здания
   await page.getByTestId("editor-tool-boundary").click();
@@ -1045,14 +1050,14 @@ try {
   await startXInput.fill("-999");
   await startXInput.press("Enter");
   await sleep(200);
-  const brokenStatus = await page.getByTestId("route-check-status").innerText();
+  const brokenStatus = (await page.getByTestId("route-check-status").innerText()).toLowerCase();
   const fixBtn = page.getByTestId("editor-autofix-route-btn");
   await fixBtn.scrollIntoViewIfNeeded();
   await fixBtn.click();
   await sleep(250);
-  const repairedStatus = await page.getByTestId("route-check-status").innerText();
+  const repairedStatus = (await page.getByTestId("route-check-status").innerText()).toLowerCase();
   check("P6 ввод отрицательного числа фиксирует выход старта, а «Исправить маршрут» чинит его",
-    brokenStatus.includes("Ошибок") && !repairedStatus.includes("Ошибок"),
+    brokenStatus.includes("ошибок") && !repairedStatus.includes("ошибок"),
     `${brokenStatus} -> ${repairedStatus}`);
 
   // 7. Проверка сетки редактора (Выкл / 0,5 м / 2 м / 5 м) и Г-образной площадки с 3D-бордюром в тренажёре
