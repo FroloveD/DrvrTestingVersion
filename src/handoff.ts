@@ -190,7 +190,7 @@ L.push("cdt.gamepad.profile.v2  включённое устройство, от�
 L.push("cdt.activeStudent.v1    активный ученик в кабинете инструктора");
 L.push("cdt.instructorName.v1   имя инструктора для сверки");
 L.push("cdt.blindReview.v1      слепой режим: вердикты скрыты до оценки");
-L.push("cdt.strategy.v3         прогресс по следующим действиям стратегии");
+L.push("cdt.strategy.v4         прогресс по следующим действиям стратегии");
 L.push("cdt.licenseNote.v1      решение владельца по лицензии");
 L.push("cdt-checklist-v1        чек-лист исторического аудита (AuditView)");
 L.push("cdt.attempts.journal.v1 устаревший ключ: переносится в IndexedDB и удаляется");
