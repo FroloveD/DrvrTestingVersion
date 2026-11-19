@@ -1,13 +1,100 @@
 /**
  * @module render/cockpitDisplays
  * @layer three-render
- * @role Живые процедурные 3D-дисплеи салона Kia Ceed JD: приборная панель Supervision (тахометр, спидометр, БК, контрольные лампы), 7" ШГУ (навигатор маршрута / ассистент парковки, знак 3.24) и динамическая разметка камеры заднего вида R.
- * @invariants #1 (+X лево, +h поворот влево), #2 (лампы поворотников синхронны с simTime), #8 (100 % офлайн Canvas2D), #13 (0 перерисовок в покое — детерминизм зеркал).
- * @tests Смоук A, L, M, O (`tests/browser-smoke.mjs`)
+ * @role Живые процедурные 3D-дисплеи салона Kia Ceed JD: приборная панель Supervision (тахометр, спидометр, знак 3.24, БК, контрольные лампы), переключаемое 7" ШГУ (отключаемый ассистент манёвра, FM-радио, анимированный видеоклип + резервный промо-слот, режим «Выкл.») и динамическая разметка камеры заднего вида R.
+ * @invariants #1 (+X лево, +h поворот влево), #2 (лампы поворотников синхронны с simTime), #8 (100 % офлайн Canvas2D), #13 (0 перерисовок в покое в штатном режиме).
+ * @tests Смоук A, K, L, M, O (`tests/browser-smoke.mjs`)
  */
 import * as THREE from "three";
 import type { Gear, SimState, WorldData } from "../sim/types";
 import { clamp, formatGearLabel, isManualGear, MAX_FORWARD_GEAR, SHIFT_HINT_RPM } from "../sim/vehicle";
+
+/** Режим экрана 7" ШГУ Kia Ceed JD (`assist` — ассистент манёвра, `radio` — FM-радио, `clip` — видеоклип/медиа, `off` — отключён). */
+export type HeadUnitMode = "assist" | "radio" | "clip" | "off";
+
+export const HEAD_UNIT_MODES: readonly { id: HeadUnitMode; short: string; label: string }[] = [
+  { id: "assist", short: "АССИСТ", label: "Ассистент манёвра" },
+  { id: "radio", short: "РАДИО", label: "FM-радио" },
+  { id: "clip", short: "КЛИП", label: "Видеоклип" },
+  { id: "off", short: "ВЫКЛ", label: "Ассистент выкл." },
+];
+
+/** Станция встроенного офлайн FM-тюнера ШГУ (частота, RDS-название и нотный паттерн для Web Audio). */
+export type RadioStationDef = {
+  freq: string;
+  name: string;
+  track: string;
+  bpm: number;
+  notes: readonly number[];
+  accent: string;
+};
+
+export const RADIO_STATIONS: readonly RadioStationDef[] = [
+  {
+    freq: "101.2",
+    name: "АВТО ДРАЙВ",
+    track: "Ночной проспект · Synth Drive",
+    bpm: 114,
+    notes: [220, 261.63, 329.63, 392, 329.63, 293.66, 349.23, 440],
+    accent: "#52d6bd",
+  },
+  {
+    freq: "104.7",
+    name: "ДОРОЖНОЕ FM",
+    track: "Огни большого города · Soft Pop",
+    bpm: 96,
+    notes: [261.63, 329.63, 392, 493.88, 440, 392, 329.63, 293.66],
+    accent: "#f5b942",
+  },
+  {
+    freq: "106.2",
+    name: "РЕТРО ВОЛНА",
+    track: "Тёплый асфальт 88 · Retro FM",
+    bpm: 120,
+    notes: [246.94, 293.66, 369.99, 440, 493.88, 440, 369.99, 329.63],
+    accent: "#38bdf8",
+  },
+  {
+    freq: "95.6",
+    name: "КЛАССИКА FM",
+    track: "Утренний этюд · Lounge",
+    bpm: 78,
+    notes: [196, 246.94, 293.66, 392, 369.99, 329.63, 293.66, 246.94],
+    accent: "#a78bfa",
+  },
+];
+
+/** Плейлист процедурных офлайн-видеоклипов на экране 7" ШГУ. */
+export const HEAD_UNIT_CLIPS: readonly { title: string; subtitle: string; theme: "night_city" | "coast" }[] = [
+  { title: "НОЧНОЙ МЕГАПОЛИС", subtitle: "Городской драйв · HD Клип", theme: "night_city" },
+  { title: "ПРИБРЕЖНОЕ ШОССЕ", subtitle: "Закат у моря · HD Клип", theme: "coast" },
+];
+
+/** Зарезервированный контракт промо-/рекламного слота ШГУ (подключается позже без переделки рендера). */
+export type HeadUnitPromoSlot = {
+  badge?: string;
+  title: string;
+  subtitle: string;
+  accent?: string;
+};
+
+/** Состояние мультимедиа 7" ШГУ (переключается в 3D-салоне и в панели «Управление»). */
+export type HeadUnitState = {
+  mode: HeadUnitMode;
+  stationIndex: number;
+  radioPlaying: boolean;
+  clipIndex: number;
+  /** Опциональный промо-блок (по умолчанию `null` — задел под будущую рекламу). */
+  promoSlot?: HeadUnitPromoSlot | null;
+};
+
+export const DEFAULT_HEAD_UNIT_STATE: HeadUnitState = {
+  mode: "assist",
+  stationIndex: 0,
+  radioPlaying: false,
+  clipIndex: 0,
+  promoSlot: null,
+};
 
 export type ClusterSnapshot = {
   engineOn: boolean;
@@ -33,10 +120,15 @@ export type ClusterSnapshot = {
   cpIndex: number;
   cpTotal: number;
   cpHint: string;
+  cpRequireSignal: "left" | "right" | null;
   activeBayId: number | null;
   holdTime: number;
   finished: boolean;
   steerNorm: number; // -1..+1 (+ влево)
+  brakeHeld: boolean;
+  simTimeSec: number;
+  headUnit: HeadUnitState;
+  mediaPhase: number;
 };
 
 function wrapAngle(a: number): number {
@@ -123,10 +215,15 @@ export class CockpitDisplayController {
       cpIndex: 0,
       cpTotal: 0,
       cpHint: "",
+      cpRequireSignal: null,
       activeBayId: null,
       holdTime: 0,
       finished: false,
       steerNorm: 0,
+      brakeHeld: false,
+      simTimeSec: 0,
+      headUnit: DEFAULT_HEAD_UNIT_STATE,
+      mediaPhase: 0,
     };
     this.drawCluster(cold);
     this.drawHeadUnit(cold);
@@ -134,7 +231,15 @@ export class CockpitDisplayController {
   }
 
   /** Обновляет 3D-приборы и ШГУ при реальном изменении показаний. */
-  update(state: SimState, world: WorldData, leftLit: boolean, rightLit: boolean): void {
+  update(
+    state: SimState,
+    world: WorldData,
+    leftLit: boolean,
+    rightLit: boolean,
+    headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE,
+    isBraking = false,
+    wallTimeSec = 0
+  ): void {
     const speedKmh = Math.abs(state.v) * 3.6;
     const speedQ = Math.round(speedKmh);
     const rpmQ = state.rpm > 10 ? Math.round(state.rpm / 25) * 25 : 0;
@@ -153,8 +258,10 @@ export class CockpitDisplayController {
       cpRelAngle = wrapAngle(Math.atan2(dx, dz) - state.h);
     }
     const steerNorm = clamp(state.swDeg / 540, -1, 1);
+    const brakeHeld = isBraking || (state.brakePos ?? 0) > 0.12;
+    const mediaPhase = Math.floor(wallTimeSec * 4) % 96;
 
-    const clusterKey = `${state.engineOn ? 1 : 0}|${speedQ}|${rpmQ}|${gearLabel}|${limit}|${leftLit ? 1 : 0}|${rightLit ? 1 : 0}|${state.handbrake ? 1 : 0}|${state.belt ? 1 : 0}|${state.lights ? 1 : 0}|${distQ.toFixed(2)}`;
+    const clusterKey = `${state.engineOn ? 1 : 0}|${speedQ}|${rpmQ}|${gearLabel}|${limit}|${leftLit ? 1 : 0}|${rightLit ? 1 : 0}|${state.handbrake ? 1 : 0}|${state.belt ? 1 : 0}|${state.lights ? 1 : 0}|${brakeHeld ? 1 : 0}|${distQ.toFixed(2)}`;
     const inReverseCam = state.engineOn && state.gear === "R";
 
     let snap: ClusterSnapshot | undefined;
@@ -183,10 +290,15 @@ export class CockpitDisplayController {
         cpIndex: state.currentCheckpointIndex + 1,
         cpTotal: world.checkpoints.length,
         cpHint: cp?.instruction ?? "",
+        cpRequireSignal: cp?.requireSignal ?? null,
         activeBayId: state.activeBayId,
         holdTime: state.holdTime,
         finished: state.finished,
         steerNorm,
+        brakeHeld,
+        simTimeSec: state.time,
+        headUnit,
+        mediaPhase,
       };
       snap = built;
       return built;
@@ -211,7 +323,8 @@ export class CockpitDisplayController {
       const angStep = Math.round(cpRelAngle * 10);
       const distStep = cpDistM > 50 ? Math.round(cpDistM / 5) * 5 : cpDistM;
       const holdStep = Math.round(state.holdTime * 5);
-      const headKey = `${state.engineOn ? 1 : 0}|${gearLabel}|${speedQ}|${limit}|${hasCp ? 1 : 0}|${state.currentCheckpointIndex}|${angStep}|${distStep}|${state.activeBayId ?? -1}|${holdStep}|${state.inLineCross ? 1 : 0}|${state.inContact ? 1 : 0}|${state.finished ? 1 : 0}|${state.lights ? 1 : 0}`;
+      const mediaStep = headUnit.mode === "radio" || headUnit.mode === "clip" ? mediaPhase : 0;
+      const headKey = `${state.engineOn ? 1 : 0}|${gearLabel}|${speedQ}|${limit}|${hasCp ? 1 : 0}|${state.currentCheckpointIndex}|${angStep}|${distStep}|${state.activeBayId ?? -1}|${holdStep}|${state.inLineCross ? 1 : 0}|${state.inContact ? 1 : 0}|${state.finished ? 1 : 0}|${state.lights ? 1 : 0}|${headUnit.mode}|${headUnit.stationIndex}|${headUnit.radioPlaying ? 1 : 0}|${headUnit.clipIndex}|${headUnit.promoSlot?.title ?? ""}|${mediaStep}`;
       if (headKey !== this.lastHeadKey) {
         this.lastHeadKey = headKey;
         this.drawHeadUnit(ensureSnap());
@@ -399,6 +512,18 @@ export class CockpitDisplayController {
       g.stroke();
     }
 
+    // Лампа рабочего тормоза (подсвечивается при удержании педали S — важно для BTSI из P)
+    g.fillStyle = s.brakeHeld && s.engineOn ? "#ef4444" : "#2a1619";
+    g.strokeStyle = s.brakeHeld && s.engineOn ? "#ef4444" : "#2a1619";
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.arc(256, 22, 7.5, 0, Math.PI * 2);
+    g.stroke();
+    g.font = "900 8px system-ui, sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText("!", 256, 22.5);
+
     // Центральный цветной TFT-дисплей борткомпьютера Supervision
     const bx = 192;
     const by = 40;
@@ -483,11 +608,13 @@ export class CockpitDisplayController {
     const g = this.headCtx;
     const w = 384;
     const h = 224;
+    const mode = s.headUnit.mode;
+    const tabH = 34;
+    const contentH = h - tabH;
     g.fillStyle = s.engineOn ? "#0b1320" : "#06090e";
     g.fillRect(0, 0, w, h);
 
     if (!s.engineOn) {
-      // Режим ожидания ШГУ Kia с мягкими часами и логотипом
       g.strokeStyle = "#1e293b";
       g.lineWidth = 2;
       g.strokeRect(10, 10, w - 20, h - 20);
@@ -502,17 +629,132 @@ export class CockpitDisplayController {
       return;
     }
 
+    if (mode === "off") {
+      g.fillStyle = "#020617";
+      g.fillRect(0, 0, w, contentH);
+      g.fillStyle = "#334155";
+      g.font = "800 18px system-ui, sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText("АССИСТЕНТ ВЫКЛ.", w * 0.5, contentH * 0.48);
+      g.fillStyle = "#475569";
+      g.font = "600 12px system-ui, sans-serif";
+      g.fillText("Нажмите АССИСТ, чтобы вернуть подсказки", w * 0.5, contentH * 0.62);
+      this.drawHeadUnitTabs(g, w, tabH, contentH, mode);
+      return;
+    }
+
     // Верхняя строка статуса ШГУ
     g.fillStyle = "#121f33";
-    g.fillRect(0, 0, w, 34);
-    g.fillStyle = "#52d6bd";
+    g.fillRect(0, 0, w, tabH);
+    g.fillStyle = mode === "radio" ? "#f5b942" : mode === "clip" ? "#38bdf8" : "#52d6bd";
     g.font = "800 13px system-ui, sans-serif";
     g.textAlign = "left";
     g.textBaseline = "middle";
-    g.fillText(s.hasCheckpoint ? "НАВИГАЦИЯ МАРШРУТА" : "АССИСТЕНТ МАНЁВРА", 14, 17);
+    const title = mode === "radio" ? "FM-РАДИО" : mode === "clip" ? "ВИДЕОКЛИП" : s.hasCheckpoint ? "НАВИГАЦИЯ МАРШРУТА" : "АССИСТЕНТ МАНЁВРА";
+    g.fillText(title, 14, 17);
     g.fillStyle = "#e2e8f0";
     g.textAlign = "right";
     g.fillText(`${s.gearLabel}  ·  ${s.speedKmh} км/ч`, w - 14, 17);
+
+    if (mode === "radio") {
+      const station = RADIO_STATIONS[clamp(s.headUnit.stationIndex, 0, RADIO_STATIONS.length - 1)];
+      const playing = s.headUnit.radioPlaying;
+      const grad = g.createLinearGradient(0, tabH, 0, contentH);
+      grad.addColorStop(0, "#101827");
+      grad.addColorStop(1, "#070d16");
+      g.fillStyle = grad;
+      g.fillRect(0, tabH, w, contentH - tabH);
+      g.fillStyle = station.accent;
+      g.font = "900 44px system-ui, sans-serif";
+      g.textAlign = "center";
+      g.fillText(`${station.freq}`, w * 0.5, 82);
+      g.fillStyle = "#f8fafc";
+      g.font = "900 20px system-ui, sans-serif";
+      g.fillText(station.name, w * 0.5, 112);
+      g.fillStyle = "#94a3b8";
+      g.font = "600 13px system-ui, sans-serif";
+      g.fillText(station.track, w * 0.5, 134);
+      // Эквалайзер: анимированная фаза только в режимах радио/клипа, в покое — статичная картинка
+      const bars = 18;
+      for (let i = 0; i < bars; i++) {
+        const phase = playing ? Math.sin(s.mediaPhase * 0.55 + i * 0.72) * 0.5 + 0.5 : 0.28 + (i % 4) * 0.08;
+        const bh = 8 + phase * 34;
+        g.fillStyle = i % 3 === 0 ? station.accent : "#334155";
+        g.fillRect(52 + i * 16, 166 - bh, 9, bh);
+      }
+      g.fillStyle = playing ? "#52d6bd" : "#64748b";
+      g.font = "800 12px system-ui, sans-serif";
+      g.fillText(playing ? "▶ ВОСПРОИЗВЕДЕНИЕ · ОФЛАЙН FM" : "❚❚ ПАУЗА · ОФЛАЙН FM", w * 0.5, 184);
+      this.drawHeadUnitTabs(g, w, tabH, contentH, mode);
+      return;
+    }
+
+    if (mode === "clip") {
+      const clip = HEAD_UNIT_CLIPS[clamp(s.headUnit.clipIndex, 0, HEAD_UNIT_CLIPS.length - 1)];
+      const t = s.mediaPhase;
+      const sky = g.createLinearGradient(0, tabH, 0, contentH);
+      if (clip.theme === "night_city") {
+        sky.addColorStop(0, "#071126");
+        sky.addColorStop(0.62, "#172554");
+        sky.addColorStop(1, "#020617");
+      } else {
+        sky.addColorStop(0, "#7c2d12");
+        sky.addColorStop(0.55, "#c2410c");
+        sky.addColorStop(1, "#111827");
+      }
+      g.fillStyle = sky;
+      g.fillRect(0, tabH, w, contentH - tabH);
+      // Процедурная сцена клипа: здания/столбы, дорога и движущиеся огни
+      g.fillStyle = clip.theme === "night_city" ? "#0f172a" : "#451a03";
+      for (let i = 0; i < 8; i++) {
+        const bw = 34 + ((i * 37) % 28);
+        const bh = 42 + ((i * 53) % 62);
+        const x = (i * 57 + (t * 2) % 57) - 20;
+        g.fillRect(x, 128 - bh, bw, bh);
+        g.fillStyle = "#fde68a";
+        for (let wy = 0; wy < 3; wy++) for (let wx = 0; wx < 2; wx++) {
+          if ((i + wy * 2 + wx) % 3 !== 0) g.fillRect(x + 6 + wx * 14, 128 - bh + 8 + wy * 16, 6, 8);
+        }
+        g.fillStyle = clip.theme === "night_city" ? "#0f172a" : "#451a03";
+      }
+      g.fillStyle = "#111827";
+      g.beginPath();
+      g.moveTo(0, contentH);
+      g.lineTo(w * 0.38, 128);
+      g.lineTo(w * 0.62, 128);
+      g.lineTo(w, contentH);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = "#f8fafc";
+      g.lineWidth = 3;
+      g.setLineDash([16, 14]);
+      g.lineDashOffset = -t * 3;
+      g.beginPath();
+      g.moveTo(w * 0.5, 132);
+      g.lineTo(w * 0.5, contentH);
+      g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = "rgba(2,6,23,0.72)";
+      g.fillRect(0, tabH, w, 42);
+      g.fillStyle = "#f8fafc";
+      g.font = "900 18px system-ui, sans-serif";
+      g.textAlign = "center";
+      g.fillText(clip.title, w * 0.5, tabH + 17);
+      g.fillStyle = "#cbd5e1";
+      g.font = "600 12px system-ui, sans-serif";
+      g.fillText(clip.subtitle, w * 0.5, tabH + 34);
+      if (s.headUnit.promoSlot) {
+        const promo = s.headUnit.promoSlot;
+        g.fillStyle = promo.accent ?? "#f5b942";
+        g.fillRect(12, contentH - 46, w - 24, 34);
+        g.fillStyle = "#111827";
+        g.font = "900 13px system-ui, sans-serif";
+        g.fillText(`${promo.badge ? `${promo.badge} · ` : ""}${promo.title}`, w * 0.5, contentH - 29);
+      }
+      this.drawHeadUnitTabs(g, w, tabH, contentH, mode);
+      return;
+    }
 
     // Левая карточка — знак ГОСТ 3.24 и контроль скорости
     const over = s.speedKmh > s.speedLimitKmh + 1;
@@ -542,10 +784,8 @@ export class CockpitDisplayController {
     // Правая карточка — стрелка до КТ маршрута либо схема парковочного бокса
     const rx = 146;
     const rw = w - rx - 12;
-    g.fillStyle = "#111c2d";
     g.fillRect(rx, 46, rw, 164);
     g.strokeStyle = "#22344d";
-    g.lineWidth = 2;
     g.strokeRect(rx, 46, rw, 164);
 
     const midX = rx + rw * 0.5;
@@ -557,7 +797,6 @@ export class CockpitDisplayController {
       g.font = "600 13px system-ui, sans-serif";
       g.fillText("Поставьте P и ручник", midX, 148);
     } else if (s.hasCheckpoint) {
-      // Живая поворотная стрелка курса к активной контрольной точке (+cpRelAngle = влево -> против ЧС)
       const ax = rx + 54;
       const ay = 108;
       g.save();
@@ -582,7 +821,8 @@ export class CockpitDisplayController {
       g.fillText(`${s.cpDistM} м`, rx + 96, 96);
       g.fillStyle = "#94a3b8";
       g.font = "700 13px system-ui, sans-serif";
-      g.fillText(`КТ ${s.cpIndex} из ${s.cpTotal}${s.cpRequireStop ? " · СТОП" : ""}`, rx + 96, 126);
+      const signalSuffix = s.cpRequireSignal === "left" ? " · ◀" : s.cpRequireSignal === "right" ? " · ▶" : "";
+      g.fillText(`КТ ${s.cpIndex} из ${s.cpTotal}${s.cpRequireStop ? " · СТОП" : ""}${signalSuffix}`, rx + 96, 126);
 
       const hint = s.cpHint.length > 26 ? `${s.cpHint.slice(0, 25)}…` : s.cpHint;
       g.textAlign = "center";
@@ -590,7 +830,6 @@ export class CockpitDisplayController {
       g.font = "600 12.5px system-ui, sans-serif";
       g.fillText(hint || "Следуйте по маршруту", midX, 182);
     } else {
-      // Режим автодрома: индикация бокса, контроля разметки и удержания остановки
       const alert = s.inContact || s.inLineCross;
       g.fillStyle = alert ? "#f87171" : s.holdTime > 0 ? "#52d6bd" : "#e2e8f0";
       g.font = "900 20px system-ui, sans-serif";
@@ -611,7 +850,6 @@ export class CockpitDisplayController {
         136
       );
 
-      // Полоса прогресса удержания в боксе
       g.fillStyle = "#1e293b";
       g.fillRect(rx + 22, 166, rw - 44, 10);
       if (s.holdTime > 0) {
@@ -619,6 +857,38 @@ export class CockpitDisplayController {
         g.fillRect(rx + 22, 166, (rw - 44) * clamp(s.holdTime / 1.2, 0, 1), 10);
       }
     }
+    this.drawHeadUnitTabs(g, w, tabH, contentH, mode);
+  }
+
+  private drawHeadUnitTabs(
+    g: CanvasRenderingContext2D,
+    w: number,
+    tabH: number,
+    contentH: number,
+    activeMode: HeadUnitMode
+  ): void {
+    g.fillStyle = "#0f172a";
+    g.fillRect(0, contentH, w, tabH);
+    g.strokeStyle = "#22344d";
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(0, contentH + 0.5);
+    g.lineTo(w, contentH + 0.5);
+    g.stroke();
+    const tabW = w / HEAD_UNIT_MODES.length;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    HEAD_UNIT_MODES.forEach((m, i) => {
+      const x = i * tabW;
+      const active = m.id === activeMode;
+      g.fillStyle = active ? "#164e63" : "#111827";
+      g.fillRect(x + 2, contentH + 4, tabW - 4, tabH - 8);
+      g.strokeStyle = active ? "#22d3ee" : "#334155";
+      g.strokeRect(x + 2, contentH + 4, tabW - 4, tabH - 8);
+      g.fillStyle = active ? "#f8fafc" : "#94a3b8";
+      g.font = "800 11px system-ui, sans-serif";
+      g.fillText(m.short, x + tabW / 2, contentH + tabH / 2);
+    });
   }
 
   /** Прозрачная сетка парковочных линий поверх живого GPU-изображения камеры заднего вида R. */

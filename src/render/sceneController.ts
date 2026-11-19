@@ -23,7 +23,7 @@ import {
   makeCloudySkyTexture,
   type CityEnvironmentPack,
 } from "./cityBuildings";
-import { CockpitDisplayController } from "./cockpitDisplays";
+import { CockpitDisplayController, DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "./cockpitDisplays";
 import {
   buildGostCrosswalk,
   buildGostRoadSign,
@@ -44,6 +44,7 @@ import {
   makeInstrumentClusterTexture,
   makeRussianLicensePlateTexture,
   SHIFTER_LAYOUT,
+  type CockpitControlId,
   type DetailedCarRig,
   type DetailedPedestrianVisual,
   type ShifterHitId,
@@ -220,6 +221,11 @@ export class SceneController {
   private shifterHover: ShifterHitId | null = null;
   private shifterDragging = false;
   private shifterManualPulse: -1 | 0 | 1 = 0;
+
+  // Интерактивные органы салона (7" ШГУ, VOL/TUNE, аварийка, START/STOP, свет, подрулевой, ручник)
+  private cockpitControlHover: CockpitControlId | null = null;
+  private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
+  private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
   private savedHeadBeforeShifter: { yaw: number; pitch: number; fov: number } | null = null;
 
   // Общие текстуры (освобождаются при dispose)
@@ -434,6 +440,68 @@ export class SceneController {
   /** Смотрит ли сейчас камера салона вниз-вправо на консоль рычага АКПП. */
   isCockpitShifterView(): boolean {
     return this.orbitPitch > 1.05 && this.orbitYaw < -0.45 && this.orbitYaw > -1.35;
+  }
+
+  /** Сохраняет состояние 7" ШГУ (режим, станция, клип, промо-слот) для 3D-экрана и подсветки. */
+  setHeadUnitState(headUnit: HeadUnitState): void {
+    this.headUnit = headUnit;
+  }
+
+  /** Возвращает текущее состояние ШГУ, которым управляет 3D-сцена (для UI и тестов). */
+  getHeadUnitState(): HeadUnitState {
+    return this.headUnit;
+  }
+
+  /** Подсветка наведения на интерактивный орган салона и короткий импульс нажатия. */
+  setCockpitControlInteraction(hovered: CockpitControlId | null, pressed: CockpitControlId | null = null): void {
+    this.cockpitControlHover = hovered;
+    if (pressed) this.controlPressAnim[pressed] = 1;
+  }
+
+  /**
+   * Проверяет попадание курсора (`[0..1]`) в органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка,
+   * ENGINE START/STOP, переключатель света, левый подрулевой и ручник. Только в камере `cockpit`.
+   */
+  pickCockpitControl(normX: number, normY: number): CockpitControlId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets || targets.length === 0) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    const hits = this.shifterRaycaster.intersectObjects(targets, false);
+    if (hits.length === 0) return null;
+    return (hits[0].object.userData.cockpitControl as CockpitControlId | undefined) ?? null;
+  }
+
+  /** Нормализованные экранные координаты `[0..1]` органа салона (для якоря подсказки). */
+  getCockpitControlScreenPoint(id: CockpitControlId): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets) return null;
+    const obj = targets.find((t) => t.userData.cockpitControl === id);
+    if (!obj) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    obj.getWorldPosition(this.shifterProjTmp);
+    this.shifterProjTmp.project(this.camera);
+    if (this.shifterProjTmp.z < -1 || this.shifterProjTmp.z > 1) return null;
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
+  }
+
+  /** Переводит взгляд водителя в салоне на центральную консоль с 7" ШГУ (клик по экрану в HUD). */
+  lookAtHeadUnit(): boolean {
+    if (this.lastCameraMode !== "cockpit") return false;
+    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
+    // Центральная консоль с 7" ШГУ — ниже и правее глаз водителя: взгляд вниз-вправо, но выше кулисы АКПП
+    this.orbitYaw = -0.86;
+    this.orbitPitch = 0.86;
+    this.cockpitFov = 66;
+    return true;
   }
 
   /** Обновляет подсветку наведения/захвата и пружинный ход `+/−` 3D-рычага АКПП. */
@@ -1034,9 +1102,48 @@ export class SceneController {
     if (rig.seatbeltStrap) {
       rig.seatbeltStrap.visible = state.belt;
     }
+
+    // Оживление органов салона: нажатия в 3D (ШГУ, VOL/TUNE, свет, START/STOP) и медиафаза экрана
+    const dtSec = Math.min(0.1, Math.max(0, dtMs) / 1000);
+    for (const key of Object.keys(this.controlPressAnim) as CockpitControlId[]) {
+      const v = this.controlPressAnim[key] ?? 0;
+      if (v <= 0) delete this.controlPressAnim[key];
+      else this.controlPressAnim[key] = Math.max(0, v - dtSec * 2.6);
+    }
+    const pressOf = (id: CockpitControlId) => this.controlPressAnim[id] ?? 0;
+    const knobL = rig.headUnitKnobL;
+    const knobR = rig.headUnitKnobR;
+    if (knobL) {
+      // Шайба VOL: плавный доворот при каждом клике (импульс) и подсветка наведения
+      const volTurn = this.headUnit.stationIndex * 0.42 + pressOf("vol") * 0.9;
+      knobL.rotation.y = volTurn;
+      knobL.scale.setScalar(1 + (this.cockpitControlHover === "vol" ? 0.16 : 0) + pressOf("vol") * 0.12);
+    }
+    if (knobR) {
+      knobR.rotation.y = (this.cockpitControlHover === "tune" ? 0.22 : 0) + pressOf("tune") * 0.6;
+      knobR.scale.setScalar(1 + (this.cockpitControlHover === "tune" ? 0.16 : 0) + pressOf("tune") * 0.12);
+    }
+    if (rig.headlightSwitchPivot) {
+      rig.headlightSwitchPivot.rotation.z = state.lights ? -0.62 - pressOf("headlight") * 0.2 : pressOf("headlight") * -0.18;
+    }
+    if (rig.headlightSwitchMat) {
+      rig.headlightSwitchMat.color.setHex(state.lights ? 0x22c55e : this.cockpitControlHover === "headlight" ? 0x64748b : 0x334155);
+    }
+    if (rig.headUnitScreen) {
+      const mat = rig.headUnitScreen.material as THREE.MeshBasicMaterial;
+      const hover = this.cockpitControlHover === "headunit" || this.cockpitControlHover === "vol" || this.cockpitControlHover === "tune";
+      mat.color.setHex(this.headUnit.mode === "off" ? 0x51606e : hover ? 0xa9d4e6 : 0xffffff);
+    }
+    if (rig.startBtnMat && pressOf("start") > 0) {
+      rig.startBtnMat.color.setHex(0xfef08a);
+    }
+    if (rig.hazardBtnMat && (pressOf("hazard") > 0 || this.cockpitControlHover === "hazard")) {
+      if (state.signal !== "hazard") rig.hazardBtnMat.color.setHex(0xb91c1c);
+    }
+
     if (opts.cameraMode === "cockpit") {
       // Внутри dirty-кеш: 0 мс в покое; в движении обновляем не чаще ~20 Гц (за исключением мгновенных переключений)
-      this.cockpitDisplays.update(state, world, leftLit, rightLit);
+      this.cockpitDisplays.update(state, world, leftLit, rightLit, this.headUnit, isBraking, now / 1000);
     }
 
     // Подвижная тень солнца: пересчитывается при старте и реальном смещении/повороте машины (0 лишних GPU-проходов в покое)

@@ -26,7 +26,9 @@ import {
   CAR,
   clamp,
   computeEngineAccel,
+  computeIdleCreepAccel,
   computeRoadDragDecel,
+  computeServiceBrakeDecel,
   ENGINE_IDLE_RPM,
   FIXED_DT,
   getPedestrianPose,
@@ -107,6 +109,7 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     autoSubGear: 1,
     rpm: readyStart ? ENGINE_IDLE_RPM : 0,
     throttlePos: 0,
+    brakePos: 0,
     shiftTimer: 0,
     engineOn: readyStart,
     handbrake: !readyStart,
@@ -138,7 +141,7 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     distanceTraveled: 0,
     statusText: readyStart
       ? world.examinerBrief
-      : "Двигатель заглушен, КПП — P (Parking). Нажмите I, пристегните ремень (B), выберите R или F (D), снимите ручник (Space).",
+      : "Двигатель заглушен, КПП — P (Parking). Нажмите I, пристегните ремень (B), удерживая тормоз (S) выберите R или F (D), снимите ручник (Space).",
   };
 }
 
@@ -232,6 +235,7 @@ export function stepSimulation(
   if (s.finished && s.finishedReason === "immediate_fail") {
     s.v = 0;
     s.throttlePos = 0;
+    s.brakePos = 0;
     s.shiftTimer = 0;
     s.rpm = s.engineOn ? ENGINE_IDLE_RPM : 0;
     s.statusText = "Экзамен прекращён: допущена критическая ошибка (5 баллов). Откройте «Разбор и Реплей».";
@@ -260,9 +264,19 @@ export function stepSimulation(
     s.reverseCount = 1;
   }
 
-  // Плавная электронная дроссельная заслонка Kefico ETC (~0,1 с) и пауза переключения 6-ст. КПП
-  const throttleCmd = s.engineOn ? clamp(input.throttle, 0, 1) : 0;
+  // Плавный гидропривод тормозов (ВУТ + АБС), электронная заслонка Kefico ETC (с Brake Override) и пауза КПП
   const brake = clamp(input.brake, 0, 1);
+  const prevBrakePos = s.brakePos ?? 0;
+  const brRate = brake > prevBrakePos ? 9.5 : 15.0;
+  s.brakePos = clamp(
+    prevBrakePos + (brake - prevBrakePos) * Math.min(1, dt * brRate),
+    0,
+    1
+  );
+  if (s.brakePos < 0.001 && brake === 0) s.brakePos = 0;
+
+  // Brake Override System: нажатая педаль тормоза перекрывает подачу газа (как в реальном ЭБУ Kia Ceed JD)
+  const throttleCmd = s.engineOn && brake <= 0.12 ? clamp(input.throttle, 0, 1) : 0;
   const thRate = throttleCmd > s.throttlePos ? 10.5 : 8.5;
   s.throttlePos = clamp(
     s.throttlePos + (throttleCmd - s.throttlePos) * Math.min(1, dt * thRate),
@@ -305,17 +319,27 @@ export function stepSimulation(
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
   const isForwardGear = s.gear === "D" || isManualGear(s.gear);
   const activeForwardGear = isForwardGear ? s.autoSubGear : 0;
-  let accel = computeEngineAccel(
-    s.throttlePos,
+  const creepAccel = computeIdleCreepAccel(
     s.gear,
     s.autoSubGear,
     s.v,
+    s.throttlePos,
+    s.brakePos,
     s.engineOn,
-    s.handbrake,
-    s.shiftTimer
+    s.handbrake
   );
+  let accel =
+    computeEngineAccel(
+      s.throttlePos,
+      s.gear,
+      s.autoSubGear,
+      s.v,
+      s.engineOn,
+      s.handbrake,
+      s.shiftTimer
+    ) + creepAccel;
 
-  const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear);
+  const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear, s.engineOn);
   if (s.v !== 0) {
     accel -= Math.sign(s.v) * drag;
   } else if (accel !== 0) {
@@ -328,8 +352,9 @@ export function stepSimulation(
   s.v += accel * dt;
   // Сопротивление дороги никогда не разворачивает знак скорости против выбранной передачи
   if (vBefore !== 0 && Math.sign(s.v) !== Math.sign(vBefore)) {
-    const wantsForward = isForwardGear && throttleCmd > 0.01 && s.engineOn && !s.handbrake;
-    const wantsReverse = s.gear === "R" && throttleCmd > 0.01 && s.engineOn && !s.handbrake;
+    const wantsForward =
+      isForwardGear && (throttleCmd > 0.01 || creepAccel > 0.01) && s.engineOn && !s.handbrake && s.brakePos < 0.12;
+    const wantsReverse = s.gear === "R" && throttleCmd > 0.01 && s.engineOn && !s.handbrake && s.brakePos < 0.12;
     if (!((wantsForward && s.v > 0) || (wantsReverse && s.v < 0))) {
       s.v = 0;
     }
@@ -337,9 +362,9 @@ export function stepSimulation(
   // Жёсткий потолок скорости: ровно 180 км/ч (50.0 м/с) вперёд и 14 км/ч назад
   s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, MAX_SPEED_MS);
 
-  // Рабочий тормоз S
-  if (brake > 0) {
-    const dv = CAR.brakeDecel * brake * dt;
+  // Рабочий дисковый тормоз S (прогрессивный гидропривод + плавный довод к 0 км/ч без отката назад)
+  if (s.brakePos > 0) {
+    const dv = computeServiceBrakeDecel(s.brakePos, Math.abs(s.v)) * dt;
     if (Math.abs(s.v) <= dv) s.v = 0;
     else s.v -= Math.sign(s.v) * dv;
   }
@@ -351,7 +376,7 @@ export function stepSimulation(
     else s.v -= Math.sign(s.v) * dv;
   }
 
-  // Плавные обороты ДВС (800..6450 об/мин, инерция маховика, ступени 1..6 и перегазовка в P/N)
+  // Плавные обороты ДВС (760..6450 об/мин, инерция маховика, ступени 1..6, самоход D1 и перегазовка в P/N)
   s.rpm = stepEngineRpm(
     s.rpm,
     s.throttlePos,
@@ -360,7 +385,9 @@ export function stepSimulation(
     s.v,
     s.engineOn,
     s.shiftTimer,
-    dt
+    dt,
+    s.brakePos,
+    s.handbrake
   );
 
   // Перемещение с дроблением шага (защита от проскакивания тонких бордюров)
@@ -428,13 +455,14 @@ export function stepSimulation(
   s.wheelSpin += (s.v * dt) / CAR.wheelRadius;
   const aLong = dt > 0 ? clamp((s.v - s.prevV) / dt, -6, 6) : 0;
   s.prevV = s.v;
-  if (aLong < -5.4 && brake > 0.9 && Math.abs(s.v) > 3.5 && s.speedingCooldown <= 0) {
+  if (aLong < -7.2 && s.brakePos > 0.85 && Math.abs(s.v) > 4.2 && s.speedingCooldown <= 0) {
     s.speedingCooldown = 4;
     emit("harsh_brake", `Резкое замедление (${Math.abs(aLong).toFixed(1)} м/с²)`);
   }
-  const pitchTarget = clamp(-aLong * 0.006, -0.032, 0.032);
+  // Реалистичный клевок кузова на стойках McPherson при торможении и мягкий возврат на остановке
+  const pitchTarget = clamp(-aLong * 0.0068, -0.038, 0.034);
   const rollTarget = clamp(-s.v * s.steer * 0.022, -0.042, 0.042);
-  const smooth = Math.min(1, dt * 6.5);
+  const smooth = Math.min(1, dt * 7.2);
   s.pitch += (pitchTarget - s.pitch) * smooth;
   s.roll += (rollTarget - s.roll) * smooth;
 
@@ -604,7 +632,8 @@ export function stepSimulation(
   if (!s.engineOn) {
     s.statusText = `Двигатель заглушен, КПП — ${s.gear === "P" ? "P (Parking)" : s.gear}. Нажмите I для запуска (или «Быстрый старт»).`;
   } else if (s.gear === "P" && !s.finished) {
-    s.statusText = "Двигатель работает, КПП в P (Parking). Переключите передачу на Shift (или R / F) и снимите ручник (Space).";
+    s.statusText =
+      "Двигатель работает, КПП в P (Parking). Удерживая тормоз (S), включите передачу (F / R / Shift или 3D-рычаг) и снимите ручник (Space).";
   } else if (s.handbrake && !s.finished) {
     s.statusText = "Стояночный тормоз активен — снимите ручник (Space).";
   } else if (!s.belt) {

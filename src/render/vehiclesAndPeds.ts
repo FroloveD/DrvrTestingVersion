@@ -40,6 +40,12 @@ export type DetailedCarRig = {
   gearGateRimMat?: THREE.MeshStandardMaterial;
   /** Невидимые коллайдеры рычага и пазов кулисы (`lever`, `P`, `R`, `N`, `D`, `M`, `M+`, `M-`) для raycast в салоне. */
   shifterPickTargets?: THREE.Object3D[];
+  /** Невидимые коллайдеры органов салона (ШГУ, ручки VOL/TUNE, подрулевой, аварийка, START/STOP, ручник) для raycast. */
+  cockpitPickTargets?: THREE.Object3D[];
+  headUnitKnobL?: THREE.Object3D;
+  headUnitKnobR?: THREE.Object3D;
+  headlightSwitchPivot?: THREE.Object3D;
+  headlightSwitchMat?: THREE.MeshBasicMaterial;
   handbrakePivot?: THREE.Object3D;
   leftStalkPivot?: THREE.Object3D;
   hazardBtnMat?: THREE.MeshBasicMaterial;
@@ -57,6 +63,17 @@ export type DetailedCarRig = {
 
 /** Идентификатор зоны интерактивного 3D-селектора 6АКПП Shiftronic в салоне Kia Ceed JD. */
 export type ShifterHitId = "lever" | "P" | "R" | "N" | "D" | "M" | "M+" | "M-";
+
+/** Идентификатор органа управления в салоне Kia Ceed JD для raycast (ШГУ, подрулевой, аварийка, START/STOP, ручник). */
+export type CockpitControlId =
+  | "headunit"
+  | "vol"
+  | "tune"
+  | "stalk-left"
+  | "headlight"
+  | "hazard"
+  | "start"
+  | "handbrake";
 
 /** Геометрия кулисы 6АКПП Shiftronic в локальных координатах кузова (`+X` к водителю, `+Z` вперёд). */
 export const SHIFTER_LAYOUT = {
@@ -434,6 +451,11 @@ export function buildDetailedCar(
   let gearKnobCapMat: THREE.MeshStandardMaterial | undefined;
   let gearGateRimMat: THREE.MeshStandardMaterial | undefined;
   let shifterPickTargets: THREE.Object3D[] | undefined;
+  let cockpitPickTargets: THREE.Object3D[] | undefined;
+  let headUnitKnobL: THREE.Object3D | undefined;
+  let headUnitKnobR: THREE.Object3D | undefined;
+  let headlightSwitchPivot: THREE.Object3D | undefined;
+  let headlightSwitchMat: THREE.MeshBasicMaterial | undefined;
   let handbrakePivot: THREE.Object3D | undefined;
   let leftStalkPivot: THREE.Object3D | undefined;
   let hazardBtnMat: THREE.MeshBasicMaterial | undefined;
@@ -604,6 +626,19 @@ export function buildDetailedCar(
     startCore.rotation.x = Math.PI / 2;
     startCore.position.set(W * 0.118, beltY + 0.012, dashZ - 0.18);
 
+    // Поворотный переключатель света фар слева от рулевой колонки (L) — как на реальном Kia Ceed JD
+    headlightSwitchMat = new THREE.MeshBasicMaterial({ color: 0x334155, toneMapped: false });
+    headlightSwitchPivot = new THREE.Group();
+    headlightSwitchPivot.position.set(W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.172);
+    const hlRing = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.014, 14), chromeMat);
+    hlRing.rotation.x = Math.PI / 2;
+    const hlKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.02, 12), headlightSwitchMat);
+    hlKnob.rotation.x = Math.PI / 2;
+    hlKnob.position.z = -0.008;
+    const hlMark = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.014, 0.004), new THREE.MeshBasicMaterial({ color: 0xf8fafc }));
+    hlMark.position.set(0, 0.01, -0.019);
+    headlightSwitchPivot.add(hlRing, hlKnob, hlMark);
+
     // Боковые дефлекторы обдува и перчаточный ящик (бардачок) пассажира
     for (const side of [1, -1] as const) {
       const ventFrame = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.068, 0.018), satinSilverMat);
@@ -660,6 +695,9 @@ export function buildDetailedCar(
       const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.018, 12), chromeMat);
       knob.rotation.x = Math.PI / 2;
       knob.position.set(side * 0.142, -0.036, -0.012);
+      knob.userData.cockpitControl = (side === 1 ? "vol" : "tune") satisfies CockpitControlId;
+      if (side === 1) headUnitKnobL = knob;
+      else headUnitKnobR = knob;
       const cVent = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.135, 0.022), mirrorBezelMat);
       cVent.position.set(side * 0.185, 0.018, 0.004);
       centerStack.add(knob, cVent);
@@ -806,6 +844,29 @@ export function buildDetailedCar(
     const domeConsole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.022, 0.18), darkTrimMat);
     domeConsole.position.set(0, roofY - 0.032, centerShiftZ + 0.56);
 
+    // Невидимые зоны клика по органам салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, ENGINE START/STOP,
+    // поворотный переключатель света фар, левый подрулевой (поворотники) и рычаг стояночного тормоза.
+    const pickGroup = new THREE.Group();
+    const pickMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+    const addPick = (id: CockpitControlId, x: number, y: number, z: number, sx: number, sy: number, sz: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), pickMat);
+      m.position.set(x, y, z);
+      m.userData.cockpitControl = id;
+      pickGroup.add(m);
+      return m;
+    };
+    cockpitPickTargets = [
+      addPick("headunit", 0.0, beltY + 0.058, dashZ - 0.2, 0.238, 0.152, 0.03),
+      addPick("vol", 0.142, beltY + 0.002, dashZ - 0.201, 0.05, 0.05, 0.032),
+      addPick("tune", -0.142, beltY + 0.002, dashZ - 0.201, 0.05, 0.05, 0.032),
+      addPick("hazard", 0.0, beltY - 0.044, dashZ - 0.201, 0.056, 0.044, 0.032),
+      addPick("start", W * 0.118, beltY + 0.012, dashZ - 0.196, 0.056, 0.056, 0.032),
+      addPick("headlight", W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.19, 0.062, 0.062, 0.032),
+      addPick("stalk-left", W * 0.23 + 0.112, 0.9, centerShiftZ + 0.55, 0.15, 0.07, 0.07),
+      addPick("handbrake", -0.052, gateY + 0.055, centerShiftZ + 0.19, 0.07, 0.085, 0.24),
+    ];
+    chassis.add(pickGroup);
+
     chassis.add(
       dash,
       dashTopPad,
@@ -815,6 +876,7 @@ export function buildDetailedCar(
       cluster,
       startRing,
       startCore,
+      headlightSwitchPivot,
       gloveHandle,
       centerStack,
       consoleTunnel,
@@ -1040,6 +1102,8 @@ export function buildDetailedCar(
     rStalk.position.set(W * 0.23 - 0.102, 0.904, centerShiftZ + 0.55);
 
     chassis.add(steerWheelMesh, colShroud, leftStalkPivot, rStalk);
+
+    // Невидимые зоны клика по органам салона создаются ниже, рядом с геометрией торпедо и тоннеля.
   }
 
   // Блок-фары, ПТФ, двухсекционные задние фонари, катафоты, зеркала и поворотники (+X левый, -X правый)
@@ -1255,6 +1319,11 @@ export function buildDetailedCar(
     gearKnobCapMat,
     gearGateRimMat,
     shifterPickTargets,
+    cockpitPickTargets,
+    headUnitKnobL,
+    headUnitKnobR,
+    headlightSwitchPivot,
+    headlightSwitchMat,
     handbrakePivot,
     leftStalkPivot,
     hazardBtnMat,

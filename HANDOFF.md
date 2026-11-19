@@ -30,7 +30,7 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 34 автотеста ядра (T01–T34), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Тесты ядра | 35 автотестов ядра (T01–T35), прогоняются и в Node, и во вкладке «Тесты и Модули» |
 | Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
@@ -98,7 +98,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 34 автотеста ядра (T01–T34) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 35 автотестов ядра (T01–T35) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
 | `src/maps/osmLoader.ts`, `src/maps/osmXml.ts`, `src/maps/osmDeconflict.ts` | двухпроходный бесконфликтный офлайн-импорт `.osm` XML (`<bounds>`, `<relation>`), Overpass JSON и GeoJSON (WGS84, мультиполигоны/дворы, проемы в заборах, `oneway`, `layer`, ODbL) |
 | `src/maps/boundary.ts` | произвольные многоугольные границы карты: коридор маршрута, выпуклая оболочка, обрезка ломаных и удержание авто |

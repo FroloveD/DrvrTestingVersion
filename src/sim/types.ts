@@ -52,8 +52,9 @@ export type SimState = {
   gear: Gear;
   prevGear: Gear;
   autoSubGear: number; // 1..6 в режиме D (и синхронизированная ступень в M1..M6)
-  rpm: number; // 0 или 800..6500 об/мин (плавная инерция маховика)
+  rpm: number; // 0 или 760..6500 об/мин (плавная инерция маховика)
   throttlePos: number; // 0..1 сглаженное открытие электронной дроссельной заслонки
+  brakePos: number; // 0..1 сглаженное давление в гидроприводе рабочих тормозов
   shiftTimer: number; // с оставшегося размыкания тяги при переключении передачи
   engineOn: boolean;
   handbrake: boolean;

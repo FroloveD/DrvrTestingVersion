@@ -548,7 +548,12 @@ export default function App() {
       </main>
 
       {toast && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 panel px-4 py-2.5 text-[12px] font-bold text-[#52d6bd] shadow-2xl fade-in max-w-[92vw] pointer-events-none">
+        <div
+          data-testid="notification"
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 panel px-4 py-2.5 text-[12px] font-bold text-[#52d6bd] shadow-2xl fade-in max-w-[92vw] pointer-events-none"
+        >
           {toast}
         </div>
       )}

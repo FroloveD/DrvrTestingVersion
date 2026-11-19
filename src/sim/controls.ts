@@ -17,6 +17,15 @@ export const PARK_LOCK_MAX_SPEED_MS = 0.35;
 /** Максимальная встречная скорость (м/с, ≈ 1,8 км/ч) для смены направления `R ↔ вперёд`. */
 export const DIRECTION_SWITCH_MAX_SPEED_MS = 0.5;
 
+/**
+ * Минимальное усилие на педали рабочего тормоза (`0..1`) для снятия соленоидной блокировки
+ * селектора АКПП BTSI (Brake-Transmission Shift Interlock) при выходе из `P (Parking)`.
+ */
+export const SHIFT_LOCK_MIN_BRAKE = 0.1;
+
+/** Входные параметры проверки переключения КПП (передача, ДВС и нажатие педали тормоза). */
+export type GearCheckInput = Pick<InputState, "gear" | "engineOn"> & { brake?: number };
+
 const MANUAL_GEARS: readonly Gear[] = ["1", "2", "3", "4", "5", "6"];
 
 function manualGearOf(n: number): Gear {
@@ -37,24 +46,30 @@ function matchManualGearForSpeed(speedMs: number): Gear {
  *
  * Правила:
  * - Включить `P` можно только практически на полной остановке (`|speedMs| <= 0.35` м/с).
- * - Вывести селектор из `P` в `R`, `N`, `D` или `1`..`6` можно только при запущенном двигателе (`engineOn === true`).
+ * - Вывести селектор из `P` в `R`, `N`, `D` или `1`..`6` можно только при запущенном двигателе (`engineOn === true`)
+ *   и нажатой педали рабочего тормоза (`brake >= SHIFT_LOCK_MIN_BRAKE`, блокировка BTSI).
  * - Понижение в ручную ступень `1`..`5` блокируется, если текущая скорость превышает безопасный предел оборотов ступени.
  *
- * @param inp Текущее состояние передачи и двигателя.
+ * @param inp Текущее состояние передачи, двигателя и педали тормоза.
  * @param speedMs Текущая продольная скорость автомобиля, м/с (`+` вперёд, `−` назад).
  * @param next Целевой режим КПП (`P` | `R` | `N` | `D` | `1`..`6`).
  * @returns Русскоязычный текст отказа для уведомления в HUD либо `null`, если переключение разрешено.
  */
 export function checkGearChange(
-  inp: Pick<InputState, "gear" | "engineOn">,
+  inp: GearCheckInput,
   speedMs: number,
   next: Gear
 ): string | null {
   if (next === "P" && Math.abs(speedMs) > PARK_LOCK_MAX_SPEED_MS) {
     return "Парковку P можно включить только после полной остановки (тормоз S)";
   }
-  if (inp.gear === "P" && next !== "P" && !inp.engineOn) {
-    return "Сначала запустите двигатель (I), затем выберите передачу (Shift / R / F)";
+  if (inp.gear === "P" && next !== "P") {
+    if (!inp.engineOn) {
+      return "Сначала запустите двигатель (I), затем удерживайте тормоз (S) и выберите передачу";
+    }
+    if ((inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
+      return "Удерживайте педаль тормоза (S или ТОРМОЗ), чтобы переключить КПП из P (Parking)";
+    }
   }
   if (isManualGear(next)) {
     const targetNum = Number(next);
@@ -75,7 +90,7 @@ export function checkGearChange(
  * Возврат в автоматический режим `D` в любой момент выполняется клавишей `F` или кнопкой `D` в HUD.
  */
 export function stepGearSequential(
-  inp: Pick<InputState, "gear" | "engineOn">,
+  inp: GearCheckInput,
   speedMs: number,
   autoSubGear: number,
   dir: 1 | -1
@@ -151,7 +166,7 @@ const MAIN_GATE_ORDER: readonly ("P" | "R" | "N" | "D")[] = ["P", "R", "N", "D"]
  *   и механическим упором на `M1` без случайного выброса в нейтраль).
  */
 export function applyShifterTarget(
-  inp: Pick<InputState, "gear" | "engineOn">,
+  inp: GearCheckInput,
   speedMs: number,
   autoSubGear: number,
   target: ShifterTarget,
@@ -235,7 +250,7 @@ export function applyShifterTarget(
  * в основном пазу листает `P ↔ R ↔ N ↔ D`, в ручном пазу Shiftronic — `M1 ↔ M6`.
  */
 export function stepShifterGate(
-  inp: Pick<InputState, "gear" | "engineOn">,
+  inp: GearCheckInput,
   speedMs: number,
   autoSubGear: number,
   dir: 1 | -1

@@ -48,7 +48,7 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 34 автотеста ядра (T01–T34), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Тесты ядра | 35 автотестов ядра (T01–T35), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
 L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
@@ -118,7 +118,7 @@ L.push("| `src/sim/step.ts` | единственный шаг физики и д
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 34 автотеста ядра (T01–T34) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 35 автотестов ядра (T01–T35) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts`, `src/maps/osmDeconflict.ts` | двухпроходный бесконфликтный офлайн-импорт `.osm` XML (`<bounds>`, `<relation>`), Overpass JSON и GeoJSON (WGS84, мультиполигоны/дворы, проемы в заборах, `oneway`, `layer`, ODbL) |");
 L.push("| `src/maps/boundary.ts` | произвольные многоугольные границы карты: коридор маршрута, выпуклая оболочка, обрезка ломаных и удержание авто |");

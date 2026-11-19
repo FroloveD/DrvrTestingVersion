@@ -116,6 +116,11 @@ export const MANUAL_STALL_DOWN_KMH = [0, 0, 7, 15, 25, 36, 48] as const;
 export const AUTO_SHIFT_DURATION_S = 0.24;
 export const MANUAL_SHIFT_DURATION_S = 0.18;
 
+/** Установившаяся скорость плавного самохода (creep) гидротрансформатора на D1/M1 на холостых оборотах (км/ч). */
+export const IDLE_CREEP_MAX_KMH = 6.5;
+/** Максимальное установившееся замедление дисковых тормозов Kia Ceed JD на сухом асфальте с АБС (м/с²). */
+export const SERVICE_BRAKE_MAX_DECEL = 8.4;
+
 export const FIXED_DT = 1 / 60;
 
 /** Shared 700 ms indicator cadence for vehicle lamps and the dashboard. */
@@ -215,26 +220,93 @@ export function engineTorqueFactor(rpm: number): number {
 }
 
 /**
- * Суммарное замедление от качения шин, аэродинамики (Cx·S ≈ 0.64 м²) и мягкого торможения двигателем (м/с²).
- * Калибровано по паспорту Kia Ceed JD 1.6 MPI: 0–100 км/ч ≈ 10.8 с, Vmax = 180 км/ч.
+ * Суммарное замедление от качения шин 205/55 R16, аэродинамики (Cx·S ≈ 0.65 м²) и торможения двигателем
+ * в режиме ПХХ / DFCO при отпущенном газе (м/с²).
+ * Калибровано по паспорту Kia Ceed JD 1.6 MPI: 0–100 км/ч ≈ 10.8 с, Vmax = 180 км/ч,
+ * реалистичный выбег в `N` до полной остановки и ступенчатое торможение двигателем в `D`/`M`/`R`.
  */
 export function computeRoadDragDecel(
   absV: number,
   throttlePos = 0,
   activeForwardGear = 0,
-  gear: Gear = "D"
+  gear: Gear = "D",
+  engineOn = true
 ): number {
-  const aeroAndRoll = 0.15 + 0.00033 * absV * absV + 0.003 * absV;
+  const aeroAndRoll = 0.148 + 0.000331 * absV * absV + 0.0029 * absV;
+  const coast = Math.pow(clamp(1 - throttlePos, 0, 1), 1.3);
+  // Мягкое финальное докатывание шин/подшипников в последние ~2,5 км/ч при выбеге до полной остановки
+  const lowSpeedRollSettle = 0.095 * (1 - clamp(absV / 0.72, 0, 1));
+
   if (gear === "R") {
-    return 0.24 + 0.015 * absV;
+    const baseRev = 0.24 + 0.018 * absV;
+    const revEngineBrake = coast * (0.36 + 0.055 * absV + lowSpeedRollSettle);
+    return baseRev + revEngineBrake;
   }
   if (activeForwardGear >= 1 && activeForwardGear <= MAX_FORWARD_GEAR) {
+    if (!engineOn) {
+      return aeroAndRoll + 0.22 + lowSpeedRollSettle;
+    }
     const kmh = absV * 3.6;
-    const coast = clamp(1 - throttlePos, 0, 1);
-    const engineBrake = coast * (0.05 + (MAX_FORWARD_GEAR + 1 - activeForwardGear) * 0.038) * clamp(kmh / 16, 0, 1);
+    const wheelRpm = kmh * GEAR_RPM_PER_KMH[activeForwardGear];
+    // Вакуумное (насосное) торможение двигателем сильнее на пониженных передачах и высоких оборотах;
+    // на 1-й ступени плавно сходит к нулю у порога холостого хода IDLE_CREEP_MAX_KMH (~6,5 км/ч),
+    // где ЭБУ возобновляет подачу топлива и гидротрансформатор поддерживает плавный самоход D1.
+    const gearLoss = 0.14 + (MAX_FORWARD_GEAR + 1 - activeForwardGear) * 0.068;
+    const rpmFactor = 0.58 + 0.82 * clamp((wheelRpm - 1050) / 3600, 0, 1);
+    const dfcoFade =
+      activeForwardGear === 1
+        ? clamp((kmh - IDLE_CREEP_MAX_KMH) / 6.5, 0, 1)
+        : clamp((kmh - 3.5) / 6.0, 0, 1);
+    const engineBrake = coast * gearLoss * rpmFactor * dfcoFade;
     return aeroAndRoll + engineBrake;
   }
-  return aeroAndRoll;
+  // Нейтраль N / P: чистый свободный выбег шин и аэродинамики с плавной полной остановкой
+  return aeroAndRoll + coast * (0.045 + lowSpeedRollSettle);
+}
+
+/**
+ * Прогрессивное замедление рабочей тормозной системы Kia Ceed JD (вентилируемые передние диски 280 мм +
+ * задние 262 мм, ВУТ, АБС/EBD), м/с².
+ * Учитывает нелинейную модуляцию педали, лёгкое тепловое снижение на высоких скоростях и мягкий
+ * довод колодок в последние ~2 км/ч для реалистичной плавной остановки без рывка.
+ */
+export function computeServiceBrakeDecel(brakePos: number, absV: number): number {
+  const b = clamp(brakePos, 0, 1);
+  if (b <= 0.001) return 0;
+  const kmh = absV * 3.6;
+  const pedalCurve = Math.pow(b, 1.15);
+  const highSpeedFactor = 1 - 0.06 * clamp((kmh - 90) / 90, 0, 1);
+  const finalStopSettle = 0.58 + 0.42 * clamp(absV / 0.6, 0, 1);
+  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle;
+}
+
+/**
+ * Тяга плавного самохода (torque-converter idle creep) 6АКПП на 1-й передаче (`D1` / `M1`) на минимальных
+ * оборотах холостого хода (~800 об/мин), м/с².
+ * Когда ДВС запущен, ручник снят и педаль тормоза отпущена, автомобиль сам плавно трогается и катится
+ * со скоростью до ~6,5 км/ч; при нажатии тормоза S тяга гидротрансформатора мягко отсекается.
+ */
+export function computeIdleCreepAccel(
+  gear: Gear,
+  autoSubGear: number,
+  v: number,
+  throttlePos: number,
+  brakePos: number,
+  engineOn: boolean,
+  handbrake: boolean
+): number {
+  if (!engineOn || handbrake) return 0;
+  const isFirstGear = (gear === "D" && autoSubGear === 1) || gear === "1";
+  if (!isFirstGear || v < -0.05) return 0;
+  const brakeRelease = clamp(1 - brakePos / 0.16, 0, 1);
+  if (brakeRelease <= 0) return 0;
+  const throttleHandoff = 1 - clamp(throttlePos * 2.6, 0, 1);
+  if (throttleHandoff <= 0) return 0;
+  const fwdKmh = Math.max(0, v * 3.6);
+  if (fwdKmh >= IDLE_CREEP_MAX_KMH) return 0;
+  const speedReserve = Math.pow(1 - fwdKmh / IDLE_CREEP_MAX_KMH, 1.12);
+  // 0.155 м/с² уравновешивает сопротивление качения на ~6,4 км/ч; +0.46 м/с² даёт мягкий старт с места
+  return brakeRelease * throttleHandoff * (0.155 + 0.46 * speedReserve);
 }
 
 /** Экспоненциальный фильтр с ограничением скорости нарастания/спада (инерция маховика ДВС без скачков). */
@@ -244,7 +316,7 @@ function smoothSlewRpm(rpm: number, target: number, rate: number, maxSlewPerSec:
   return rpm + clamp(expDelta, -maxStep, maxStep);
 }
 
-/** Плавный расчёт оборотов ДВС (0 или 800..6450 об/мин) с учётом ступени КПП, гидротрансформатора и перегазовки в P/N. */
+/** Плавный расчёт оборотов ДВС (0 или 760..6450 об/мин) с учётом ступени КПП, гидротрансформатора, самохода D1 и перегазовки в P/N. */
 export function stepEngineRpm(
   prevRpm: number,
   throttlePos: number,
@@ -253,7 +325,9 @@ export function stepEngineRpm(
   v: number,
   engineOn: boolean,
   shiftTimer: number,
-  dt: number
+  dt: number,
+  brakePos = 0,
+  handbrake = false
 ): number {
   if (!engineOn) {
     const next = smoothSlewRpm(prevRpm, 0, 4.6, 3600, dt);
@@ -275,8 +349,10 @@ export function stepEngineRpm(
     );
   }
   const kmh = Math.abs(v) * 3.6;
+  const heldAtStop = kmh < 0.35 && th < 0.02 && (brakePos > 0.16 || handbrake);
+  const loadedIdleRpm = heldAtStop ? ENGINE_IDLE_RPM - 35 : ENGINE_IDLE_RPM;
   if (gear === "R") {
-    const revTarget = clamp(ENGINE_IDLE_RPM + kmh * 118 + th * 780, ENGINE_IDLE_RPM, 3600);
+    const revTarget = clamp(loadedIdleRpm + kmh * 118 + th * 780, loadedIdleRpm, 3600);
     const rising = revTarget > prevRpm;
     return clamp(
       smoothSlewRpm(prevRpm, revTarget, rising ? 4.8 : 5.2, rising ? 3800 : 4200, dt),
@@ -289,8 +365,8 @@ export function stepEngineRpm(
   const lockup = clamp((coupledRpm - 700) / 1700, 0, 1);
   const converterSlip = th * 1050 * (1 - lockup * 0.92) * (shiftTimer > 0 ? 0.2 : 1);
   const targetRpm = clamp(
-    Math.max(ENGINE_IDLE_RPM, coupledRpm + converterSlip),
-    ENGINE_IDLE_RPM,
+    Math.max(loadedIdleRpm, coupledRpm + converterSlip),
+    loadedIdleRpm,
     ENGINE_REV_LIMIT_RPM
   );
   const rising = targetRpm > prevRpm;

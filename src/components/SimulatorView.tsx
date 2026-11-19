@@ -24,8 +24,16 @@ import { buildRouteCorridorPolygon } from "../maps/boundary";
 import { cropOsmPackToPolygon, parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
 import { buildRouteFromRoads, listRouteCandidates, streetNameAt } from "../maps/route";
 import { checkScenarioRoute } from "../maps/routeCheck";
+import {
+  DEFAULT_HEAD_UNIT_STATE,
+  HEAD_UNIT_CLIPS,
+  HEAD_UNIT_MODES,
+  RADIO_STATIONS,
+  type HeadUnitMode,
+  type HeadUnitState,
+} from "../render/cockpitDisplays";
 import { SceneController, type PerfMetrics } from "../render/sceneController";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import { customFromOsmPack, type CustomScenarioDef } from "../scenarios/custom";
 import { autoFixScenarioRoute } from "../scenarios/editorOps";
@@ -125,6 +133,38 @@ function loadControls(): { steerKeyRate: number } {
 function saveControls(c: { steerKeyRate: number }): void {
   try {
     localStorage.setItem(CONTROLS_KEY, JSON.stringify(c));
+  } catch {
+    // storage blocked
+  }
+}
+
+/** Ключ сохранения режима 7" ШГУ (ассистент / радио / клип / выкл.) и выбранной станции. */
+const HEAD_UNIT_KEY = "cdt.headunit.v1";
+
+function loadHeadUnit(): HeadUnitState {
+  try {
+    const raw = localStorage.getItem(HEAD_UNIT_KEY);
+    if (!raw) return DEFAULT_HEAD_UNIT_STATE;
+    const parsed = JSON.parse(raw) as Partial<HeadUnitState>;
+    const mode: HeadUnitMode =
+      parsed.mode && HEAD_UNIT_MODES.some((m) => m.id === parsed.mode) ? parsed.mode : DEFAULT_HEAD_UNIT_STATE.mode;
+    const stationIndex = clamp(Math.round(Number(parsed.stationIndex) || 0), 0, RADIO_STATIONS.length - 1);
+    const clipIndex = clamp(Math.round(Number(parsed.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1);
+    return {
+      mode,
+      stationIndex,
+      clipIndex,
+      radioPlaying: Boolean(parsed.radioPlaying),
+      promoSlot: DEFAULT_HEAD_UNIT_STATE.promoSlot ?? null,
+    };
+  } catch {
+    return DEFAULT_HEAD_UNIT_STATE;
+  }
+}
+
+function saveHeadUnit(h: HeadUnitState): void {
+  try {
+    localStorage.setItem(HEAD_UNIT_KEY, JSON.stringify(h));
   } catch {
     // storage blocked
   }
@@ -268,6 +308,14 @@ export function SimulatorView({
   const [steerKeyRate, setSteerKeyRate] = useState<number>(() => loadControls().steerKeyRate);
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
+  // Мультимедиа 7" ШГУ: режим экрана и станция тюнера сохраняются в localStorage (`cdt.headunit.v1`)
+  const [headUnit, setHeadUnit] = useState<HeadUnitState>(loadHeadUnit);
+  const headUnitRef = useRef<HeadUnitState>(headUnit);
+  const [cockpitControlUi, setCockpitControlUi] = useState<{
+    id: CockpitControlId;
+    x: number;
+    y: number;
+  } | null>(null);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
   const [layerOrder, setLayerOrder] = useState<string[]>(loadLayerOrder);
 
@@ -545,6 +593,16 @@ export function SimulatorView({
   }));
 
   // === [SEC:sim-actions] Команды поворотников, АКПП, стартера и сброса попытки ===
+  /**
+   * Живое усилие на педали тормоза `0..1` из клавиатуры (S / ↓), экранной педали и USB-геймпада.
+   * Нужно блокировке BTSI (`checkGearChange`): клавиша S должна снимать селектор с P ещё до следующего тика.
+   */
+  const liveBrakePressure = useCallback(() => {
+    const keys = keysRef.current;
+    const pressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
+    return Math.max(inputRef.current.brake, pressed ? 1 : 0);
+  }, []);
+
   const setTurnSignal = useCallback((signal: InputState["signal"]) => {
     inputRef.current.signal = signal;
     // Reflect a signal button/key press immediately instead of waiting for the next HUD tick.
@@ -555,7 +613,7 @@ export function SimulatorView({
   const setGear = useCallback(
     (gear: Gear) => {
       const inp = inputRef.current;
-      const err = checkGearChange(inp, stateRef.current.v, gear);
+      const err = checkGearChange({ ...inp, brake: liveBrakePressure() }, stateRef.current.v, gear);
       if (err) {
         onNotify(err);
         return;
@@ -563,7 +621,7 @@ export function SimulatorView({
       inp.gear = gear;
       setHud((current) => ({ ...current, state: { ...current.state, gear } }));
     },
-    [onNotify]
+    [liveBrakePressure, onNotify]
   );
 
   /** Секвентальное переключение 6-ст. КПП Shiftronic по клавише Shift (+1 вверх, −1 вниз). */
@@ -571,7 +629,12 @@ export function SimulatorView({
     (dir: 1 | -1) => {
       const inp = inputRef.current;
       const st = stateRef.current;
-      const { next, blockedReason } = stepGearSequential(inp, st.v, st.autoSubGear, dir);
+      const { next, blockedReason } = stepGearSequential(
+        { ...inp, brake: liveBrakePressure() },
+        st.v,
+        st.autoSubGear,
+        dir
+      );
       if (blockedReason) {
         onNotify(blockedReason);
         return;
@@ -604,9 +667,13 @@ export function SimulatorView({
     (target: ShifterTarget, opts?: { toggleManualOnClick?: boolean; fromDrag?: boolean }): Gear | null => {
       const inp = inputRef.current;
       const st = stateRef.current;
-      const { next, blockedReason } = applyShifterTarget(inp, st.v, st.autoSubGear, target, {
-        toggleManualOnClick: opts?.toggleManualOnClick,
-      });
+      const { next, blockedReason } = applyShifterTarget(
+        { ...inp, brake: liveBrakePressure() },
+        st.v,
+        st.autoSubGear,
+        target,
+        { toggleManualOnClick: opts?.toggleManualOnClick }
+      );
       if (blockedReason) {
         notifyShifterOnce(blockedReason, Boolean(opts?.fromDrag));
         return null;
@@ -620,7 +687,7 @@ export function SimulatorView({
       }));
       return next;
     },
-    [notifyShifterOnce]
+    [liveBrakePressure, notifyShifterOnce]
   );
 
   /** Пошаговое переключение 3D-рычага АКПП (колесом мыши или одиночным кликом по рукоятке). */
@@ -628,7 +695,12 @@ export function SimulatorView({
     (dir: 1 | -1) => {
       const inp = inputRef.current;
       const st = stateRef.current;
-      const { next, blockedReason } = stepShifterGate(inp, st.v, st.autoSubGear, dir);
+      const { next, blockedReason } = stepShifterGate(
+        { ...inp, brake: liveBrakePressure() },
+        st.v,
+        st.autoSubGear,
+        dir
+      );
       if (blockedReason) {
         notifyShifterOnce(blockedReason, false);
         return;
@@ -641,7 +713,7 @@ export function SimulatorView({
         state: { ...current.state, gear: next, autoSubGear: nextSub },
       }));
     },
-    [notifyShifterOnce]
+    [liveBrakePressure, notifyShifterOnce]
   );
 
   /** Быстрый взгляд водителя на 3D-рычаг АКПП в салоне и обратно на дорогу (клавиша G или кнопка «КПП»). */
@@ -681,10 +753,197 @@ export function SimulatorView({
     }));
   }, [onNotify]);
 
+  // === [SEC:sim-media] 7" ШГУ: режимы экрана, FM-тюнер, клипы и офлайн Web Audio синтез ===
+  /** Переключает режим экрана 7" ШГУ по кругу: ассистент → радио → клип → выкл. */
+  const cycleHeadUnitMode = useCallback(() => {
+    setHeadUnit((prev) => {
+      const idx = HEAD_UNIT_MODES.findIndex((m) => m.id === prev.mode);
+      const next = HEAD_UNIT_MODES[(idx + 1) % HEAD_UNIT_MODES.length];
+      onNotify(`Экран 7" ШГУ: ${next.label}`);
+      return {
+        ...prev,
+        mode: next.id,
+        radioPlaying: next.id === "radio" ? prev.radioPlaying : next.id === "clip" ? true : false,
+      };
+    });
+  }, [onNotify]);
+
+  /** Прямой выбор режима экрана ШГУ (кнопки в панели «Управление» и на 3D-экране). */
+  const setHeadUnitMode = useCallback(
+    (mode: HeadUnitMode) => {
+      setHeadUnit((prev) => ({
+        ...prev,
+        mode,
+        radioPlaying: mode === "radio" ? prev.radioPlaying : mode === "clip" ? true : false,
+      }));
+      onNotify(`Экран 7" ШГУ: ${HEAD_UNIT_MODES.find((m) => m.id === mode)?.label ?? mode}`);
+    },
+    [onNotify]
+  );
+
+  /** Листает станции встроенного FM-тюнера (`dir = +1` вправо по шкале, `−1` влево). */
+  const stepRadioStation = useCallback(
+    (dir: 1 | -1) => {
+      setHeadUnit((prev) => {
+        const total = RADIO_STATIONS.length;
+        const stationIndex = (prev.stationIndex + dir + total) % total;
+        const st = RADIO_STATIONS[stationIndex];
+        onNotify(`FM ${st.freq} · ${st.name}`);
+        return { ...prev, stationIndex, mode: "radio", radioPlaying: true };
+      });
+    },
+    [onNotify]
+  );
+
+  /** Пауза/воспроизведение радиоприёмника (шайба VOL в 3D-салоне и кнопка в панели). */
+  const toggleRadioPlay = useCallback(() => {
+    setHeadUnit((prev) => {
+      const radioPlaying = !prev.radioPlaying;
+      onNotify(radioPlaying ? "Радио включено" : "Радио выключено (пауза)");
+      return { ...prev, mode: "radio", radioPlaying };
+    });
+  }, [onNotify]);
+
+  /** Переключает видеоклип на экране ШГУ. */
+  const stepHeadUnitClip = useCallback(() => {
+    setHeadUnit((prev) => {
+      const clipIndex = (prev.clipIndex + 1) % HEAD_UNIT_CLIPS.length;
+      onNotify(`Клип: ${HEAD_UNIT_CLIPS[clipIndex].title}`);
+      return { ...prev, clipIndex, mode: "clip", radioPlaying: true };
+    });
+  }, [onNotify]);
+
+  // Офлайн-синтез радио Web Audio: короткие ноты станции, пока включён режим «Радио»
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  useEffect(() => {
+    const ctor =
+      typeof window !== "undefined"
+        ? window.AudioContext ??
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        : undefined;
+    if (!ctor) return;
+    const playing = headUnit.mode === "radio" && headUnit.radioPlaying;
+    if (!playing) {
+      audioCtxRef.current?.suspend().catch(() => undefined);
+      return;
+    }
+    const station = RADIO_STATIONS[headUnit.stationIndex];
+    const intervalMs = Math.round((60_000 / station.bpm) * 2);
+    let step = 0;
+    let stopped = false;
+    let ctx: AudioContext;
+    try {
+      ctx = (audioCtxRef.current ??= new ctor());
+      void ctx.resume().catch(() => undefined);
+    } catch {
+      // Аудио запрещено политикой браузера или недоступно — экран ШГУ продолжает работать без звука
+      return;
+    }
+    const tick = () => {
+      if (stopped) return;
+      try {
+        const note = station.notes[step % station.notes.length];
+        step += 1;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = note;
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (intervalMs / 1000) * 0.9);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + intervalMs / 1000);
+      } catch {
+        stopped = true;
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, intervalMs);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [headUnit.mode, headUnit.radioPlaying, headUnit.stationIndex]);
+
+  // Сохранение настроек ШГУ и передача состояния в 3D-сцену (экран, шайбы, подсветка)
+  useEffect(() => {
+    headUnitRef.current = headUnit;
+    saveHeadUnit(headUnit);
+    sceneCtrlRef.current?.setHeadUnitState(headUnit);
+  }, [headUnit]);
+
+  /** Обрабатывает нажатие на интерактивный орган 3D-салона (ШГУ, VOL/TUNE, аварийка, START/STOP, свет, подрулевой, ручник). */
+  const pressCockpitControl = useCallback(
+    (id: CockpitControlId) => {
+      const inp = inputRef.current;
+      sceneCtrlRef.current?.setCockpitControlInteraction(null, id);
+      switch (id) {
+        case "headunit":
+          cycleHeadUnitMode();
+          break;
+        case "vol":
+          toggleRadioPlay();
+          break;
+        case "tune":
+          stepRadioStation(1);
+          break;
+        case "hazard":
+          setTurnSignal(inp.signal === "hazard" ? null : "hazard");
+          break;
+        case "start":
+          toggleEngine();
+          break;
+        case "headlight":
+          inp.lights = !inp.lights;
+          onNotify(inp.lights ? "Ближний свет включён" : "Ближний свет выключен");
+          break;
+        case "stalk-left":
+          setTurnSignal(inp.signal === null ? "left" : inp.signal === "left" ? "right" : null);
+          break;
+        case "handbrake":
+          inp.handbrake = !inp.handbrake;
+          onNotify(inp.handbrake ? "Стояночный тормоз затянут" : "Стояночный тормоз снят");
+          break;
+      }
+    },
+    [cycleHeadUnitMode, onNotify, setTurnSignal, stepRadioStation, toggleEngine, toggleRadioPlay]
+  );
+
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
   useEffect(() => {
     actionsRef.current = { toggleEngine, setGear, setTurnSignal };
   }, [toggleEngine, setGear, setTurnSignal]);
+
+  /**
+   * Отладочный мост для Playwright-смоука: экранные координаты органов салона и состояние ШГУ.
+   * Не влияет на управление — только чтение/проекция, поэтому не участвует в детерминизме ядра.
+   */
+  useEffect(() => {
+    const api = {
+      headUnit: () => headUnitRef.current,
+      controlPoint: (id: CockpitControlId) =>
+        sceneCtrlRef.current?.getCockpitControlScreenPoint(id) ?? null,
+      shifterPoint: (id: ShifterHitId) => sceneCtrlRef.current?.getShifterTargetScreenPoint(id) ?? null,
+      pressControl: (id: CockpitControlId) => pressCockpitControl(id),
+      cameraMode: () => optsRef.current.cameraMode,
+      gear: () => inputRef.current.gear,
+      engineOn: () => inputRef.current.engineOn,
+      signal: () => inputRef.current.signal,
+      vehicle: () => ({
+        gear: inputRef.current.gear,
+        engineOn: inputRef.current.engineOn,
+        signal: inputRef.current.signal,
+        lights: inputRef.current.lights,
+        handbrake: inputRef.current.handbrake,
+        speedKmh: Math.round(Math.abs(stateRef.current.v) * 3.6),
+      }),
+    };
+    (window as unknown as { __cdtCockpit?: typeof api }).__cdtCockpit = api;
+    return () => {
+      delete (window as unknown as { __cdtCockpit?: typeof api }).__cdtCockpit;
+    };
+  }, [pressCockpitControl]);
 
   const resetAttempt = useCallback(
     (targetWorld: WorldData, useReady: boolean) => {
@@ -1134,10 +1393,17 @@ export function SimulatorView({
     }
     if (e.button !== 0 && e.button !== 2) return;
 
-    // В режиме салона ЛКМ по 3D-рычагу или кулисе АКПП захватывает селектор, не вращая руль
+    // В режиме салона ЛКМ по органам (ШГУ, VOL/TUNE, аварийка, START/STOP, свет, подрулевой, ручник) нажимает их
     const ctrl = sceneCtrlRef.current;
     if (e.button === 0 && ctrl && optsRef.current.cameraMode === "cockpit") {
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const control = pos ? ctrl.pickCockpitControl(pos.normX, pos.normY) : null;
+      if (control) {
+        e.preventDefault();
+        pressCockpitControl(control);
+        setCockpitControlUi({ id: control, x: pos!.localX, y: pos!.localY });
+        return;
+      }
       const hit = pos ? ctrl.pickCockpitShifter(pos.normX, pos.normY) : null;
       if (pos && hit) {
         e.preventDefault();
@@ -1299,9 +1565,22 @@ export function SimulatorView({
       return;
     }
 
-    // 3. Свободное наведение курсора в салоне: подсветка 3D-рычага АКПП и всплывающая подсказка
+    // 3. Свободное наведение курсора в салоне: сначала органы ШГУ/света/стартера, затем 3D-рычаг АКПП
     if (ctrl && optsRef.current.cameraMode === "cockpit") {
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const control = pos ? ctrl.pickCockpitControl(pos.normX, pos.normY) : null;
+      if (pos && control) {
+        ctrl.setCockpitControlInteraction(control);
+        setCockpitControlUi({ id: control, x: pos.localX, y: pos.localY });
+        if (shifterHoverRef.current !== null) {
+          shifterHoverRef.current = null;
+          ctrl.setShifterInteraction(null, false, 0);
+          setCockpitShifterUi(null);
+        }
+        return;
+      }
+      ctrl.setCockpitControlInteraction(null);
+      if (cockpitControlUi) setCockpitControlUi(null);
       const hit = pos ? ctrl.pickCockpitShifter(pos.normX, pos.normY) : null;
       if (pos && hit) {
         shifterHoverRef.current = hit;
@@ -1355,6 +1634,8 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerLeave = () => {
+    sceneCtrlRef.current?.setCockpitControlInteraction(null);
+    setCockpitControlUi(null);
     if (shifterDragRef.current) return;
     if (shifterHoverRef.current !== null) {
       shifterHoverRef.current = null;
@@ -2373,6 +2654,55 @@ export function SimulatorView({
             {/* USB-руль и педали: отдельная панель с калибровкой по шагам */}
             <GamepadPanel profile={padProfile} onChange={setPadProfile} onNotify={onNotify} />
 
+            <div className="mt-3 pt-3 border-t hairline" data-testid="controls-headunit">
+              <div className="mono text-[10px] text-[#7c909d] mb-1.5">7" ШГУ · МУЛЬТИМЕДИА</div>
+              <div className="flex flex-wrap gap-1.5">
+                {HEAD_UNIT_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    data-headunit-mode={m.id}
+                    aria-pressed={headUnit.mode === m.id}
+                    onClick={() => setHeadUnitMode(m.id)}
+                    className={`btn btn-mini ${headUnit.mode === m.id ? "border-[#52d6bd]/60 text-[#52d6bd] bg-[#52d6bd]/10" : ""}`}
+                  >
+                    {m.short}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-1.5 rounded-lg bg-[#0c1520] border hairline px-2 py-1.5">
+                <span className="mono text-[10px] text-[#9bafbc]">
+                  FM {RADIO_STATIONS[headUnit.stationIndex].freq}
+                </span>
+                <span className="truncate text-[10px] text-[#d3e0e7]">{RADIO_STATIONS[headUnit.stationIndex].name}</span>
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <button type="button" className="btn btn-mini" onClick={() => stepRadioStation(-1)} aria-label="Предыдущая станция">
+                  ◀ станция
+                </button>
+                <button type="button" className="btn btn-mini" onClick={() => stepRadioStation(1)} aria-label="Следующая станция">
+                  станция ▶
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-mini ${headUnit.radioPlaying ? "border-[#52d6bd]/60 text-[#52d6bd]" : ""}`}
+                  onClick={toggleRadioPlay}
+                  aria-pressed={headUnit.radioPlaying}
+                >
+                  {headUnit.radioPlaying ? "Пауза" : "Играть"}
+                </button>
+                <button type="button" className="btn btn-mini" onClick={stepHeadUnitClip}>
+                  Клип ↻
+                </button>
+              </div>
+              <div className="mono text-[10px] text-[#7c909d] mt-2 leading-relaxed">
+                {HEAD_UNIT_CLIPS[headUnit.clipIndex].title} · {HEAD_UNIT_CLIPS[headUnit.clipIndex].subtitle}
+              </div>
+              <div className="text-[10px] text-[#93a6b0] mt-1">
+                Экран озвучен офлайн-синтезом Web Audio, выбранный режим сохраняется между запусками.
+              </div>
+            </div>
+
             <div className="mt-3 pt-3 border-t hairline">
               <div className="mono text-[10px] text-[#7c909d] mb-1.5">ЗЕРКАЛА (НЕЗАВИСИМО)</div>
               <div className="flex flex-wrap gap-1.5">
@@ -2553,6 +2883,7 @@ export function SimulatorView({
               </button>
             ))}
             {cameraMode === "cockpit" && (
+              <>
               <button
                 type="button"
                 data-testid="cockpit-look-shifter"
@@ -2566,6 +2897,21 @@ export function SimulatorView({
               >
                 {shifterGlance ? "↑ Дорога (G)" : "Рычаг КПП (G)"}
               </button>
+              <button
+                type="button"
+                data-testid="cockpit-look-headunit"
+                title={"Направить взгляд на 7\" ШГУ в салоне и обратно на дорогу"}
+                onClick={() => {
+                  if (optsRef.current.cameraMode !== "cockpit") return;
+                  setShifterGlance(false);
+                  sceneCtrlRef.current?.lookAtHeadUnit();
+                  onNotify("Взгляд на 7\" ШГУ: кликайте по экрану, шайбам VOL/TUNE и кнопкам на торпедо");
+                }}
+                className="px-2 py-1 rounded-lg text-[10px] font-bold border bg-[#091017]/80 border-[rgba(148,176,194,.18)] text-[#c5d4de] hover:text-white"
+              >
+                ШГУ
+              </button>
+              </>
             )}
             <button
               type="button"
@@ -2940,6 +3286,74 @@ export function SimulatorView({
             </div>
           </div>
         )}
+
+        {/* Всплывающая подсказка по органу салона: 7" ШГУ, VOL/TUNE, аварийка, START/STOP, свет, подрулевой, ручник */}
+        {!uiHidden && cameraMode === "cockpit" && cockpitControlUi && (() => {
+          const cw = containerRef.current?.clientWidth ?? 960;
+          const ch = containerRef.current?.clientHeight ?? 600;
+          const cardW = Math.min(300, Math.max(228, cw - 16));
+          const preferRight = cockpitControlUi.x + 22 + cardW <= cw - 8;
+          const left = preferRight ? cockpitControlUi.x + 22 : Math.max(8, cockpitControlUi.x - cardW - 18);
+          const top = clamp(cockpitControlUi.y - 76, 10, Math.max(10, ch - 150));
+          const info: Record<CockpitControlId, { title: string; action: string; hint: string }> = {
+            headunit: {
+              title: "7\" ШГУ · сенсорный экран",
+              action: "Клик — сменить режим: ассистент → радио → клип → выкл.",
+              hint: HEAD_UNIT_MODES.find((m) => m.id === headUnit.mode)?.label ?? "",
+            },
+            vol: {
+              title: "Шайба VOL · громкость",
+              action: headUnit.radioPlaying ? "Клик — пауза радио" : "Клик — включить радио",
+              hint: `FM ${RADIO_STATIONS[headUnit.stationIndex].freq} · ${RADIO_STATIONS[headUnit.stationIndex].name}`,
+            },
+            tune: {
+              title: "Шайба TUNE · настройка",
+              action: "Клик — следующая станция FM",
+              hint: `${RADIO_STATIONS.length} станции в офлайн-тюнере`,
+            },
+            hazard: {
+              title: "Аварийная сигнализация",
+              action: "Клик — включить/выключить (Z)",
+              hint: "Кнопка ▲ под 7\" экраном ШГУ",
+            },
+            start: {
+              title: "ENGINE START / STOP",
+              action: "Клик — запуск/остановка ДВС (I)",
+              hint: "Запуск только из P или N, выход из P — с тормозом",
+            },
+            headlight: {
+              title: "Переключатель света",
+              action: "Клик — ближний свет фар (L)",
+              hint: "Поворотный барабан слева от рулевой колонки",
+            },
+            "stalk-left": {
+              title: "Левый подрулевой переключатель",
+              action: "Клик — левый → правый → выкл. (Q / E)",
+              hint: "",
+            },
+            handbrake: {
+              title: "Рычаг стояночного тормоза",
+              action: "Клик — затянуть/снять ручник (Space)",
+              hint: "",
+            },
+          };
+          const item = info[cockpitControlUi.id];
+          return (
+            <div
+              role="tooltip"
+              data-testid="cockpit-control-hint"
+              data-control={cockpitControlUi.id}
+              style={{ left, top }}
+              className="pointer-events-none absolute z-[92] w-[min(300px,calc(100%-16px))] rounded-xl border border-[#52d6bd]/45 bg-[#070d14]/95 px-3 py-2.5 text-[11px] leading-snug text-[#c5d4de] shadow-2xl backdrop-blur"
+            >
+              <div className="mono text-[10px] font-extrabold text-[#52d6bd] pb-1 mb-1 border-b border-white/10">
+                {item.title}
+              </div>
+              <div className="text-[11px] text-[#dbe7ee]">{item.action}</div>
+              {item.hint && <div className="mt-0.5 text-[10px] text-[#9bafbc]">{item.hint}</div>}
+            </div>
+          );
+        })()}
 
         {/* Всплывающая подсказка и живая схема кулисы при наведении/перетаскивании 3D-рычага АКПП в салоне */}
         {cameraMode === "cockpit" && cockpitShifterUi && (() => {

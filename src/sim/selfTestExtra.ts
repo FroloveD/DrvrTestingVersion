@@ -79,6 +79,7 @@ import {
   checkEngineToggle,
   checkGearChange,
   PARK_LOCK_MAX_SPEED_MS,
+  SHIFT_LOCK_MIN_BRAKE,
   stepGearSequential,
   stepShifterGate,
 } from "./controls";
@@ -94,6 +95,7 @@ import {
   clamp,
   ENGINE_IDLE_RPM,
   FIXED_DT,
+  IDLE_CREEP_MAX_KMH,
   MAX_FORWARD_GEAR,
   MAX_SPEED_KMH,
   normalizeWheelLock,
@@ -434,9 +436,13 @@ export const extraCases: SelfTestCase[] = [
       assert(checkGearChange({ gear: "D", engineOn: true }, 1.2, "P") !== null, "P на ходу должен блокироваться");
       assert(checkGearChange({ gear: "R", engineOn: true }, -(PARK_LOCK_MAX_SPEED_MS + 0.05), "P") !== null, "P при откате назад должен блокироваться");
       assert(checkGearChange({ gear: "D", engineOn: true }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
-      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться");
-      assert(checkGearChange({ gear: "P", engineOn: false }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
-      assert(checkGearChange({ gear: "P", engineOn: true }, 0, "D") === null, "Выход из P с запущенным ДВС разрешён");
+      assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться даже с тормозом");
+      assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "D") !== null, "Выход из P без нажатого тормоза (BTSI) должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "R") !== null, "Переход P → R без тормоза должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "N") !== null, "Переход P → N без тормоза должен блокироваться");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: SHIFT_LOCK_MIN_BRAKE }, 0, "D") === null, "Выход из P с запущенным ДВС и нажатым тормозом разрешён");
+      assert(checkGearChange({ gear: "P", engineOn: true, brake: 1 }, 0, "R") === null, "Переход P → R с нажатым тормозом разрешён");
       assert(checkEngineToggle({ gear: "D", engineOn: false }) !== null, "Запуск ДВС в D запрещён");
       assert(checkEngineToggle({ gear: "R", engineOn: false }) !== null, "Запуск ДВС в R запрещён");
       assert(checkEngineToggle({ gear: "P", engineOn: false }) === null && checkEngineToggle({ gear: "N", engineOn: false }) === null, "Запуск ДВС в P и N разрешён");
@@ -1351,12 +1357,13 @@ export const extraCases: SelfTestCase[] = [
       };
       const grid = new SpatialGrid([], 10);
 
-      // 1. Секвентальное переключение Shift (P ↔ R ↔ N ↔ M1..M6) и защитные блокировки
-      assert(stepGearSequential({ gear: "P", engineOn: false }, 0, 1, 1).next === null, "Shift из P без ДВС должен блокироваться");
+      // 1. Секвентальное переключение Shift (P ↔ R ↔ N ↔ M1..M6) и защитные блокировки (вкл. тормоз BTSI из P)
+      assert(stepGearSequential({ gear: "P", engineOn: false, brake: 1 }, 0, 1, 1).next === null, "Shift из P без ДВС должен блокироваться");
+      assert(stepGearSequential({ gear: "P", engineOn: true, brake: 0 }, 0, 1, 1).next === null, "Shift из P без тормоза должен блокироваться");
       const upSeq: Gear[] = [];
       let cur: Gear = "P";
       for (let i = 0; i < 8; i++) {
-        const res = stepGearSequential({ gear: cur, engineOn: true }, 0, 1, 1);
+        const res = stepGearSequential({ gear: cur, engineOn: true, brake: cur === "P" ? 1 : 0 }, 0, 1, 1);
         assert(res.next !== null, `Ожидалось повышение с ${cur}`);
         cur = res.next!;
         upSeq.push(cur);
@@ -1378,9 +1385,11 @@ export const extraCases: SelfTestCase[] = [
       // Переход из D по Shift▲ на ходу повышает ступень в ручной режим
       assert(stepGearSequential({ gear: "D", engineOn: true }, 12, 2, 1).next === "3", "Shift▲ из D2 на ходу должен включать M3");
 
-      // 1b. Физическая 3D-кулиса салона (applyShifterTarget / stepShifterGate): P↔R↔N↔D ⇄ M (+/−)
-      assert(applyShifterTarget({ gear: "P", engineOn: false }, 0, 1, "D").next === null, "3D-рычаг из P без ДВС должен блокироваться");
-      assert(stepShifterGate({ gear: "P", engineOn: true }, 0, 1, 1).next === "R", "Шаг 3D-рычага P→R");
+      // 1b. Физическая 3D-кулиса салона (applyShifterTarget / stepShifterGate): P↔R↔N↔D ⇄ M (+/−) + BTSI из P
+      assert(applyShifterTarget({ gear: "P", engineOn: false, brake: 1 }, 0, 1, "D").next === null, "3D-рычаг из P без ДВС должен блокироваться");
+      assert(applyShifterTarget({ gear: "P", engineOn: true, brake: 0 }, 0, 1, "D").next === null, "3D-рычаг из P без тормоза должен блокироваться");
+      assert(stepShifterGate({ gear: "P", engineOn: true, brake: 0 }, 0, 1, 1).next === null, "Шаг 3D-рычага P→R без тормоза должен блокироваться");
+      assert(stepShifterGate({ gear: "P", engineOn: true, brake: 1 }, 0, 1, 1).next === "R", "Шаг 3D-рычага P→R с нажатым тормозом");
       assert(stepShifterGate({ gear: "R", engineOn: true }, 0, 1, 1).next === "N", "Шаг 3D-рычага R→N");
       assert(stepShifterGate({ gear: "N", engineOn: true }, 0, 1, 1).next === "D", "Шаг 3D-рычага N→D");
       assert(applyShifterTarget({ gear: "D", engineOn: true }, 12, 3, "M").next === "3", "Перевод рычага D3→M фиксирует M3");
@@ -1495,6 +1504,138 @@ export const extraCases: SelfTestCase[] = [
       );
 
       return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
+    },
+  },
+  {
+    id: "T35",
+    suite: "vehicle",
+    name: "Самоход D1 на ХХ, реалистичное торможение (60/100–0), выбег без газа (N/D/M2/R) и BTSI P",
+    fn: () => {
+      const baseWorld = buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+      const track = {
+        ...baseWorld,
+        bounds: { minX: -50, maxX: 50, minZ: -200, maxZ: 4000 },
+        boundaryPolygon: undefined,
+        obstacles: [],
+        bays: [],
+        checkpoints: [],
+        signals: [],
+        crosswalks: [],
+        pedestrians: [],
+        start: { x: 0, z: 0, h: 0 },
+        defaultSpeedLimitKmh: 200,
+      };
+      const grid = new SpatialGrid([], 10);
+
+      // 1. Самоход гидротрансформатора на D1 на минимальных оборотах (~800–880 об/мин, ~6,4 км/ч):
+      // при нажатом тормозе S — 0 км/ч; при отпускании S — плавно трогается сам; на ручнике и в P/N/R — 0 км/ч
+      let creepS = createInitialState(track, true);
+      const rec = new AttemptRecorder(creepS, true);
+      const runTick = (inp: ReturnType<typeof createReadyInput>) => {
+        const q = quantizeInput(inp);
+        const out = stepSimulation(creepS, q, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        creepS = out.state;
+        rec.recordTick(q, creepS, out.newEvents);
+      };
+      // Удерживаем тормоз в D1 1,5 с — машина стоит неподвижно
+      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
+      assert(creepS.v === 0, `В D1 с нажатым тормозом скорость обязана быть 0, получено ${creepS.v}`);
+      // Отпускаем тормоз и НЕ нажимаем газ — машина плавно разгоняется сама до ~6,2–6,5 км/ч на ХХ
+      for (let i = 0; i < 12 * 60; i++) runTick({ ...createReadyInput("D"), throttle: 0, brake: 0 });
+      const creepKmh = creepS.v * 3.6;
+      assert(
+        creepKmh >= 5.6 && creepKmh <= IDLE_CREEP_MAX_KMH + 0.05 && creepS.autoSubGear === 1,
+        `Неверная скорость самохода D1: ${creepKmh.toFixed(2)} км/ч (передача D${creepS.autoSubGear})`
+      );
+      assert(
+        creepS.rpm >= ENGINE_IDLE_RPM - 10 && creepS.rpm <= 920,
+        `Самоход D1 должен идти на минимальных оборотах ХХ, получено ${creepS.rpm.toFixed(0)} об/мин`
+      );
+      // Нажимаем тормоз S — плавная полная остановка в 0 без отката назад; отпускаем — снова едет сама
+      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
+      assert(creepS.v === 0, `Тормоз S должен остановить самоход D1 в 0, получено ${creepS.v}`);
+      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 0 });
+      assert(creepS.v * 3.6 > 1.5, "После отпускания тормоза самоход D1 должен плавно возобновиться");
+      // В N, R и с ручником без газа самохода нет
+      for (const idleInp of [
+        createReadyInput("N"),
+        createReadyInput("R"),
+        { ...createReadyInput("D"), handbrake: true },
+      ]) {
+        let st = createInitialState(track, true);
+        for (let i = 0; i < 120; i++) {
+          st = stepSimulation(st, idleInp, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        }
+        assert(st.v === 0, `Без газа в режиме ${idleInp.gear} (hb=${idleInp.handbrake}) машина должна стоять`);
+      }
+
+      // 2. Реалистичное экстренное торможение 100–0 км/ч (паспорт Kia Ceed JD: ~38–44 м) + клевок кузова
+      let brakeS = { ...createInitialState(track, true), v: 100 / 3.6, prevV: 100 / 3.6, autoSubGear: 4, rpm: 4160 };
+      const z0 = brakeS.z;
+      let maxDivePitch = 0;
+      for (let i = 0; i < 6 * 60; i++) {
+        brakeS = stepSimulation(
+          brakeS,
+          { ...createReadyInput("D"), brake: 1 },
+          track,
+          grid,
+          DEFAULT_CALIBRATION,
+          DEFAULT_RULESET,
+          FIXED_DT
+        ).state;
+        maxDivePitch = Math.max(maxDivePitch, brakeS.pitch);
+        assert(brakeS.v >= 0, "Тормоз S никогда не должен давать откат назад");
+      }
+      const stopDist100 = brakeS.z - z0;
+      assert(
+        brakeS.v === 0 && stopDist100 >= 38 && stopDist100 <= 52,
+        `Тормозной путь 100–0 км/ч вне реалистичного диапазона (38–52 м): ${stopDist100.toFixed(1)} м`
+      );
+      assert(maxDivePitch > 0.02 && Math.abs(brakeS.pitch) < 0.004, "Кузов должен клюнуть при торможении и выровняться в 0");
+
+      // 3. Остановка выбегом без газа: в N — до 0 км/ч; в M2 торможение двигателем сильнее N; в D — до самохода D1
+      let coastN = { ...createInitialState(track, true), gear: "N" as Gear, prevGear: "N" as Gear, v: 25 / 3.6, prevV: 25 / 3.6 };
+      for (let i = 0; i < 50 * 60 && coastN.v > 0; i++) {
+        coastN = stepSimulation(coastN, createReadyInput("N"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(coastN.v === 0, `Выбег в N без газа должен плавно остановиться в 0, осталось ${(coastN.v * 3.6).toFixed(2)} км/ч`);
+
+      let ebN = { ...createInitialState(track, true), gear: "N" as Gear, prevGear: "N" as Gear, v: 55 / 3.6, prevV: 55 / 3.6 };
+      let ebM2 = { ...createInitialState(track, true), gear: "2" as Gear, prevGear: "2" as Gear, autoSubGear: 2, v: 55 / 3.6, prevV: 55 / 3.6 };
+      for (let i = 0; i < 4 * 60; i++) {
+        ebN = stepSimulation(ebN, createReadyInput("N"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        ebM2 = stepSimulation(ebM2, createReadyInput("2"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        ebM2.v + 1.2 < ebN.v,
+        `Торможение двигателем на M2 (${(ebM2.v * 3.6).toFixed(1)} км/ч) должно быть заметно сильнее выбега в N (${(ebN.v * 3.6).toFixed(1)} км/ч)`
+      );
+
+      let coastD = { ...createInitialState(track, true), v: 50 / 3.6, prevV: 50 / 3.6, autoSubGear: 3 };
+      for (let i = 0; i < 45 * 60; i++) {
+        coastD = stepSimulation(coastD, createReadyInput("D"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        coastD.autoSubGear === 1 && Math.abs(coastD.v * 3.6 - IDLE_CREEP_MAX_KMH) < 0.8,
+        `Выбег в D без газа должен плавно спуститься до самохода D1, получено D${coastD.autoSubGear} ${(coastD.v * 3.6).toFixed(2)} км/ч`
+      );
+
+      // Выбег задним ходом R без газа — плавная полная остановка в 0 км/ч
+      let coastR = { ...createInitialState(track, true), gear: "R" as Gear, prevGear: "R" as Gear, v: -10 / 3.6, prevV: -10 / 3.6 };
+      for (let i = 0; i < 8 * 60 && coastR.v < 0; i++) {
+        coastR = stepSimulation(coastR, createReadyInput("R"), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(coastR.v === 0, `Выбег в R без газа должен плавно остановиться в 0, получено ${coastR.v}`);
+
+      // 4. Побитовый детерминизм реплея заезда с самоходом D1 и гидротормозом
+      const snap = rec.snapshot(creepS, track, DEFAULT_CALIBRATION, DEFAULT_RULESET);
+      const rep = replayInputStream(JSON.parse(JSON.stringify(snap.inputStream)), track, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
+      assert(
+        rep.finalState.z === creepS.z && rep.finalState.v === creepS.v && rep.finalState.brakePos === creepS.brakePos,
+        "Реплей самохода D1 и прогрессивного тормоза разошёлся"
+      );
+
+      return `D1 creep=${creepKmh.toFixed(1)} км/ч @ ${Math.round(creepS.rpm)} об/мин · 100–0=${stopDist100.toFixed(1)} м · M2<N · BTSI P OK`;
     },
   },
 ];

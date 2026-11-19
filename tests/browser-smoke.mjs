@@ -734,9 +734,16 @@ try {
   await sleep(140);
   const cabinHintText = (await page.locator('[data-testid="cockpit-shifter-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
   const cabinHintOk = cabinHintText.includes("3D-РЫЧАГ") && cabinHintText.includes("M1–M6") && cabinHintText.includes("D1–D6");
-  // Тянем 3D-рычаг из P вдоль кулисы в D
+  // BTSI: без нажатого тормоза селектор не выходит из P (блокировка brake-transmission shift interlock)
   await page.mouse.down();
   await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 6 });
+  await sleep(80);
+  const gearNoBrake = (await page.evaluate(() => window.__cdtCockpit?.gear?.() ?? "")).trim();
+  const interlockNotice = (await page.locator('[data-testid="notification"]').innerText().catch(() => "")) ||
+    (await page.evaluate(() => document.body.innerText)).slice(0, 4000);
+  // Удерживаем тормоз (S) и повторяем перетаскивание в D — теперь блокировка снимается
+  await page.keyboard.down("KeyS");
+  await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 3 });
   await sleep(80);
   const afterDragD = (await hudDriveBtn.innerText()).trim();
   // Тянем рычаг влево (к водителю) в ручной паз M, затем качаем вверх к + (M2)
@@ -751,14 +758,61 @@ try {
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
   await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
   await page.mouse.up();
+  await page.keyboard.up("KeyS");
   await sleep(100);
   const afterBackD = (await hudDriveBtn.innerText()).trim();
   // Возвращаем вид сзади (1)
   await page.keyboard.press("Digit1");
   await sleep(120);
-  check("K7c подсказки КПП (HUD + 3D-рычаг) и переключение рычагом в салоне P→D1→M1→M2→D",
-    hudHintOk && cabinHintOk && afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && /^D[12]$/.test(afterBackD),
-    JSON.stringify({ topTag, hudHintOk, cabinHintOk, afterDragD, afterDragM1, afterDragM2, afterBackD }));
+  check("K7c подсказки КПП, BTSI-блокировка P без тормоза и рычаг в салоне P→D1→M1→M2→D",
+    hudHintOk && cabinHintOk && gearNoBrake === "P" && /тормоз/i.test(interlockNotice) &&
+      afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && /^D[12]$/.test(afterBackD),
+    JSON.stringify({ topTag, hudHintOk, cabinHintOk, gearNoBrake, afterDragD, afterDragM1, afterDragM2, afterBackD }));
+
+  // 3D-органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, свет и ENGINE START/STOP доступны кликом
+  // (координаты берём из отладочного моста __cdtCockpit — реальный raycast по 3D-мешам).
+  await page.getByTestId("cockpit-look-headunit").click();
+  await sleep(320);
+  const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
+  const controlPx = async (id) => {
+    const p = await page.evaluate((cid) => window.__cdtCockpit?.controlPoint?.(cid) ?? null, id);
+    return p ? toPx(p) : null;
+  };
+  const headPx = await controlPx("headunit");
+  const volPx = await controlPx("vol");
+  const tunePx = await controlPx("tune");
+  const lightPx = await controlPx("headlight");
+  const hazardPx = await controlPx("hazard");
+  const controlsFound = Boolean(headPx && volPx && tunePx && lightPx && hazardPx);
+  const headMode0 = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode);
+  let headHintOk = false;
+  if (headPx) {
+    await page.mouse.move(headPx.x, headPx.y);
+    await sleep(160);
+    const hint = await page.locator('[data-testid="cockpit-control-hint"]');
+    headHintOk = (await hint.count()) === 1 &&
+      (await hint.getAttribute("data-control")) === "headunit" &&
+      /ШГУ/.test(await hint.innerText());
+    await page.mouse.click(headPx.x, headPx.y);
+    await sleep(200);
+  }
+  const headMode1 = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode);
+  if (tunePx) { await page.mouse.click(tunePx.x, tunePx.y); await sleep(180); }
+  const radioState = await page.evaluate(() => window.__cdtCockpit?.headUnit?.() ?? null);
+  if (volPx) { await page.mouse.click(volPx.x, volPx.y); await sleep(180); }
+  const radioPaused = await page.evaluate(() => window.__cdtCockpit?.headUnit?.()?.radioPlaying === false);
+  if (hazardPx) { await page.mouse.click(hazardPx.x, hazardPx.y); await sleep(200); }
+  const hazardOn = (await page.evaluate(() => window.__cdtCockpit?.signal?.() ?? "")) === "hazard";
+  if (hazardPx) { await page.mouse.click(hazardPx.x, hazardPx.y); await sleep(200); }
+  const lightsBefore = await page.evaluate(() => window.__cdtCockpit?.vehicle?.().lights === true);
+  if (lightPx) { await page.mouse.click(lightPx.x, lightPx.y); await sleep(200); }
+  const lightsAfter = await page.evaluate(() => window.__cdtCockpit?.vehicle?.().lights === true);
+  const huStored = await page.evaluate(() => localStorage.getItem("cdt.headunit.v1"));
+  check("K7d 3D-органы салона: ШГУ переключает режимы, TUNE/VOL — станция и пауза, аварийка и свет работают",
+    controlsFound && headHintOk && headMode0 === "assist" && headMode1 === "radio" &&
+      radioState?.mode === "radio" && radioState?.radioPlaying === true && radioPaused &&
+      hazardOn && lightsAfter !== lightsBefore && /"mode":"radio"/.test(huStored || ""),
+    JSON.stringify({ controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
 
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
