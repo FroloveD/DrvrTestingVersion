@@ -599,6 +599,9 @@ export function DebriefView({
               role="img"
               aria-label="Карта траектории заезда"
             >
+              {replayWorld.lotPolygon && replayWorld.lotPolygon.length >= 3 && <polygon data-testid="debrief-lot-polygon" points={replayWorld.lotPolygon.map(p => `${-p.x},${-p.z}`).join(" ")} fill="#1f2a35" stroke="#35485c" strokeWidth={0.35} />}
+              {replayWorld.boundaryPolygon && replayWorld.boundaryPolygon.length >= 3 && <polygon points={replayWorld.boundaryPolygon.map(p => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#f5b942" strokeWidth={0.4} strokeDasharray="2.5 1.8" />}
+
               {/* Дороги */}
               {replayWorld.roads.map((r) => (
                 <polyline
