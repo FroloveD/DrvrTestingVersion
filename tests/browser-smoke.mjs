@@ -760,7 +760,15 @@ try {
   const afterDragM1 = (await hudDriveBtn.innerText()).trim();
   await page.mouse.move(slotMPx.x, slotMPx.y - 26, { steps: 5 });
   await sleep(80);
-  const afterDragM2 = (await hudDriveBtn.innerText()).trim();
+  let afterDragM2 = (await hudDriveBtn.innerText()).trim();
+  if (afterDragM2 === "M1") {
+    // Под SwiftShader курсор мог не дойти до зоны качания «+» с первого раза: повторяем шаг
+    await page.mouse.move(slotMPx.x, slotMPx.y - 4, { steps: 3 });
+    await sleep(60);
+    await page.mouse.move(slotMPx.x, slotMPx.y - 34, { steps: 5 });
+    await sleep(90);
+    afterDragM2 = (await hudDriveBtn.innerText()).trim();
+  }
   // Возвращаем рычаг в центр M и толкаем вправо обратно в автомат D
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
   await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
@@ -943,6 +951,9 @@ try {
   await page.getByRole("button", { name: "Быстрый старт" }).click();
   const controls=page.getByRole("button", { name:"Управление", exact:true });
   const slider=page.getByRole("slider", { name:"Максимальный угол поворота внутреннего колеса", exact:true });
+  // Панель приборов может перекрывать панель «Управление» — закрываем её на время настройки выворота
+  const clusterClose = page.getByRole("button", { name: "Закрыть: Приборы и КПП", exact: true });
+  if (await clusterClose.count()) { await clusterClose.click(); await sleep(160); }
   await controls.click();
   check("L5 диапазон выворота 33–42°, по умолчанию 35°",await slider.inputValue()==="35" && await slider.getAttribute("min")==="33" && await slider.getAttribute("max")==="42");
   await slider.press("Home");

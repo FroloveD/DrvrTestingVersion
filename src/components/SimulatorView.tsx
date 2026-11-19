@@ -3422,26 +3422,6 @@ export function SimulatorView({
                 <Icon name="alert" size={14} />
               </button>
 
-              {/* Индикатор Shift Lock / BTSI: селектор заперт без тормоза или при заглушенном ДВС */}
-              {(() => {
-                const lock = shiftLockState(
-                  { ...inputRef.current, brake: s.brakePos ?? 0 },
-                  s.v
-                );
-                if (!lock.locked) return null;
-                return (
-                  <div
-                    data-testid="hud-shift-lock"
-                    data-reason={lock.reason ?? ""}
-                    title={lock.hint}
-                    className="mono flex items-center gap-1 rounded-lg border border-[#f5b942]/60 bg-[#f5b942]/10 px-1.5 py-1 text-[10px] font-extrabold text-[#f5b942]"
-                  >
-                    <span aria-hidden="true">🔒</span>
-                    <span>{lock.brakeRequired ? "ТОРМОЗ" : "LOCK"}</span>
-                  </div>
-                );
-              })()}
-
               {/* Селектор 6-ст. КПП Shiftronic: P / R / N / D (D1–D6) + ручной Shift (M1–M6) с подсказкой при наведении */}
               <div
                 data-testid="hud-gear-selector"
@@ -3451,6 +3431,12 @@ export function SimulatorView({
                 {(["P", "R", "N", "D"] as const).map((g) => {
                   const isDriveSlot = g === "D";
                   const active = s.gear === g || (isDriveSlot && manualMode);
+                  // Shift Lock: селектор заперт электромагнитом (ДВС заглушен или в P без тормоза)
+                  const lock =
+                    g === "P"
+                      ? shiftLockState({ ...inputRef.current, brake: s.brakePos ?? 0 }, s.v)
+                      : null;
+                  const shiftLocked = Boolean(lock?.locked);
                   const showHint = (el: HTMLElement) => {
                     const host = containerRef.current;
                     if (!host) return;
@@ -3481,9 +3467,19 @@ export function SimulatorView({
                             }
                           : undefined
                       }
+                      data-shift-locked={g === "P" ? String(shiftLocked) : undefined}
+                      title={
+                        g === "P" && shiftLocked
+                          ? lock?.hint
+                          : g === "P"
+                            ? "P — парковка (выход из P только с нажатым тормозом)"
+                            : undefined
+                      }
                       aria-label={
                         g === "P"
-                          ? "P — парковка"
+                          ? shiftLocked
+                            ? `P — парковка, селектор заперт: ${lock?.hint}`
+                            : "P — парковка"
                           : g === "R"
                             ? "R — задний ход"
                             : g === "N"
@@ -3492,7 +3488,7 @@ export function SimulatorView({
                                 ? `D — вернуть автомат из ${gearDisplay}`
                                 : "D — автомат D1–D6"
                       }
-                      className={`mono h-8 min-w-[30px] px-2 rounded-lg text-xs font-bold border transition ${
+                      className={`mono relative h-8 min-w-[30px] px-2 rounded-lg text-xs font-bold border transition ${
                         active
                           ? g === "P"
                             ? "bg-[#94a3b8] text-[#081512] border-[#94a3b8]"
@@ -3503,6 +3499,14 @@ export function SimulatorView({
                       }`}
                     >
                       {active && isDriveSlot ? gearDisplay : g}
+                      {g === "P" && shiftLocked && (
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute -right-0.5 -top-0.5 text-[8px] leading-none text-[#f5b942]"
+                        >
+                          🔒
+                        </span>
+                      )}
                     </button>
                   );
                 })}
