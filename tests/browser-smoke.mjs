@@ -754,8 +754,9 @@ try {
     `max x${boostMax.toFixed(3)}`);
   check("L10 заезд с изменением настройки воспроизводится точно",(await low(page)).includes("детерминизм подтверждён") && a.calibration.maxInnerWheelDeg===42 && a.inputStream.some(f=>f.maxInnerWheelDeg===33) && a.inputStream.some(f=>f.maxInnerWheelDeg===42));
   await page.reload();await controls.click();check("L11 предел сохранён после перезагрузки",await slider.inputValue()==="42");
-  await page.getByRole("button",{name:"Базовый · 35°"}).click();check("L12 сброс настройки возвращает 35°",await slider.inputValue()==="35");
-  check("L13 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
+  check("L12 настройки мыши сохраняются после перезагрузки",await mouseSteerToggle.isChecked() && await mouseGasToggle.isChecked());
+  await page.getByRole("button",{name:"Базовый · 35°"}).click();check("L13 сброс настройки возвращает 35°",await slider.inputValue()==="35");
+  check("L14 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch(e) {
   check("L сценарий выполнен без исключений",false,String(e.message).slice(-460));
