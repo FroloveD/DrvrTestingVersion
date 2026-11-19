@@ -106,7 +106,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
 | `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
 | `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |
-| `src/render/sceneController.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts` | весь Three.js: сцена, машина, ГОСТ-дороги/тротуары/бордюры/разметка/светофоры/знаки/мачты/ограждения, зеркала, dispose (`[SEC:...]`) |
+| `src/render/sceneController.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts`, `src/render/cityBuildings.ts`, `src/render/vehiclesAndPeds.ts` | весь Three.js: ГОСТ-дороги/тротуары/разметка/светофоры/знаки, здания и деревья РФ/СНГ, облачное небо, Kia Ceed JD/салон/автопарк/пешеходы, зеркала, dispose (`[SEC:...]`) |
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |

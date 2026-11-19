@@ -16,6 +16,13 @@
 import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
 import {
+  buildRealisticTree,
+  buildRussianBuilding,
+  createCityEnvironmentPack,
+  makeCloudySkyTexture,
+  type CityEnvironmentPack,
+} from "./cityBuildings";
+import {
   buildGostCrosswalk,
   buildGostRoadSign,
   buildGostSpeedSign,
@@ -27,10 +34,17 @@ import {
   type RoadMaterialPack,
 } from "./roadInfra";
 import { makeGostBayStencilTexture, makeUrbanGrassTexture } from "./roadTextures";
+import {
+  buildDetailedCar,
+  buildDetailedPedestrian,
+  makeInstrumentClusterTexture,
+  makeRussianLicensePlateTexture,
+  type DetailedCarRig,
+  type DetailedPedestrianVisual,
+} from "./vehiclesAndPeds";
 import type {
   CameraMode,
   ObstacleBox,
-  ParkedModelKey,
   ParkingBay,
   QualityPreset,
   SimState,
@@ -43,38 +57,17 @@ import {
   getTrafficLightPhase,
   getTurnSignalFlash,
   predictTrajectoryArc,
-  VEHICLE_DIMS,
 } from "../sim/vehicle";
 
 // Слои относятся только к геометрии машины игрока. Мир и припаркованные авто — слой 0.
 const PLAYER_EXTERIOR_LAYER = 1;
 const OWN_MIRROR_HARDWARE_LAYER = 2;
 
-type CarRig = {
-  root: THREE.Group;
-  chassis: THREE.Group;
-  flPivot: THREE.Group;
-  frPivot: THREE.Group;
-  wheelMeshes: THREE.Object3D[];
-  steerWheelMesh: THREE.Group;
-  blinkLeftMats: THREE.MeshBasicMaterial[];
-  blinkRightMats: THREE.MeshBasicMaterial[];
-  brakeMat: THREE.MeshBasicMaterial;
-  reverseMat: THREE.MeshBasicMaterial;
-  headlightMat: THREE.MeshBasicMaterial;
-  headSpotL?: THREE.SpotLight;
-  headSpotR?: THREE.SpotLight;
-  learnerSign?: THREE.Mesh;
-};
+type CarRig = DetailedCarRig;
 
 type SignalVisual = GostSignalVisualHandle;
 
-type PedestrianVisual = {
-  crosswalkId: string;
-  group: THREE.Group;
-  legL: THREE.Mesh;
-  legR: THREE.Mesh;
-};
+type PedestrianVisual = DetailedPedestrianVisual;
 
 type BayVisual = {
   bay: ParkingBay;
@@ -99,23 +92,6 @@ export type PerfMetrics = {
 };
 
 // === [SEC:render-textures] Процедурные Canvas-текстуры (офлайн, без внешних ассетов) ===
-function makeSkyTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 4;
-  c.height = 256;
-  const g = c.getContext("2d")!;
-  const grad = g.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, "#35669c");
-  grad.addColorStop(0.48, "#7aa8d1");
-  grad.addColorStop(0.82, "#bfd7ea");
-  grad.addColorStop(1, "#dde8f0");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 4, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 function makeContactShadowTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 128;
@@ -130,362 +106,28 @@ function makeContactShadowTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(c);
 }
 
-function makeBuildingWindowTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#cfd8e0";
-  g.fillRect(0, 0, 128, 128);
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 4; col++) {
-      const lit = (row * 7 + col * 3) % 5 === 0;
-      g.fillStyle = lit ? "#86a8c5" : "#425466";
-      g.fillRect(col * 32 + 7, row * 32 + 6, 18, 19);
-      g.strokeStyle = "#95a3af";
-      g.lineWidth = 1.5;
-      g.strokeRect(col * 32 + 7, row * 32 + 6, 18, 19);
-    }
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 function makeLearnerSignTexture(): THREE.CanvasTexture {
-  // Табличка «У» (порт из v2; прим.: форма и пропорции — учебная визуализация)
+  // Опознавательный знак «Учебное транспортное средство» (ПДД РФ): жёлтый фон, красная кайма, чёрная «У»
   const c = document.createElement("canvas");
   c.width = 128;
   c.height = 128;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#ffffff";
+  g.fillStyle = "#facc15";
   g.fillRect(0, 0, 128, 128);
-  g.strokeStyle = "#dc2626";
-  g.lineWidth = 18;
-  g.strokeRect(9, 9, 110, 110);
-  g.fillStyle = "#111827";
-  g.font = "800 76px sans-serif";
+  g.strokeStyle = "#d41e24";
+  g.lineWidth = 14;
+  g.strokeRect(8, 8, 112, 112);
+  g.fillStyle = "#0f172a";
+  g.font = "900 78px system-ui, sans-serif";
   g.textAlign = "center";
   g.textBaseline = "middle";
-  g.fillText("У", 64, 68);
+  g.fillText("У", 64, 69);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
-// === [SEC:render-car] Колёса и процедурная 3D-модель автомобиля Kia Ceed JD / автопарка ===
-function createWheelMesh(radius: number, width: number): THREE.Group {
-  const g = new THREE.Group();
-  const tireGeo = new THREE.CylinderGeometry(radius, radius, width, 18);
-  tireGeo.rotateZ(Math.PI / 2);
-  const tireMat = new THREE.MeshStandardMaterial({ color: 0x1a1f24, roughness: 0.85 });
-  g.add(new THREE.Mesh(tireGeo, tireMat));
-
-  const rimGeo = new THREE.CylinderGeometry(radius * 0.64, radius * 0.64, width + 0.015, 14);
-  rimGeo.rotateZ(Math.PI / 2);
-  const rimMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.55, roughness: 0.32 });
-  g.add(new THREE.Mesh(rimGeo, rimMat));
-
-  // Спица для наглядного вращения колеса
-  const spoke = new THREE.Mesh(
-    new THREE.BoxGeometry(width + 0.025, radius * 1.12, 0.055),
-    new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.5, roughness: 0.4 })
-  );
-  g.add(spoke);
-  return g;
-}
-
-function buildProceduralCar(
-  model: ParkedModelKey,
-  bodyColor: number,
-  isPlayer: boolean,
-  shadowTex: THREE.CanvasTexture,
-  learnerTex: THREE.CanvasTexture
-): CarRig {
-  const dim = VEHICLE_DIMS[model];
-  const L = dim.length;
-  const W = dim.width;
-  const H = dim.height;
-  const wb = dim.wheelbase;
-  const wr = isPlayer ? CAR.wheelRadius : 0.3;
-  const ww = isPlayer ? CAR.wheelWidth : 0.2;
-  const centerShiftZ = isPlayer ? (CAR.frontOverhang - CAR.rearOverhang) / 2 : 0;
-
-  const root = new THREE.Group();
-  const chassis = new THREE.Group();
-  root.add(chassis);
-
-  // Контактная тень под кузовом
-  const shadowPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(W * 1.28, L * 1.18),
-    new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false })
-  );
-  shadowPlane.rotation.x = -Math.PI / 2;
-  shadowPlane.position.set(0, 0.018, centerShiftZ);
-  root.add(shadowPlane);
-
-  const paintMat = new THREE.MeshStandardMaterial({
-    color: bodyColor,
-    metalness: 0.35,
-    roughness: 0.34,
-  });
-  const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x1e252d, roughness: 0.7 });
-  const glassMat = new THREE.MeshStandardMaterial({
-    color: 0x9ec5e6,
-    transparent: true,
-    opacity: isPlayer ? 0.32 : 0.52,
-    roughness: 0.12,
-    metalness: 0.25,
-  });
-
-  const beltY = 0.84;
-  const sillY = 0.26;
-  const lowerH = beltY - sillY;
-
-  if (isPlayer) {
-    // Полый кузов игрока (инвариант №7: сиденья и водитель внутри, не утоплены в металле)
-    const wall = 0.09;
-    const cabinLen = wb * 0.88;
-    const hoodLen = (L - cabinLen) * 0.54;
-    const trunkLen = L - cabinLen - hoodLen;
-
-    // Днище
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.08, L - 0.1), darkTrimMat);
-    floor.position.set(0, sillY + 0.04, centerShiftZ);
-    chassis.add(floor);
-
-    // Левый (+X) и правый (-X) борта
-    for (const side of [1, -1] as const) {
-      const door = new THREE.Mesh(new THREE.BoxGeometry(wall, lowerH, cabinLen), paintMat);
-      door.position.set(side * (W / 2 - wall / 2), sillY + lowerH / 2, centerShiftZ - 0.06);
-      door.castShadow = true;
-      chassis.add(door);
-    }
-
-    // Передняя часть (капот + бампер)
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(W, lowerH * 0.94, hoodLen), paintMat);
-    hood.position.set(0, sillY + lowerH * 0.47, centerShiftZ + L / 2 - hoodLen / 2);
-    hood.castShadow = true;
-    chassis.add(hood);
-
-    // Задняя часть (багажник + бампер)
-    const trunk = new THREE.Mesh(new THREE.BoxGeometry(W, lowerH * 0.98, trunkLen), paintMat);
-    trunk.position.set(0, sillY + lowerH * 0.49, centerShiftZ - L / 2 + trunkLen / 2);
-    trunk.castShadow = true;
-    chassis.add(trunk);
-
-    // Торпедо и сиденья
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.2, 0.26, 0.36), darkTrimMat);
-    dash.position.set(0, beltY - 0.04, centerShiftZ + cabinLen * 0.36);
-    chassis.add(dash);
-
-    const seatMat = new THREE.MeshStandardMaterial({ color: 0x2b3440, roughness: 0.85 });
-    for (const side of [1, -1] as const) {
-      const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.56, 0.12), seatMat);
-      seatBack.position.set(side * W * 0.24, 0.68, centerShiftZ - 0.14);
-      seatBack.rotation.x = -0.14;
-      chassis.add(seatBack);
-    }
-
-    // Водитель слева (+X, инвариант №2: руль слева +0.36 * halfW)
-    const driverX = W * 0.23;
-    const driverZ = centerShiftZ - 0.02;
-    const torso = new THREE.Mesh(
-      new THREE.BoxGeometry(0.38, 0.46, 0.22),
-      new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.7 })
-    );
-    torso.position.set(driverX, 0.82, driverZ);
-    chassis.add(torso);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.115, 12, 12),
-      new THREE.MeshStandardMaterial({ color: 0xe8be9e, roughness: 0.6 })
-    );
-    head.position.set(driverX, 1.16, driverZ - 0.01);
-    chassis.add(head);
-
-    const hair = new THREE.Mesh(
-      new THREE.SphereGeometry(0.118, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.58),
-      new THREE.MeshStandardMaterial({ color: 0x3b2a1e, roughness: 0.8 })
-    );
-    hair.position.copy(head.position);
-    chassis.add(hair);
-
-    // Стойки крыши и крыша
-    const roofLen = L * 0.46;
-    const roofW = W * 0.82;
-    const roofY = H - 0.03;
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(roofW, 0.055, roofLen), paintMat);
-    roof.position.set(0, roofY, centerShiftZ - 0.16);
-    roof.castShadow = true;
-    chassis.add(roof);
-
-    const pillarOffsets: Array<[number, number, number]> = [
-      [roofW / 2 - 0.03, centerShiftZ + roofLen * 0.44, -0.45],
-      [-roofW / 2 + 0.03, centerShiftZ + roofLen * 0.44, -0.45],
-      [roofW / 2 - 0.03, centerShiftZ - roofLen * 0.55, 0.38],
-      [-roofW / 2 + 0.03, centerShiftZ - roofLen * 0.55, 0.38],
-    ];
-    for (const [px, pz, tilt] of pillarOffsets) {
-      const p = new THREE.Mesh(new THREE.BoxGeometry(0.055, H - beltY + 0.08, 0.065), paintMat);
-      p.position.set(px, (beltY + roofY) / 2, pz);
-      p.rotation.x = tilt;
-      chassis.add(p);
-    }
-
-    // Лобовое и заднее стекло
-    const windshield = new THREE.Mesh(new THREE.PlaneGeometry(roofW - 0.06, 0.68), glassMat);
-    windshield.position.set(0, (beltY + roofY) / 2, centerShiftZ + roofLen * 0.48);
-    windshield.rotation.x = -0.58;
-    chassis.add(windshield);
-
-    const rearGlass = new THREE.Mesh(new THREE.PlaneGeometry(roofW - 0.08, 0.62), glassMat);
-    rearGlass.position.set(0, (beltY + roofY) / 2, centerShiftZ - roofLen * 0.62);
-    rearGlass.rotation.x = Math.PI + 0.52;
-    chassis.add(rearGlass);
-  } else {
-    // Облегчённый кузов для припаркованных машин (минимум draw calls)
-    const lower = new THREE.Mesh(new THREE.BoxGeometry(W, lowerH, L), paintMat);
-    lower.position.set(0, sillY + lowerH / 2, 0);
-    lower.castShadow = true;
-    chassis.add(lower);
-
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(W * 0.83, H - beltY, L * 0.52), glassMat);
-    cabin.position.set(0, beltY + (H - beltY) / 2 - 0.02, -L * 0.05);
-    chassis.add(cabin);
-
-    const roofCap = new THREE.Mesh(new THREE.BoxGeometry(W * 0.81, 0.06, L * 0.46), paintMat);
-    roofCap.position.set(0, H - 0.02, -L * 0.05);
-    roofCap.castShadow = true;
-    chassis.add(roofCap);
-  }
-
-  // Рулевое колесо в салоне (+X — левая сторона)
-  const steerWheelMesh = new THREE.Group();
-  steerWheelMesh.position.set(W * 0.23, 0.93, centerShiftZ + 0.48);
-  steerWheelMesh.rotation.x = 0.35;
-  if (isPlayer) {
-    const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(0.17, 0.02, 8, 20),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.5 })
-    );
-    const marker = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.045, 0.03),
-      new THREE.MeshBasicMaterial({ color: 0xf5b942 })
-    );
-    marker.position.set(0, 0.17, 0);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.028, 0.022), darkTrimMat);
-    steerWheelMesh.add(rim, marker, bar);
-    chassis.add(steerWheelMesh);
-  }
-
-  // Светотехника: фары, стоп-сигналы, огни заднего хода, поворотники (+X левый, -X правый)
-  const headlightMat = new THREE.MeshBasicMaterial({ color: 0xdbeafe });
-  const brakeMat = new THREE.MeshBasicMaterial({ color: 0x7f1d1d });
-  const reverseMat = new THREE.MeshBasicMaterial({ color: 0x334155 });
-  const blinkLeftMats: THREE.MeshBasicMaterial[] = [];
-  const blinkRightMats: THREE.MeshBasicMaterial[] = [];
-
-  const frontZ = centerShiftZ + L / 2 + 0.008;
-  const rearZ = centerShiftZ - L / 2 - 0.008;
-
-  for (const side of [1, -1] as const) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.11, 0.03), headlightMat);
-    hl.position.set(side * (W * 0.34), 0.66, frontZ);
-    chassis.add(hl);
-
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.03), brakeMat);
-    tl.position.set(side * (W * 0.34), 0.72, rearZ);
-    chassis.add(tl);
-
-    if (isPlayer) {
-      const rev = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.03), reverseMat);
-      rev.position.set(side * (W * 0.2), 0.72, rearZ);
-      chassis.add(rev);
-
-      const bMat = new THREE.MeshBasicMaterial({ color: 0x9a621e, toneMapped: false });
-      if (side === 1) blinkLeftMats.push(bMat);
-      else blinkRightMats.push(bMat);
-
-      // Signal lenses protrude from the body so they remain visible from every camera angle.
-      const blinkF = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.11, 0.07), bMat);
-      blinkF.position.set(side * (W * 0.45), 0.66, frontZ + 0.012);
-      const blinkR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.07), bMat);
-      blinkR.position.set(side * (W * 0.45), 0.75, rearZ - 0.012);
-      const mirrorHousing = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.11), paintMat);
-      mirrorHousing.position.set(side * (W / 2 + 0.06), beltY + 0.06, centerShiftZ + 0.52);
-      const blinkSide = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.065, 0.14), bMat);
-      blinkSide.position.set(side * (W / 2 + 0.025), 0.88, centerShiftZ + 0.52);
-      // Виртуальная боковая камера стоит у стекла, не должна видеть корпус собственного зеркала.
-      mirrorHousing.layers.set(OWN_MIRROR_HARDWARE_LAYER);
-      blinkSide.layers.set(OWN_MIRROR_HARDWARE_LAYER);
-      chassis.add(blinkF, blinkR, mirrorHousing, blinkSide);
-    }
-  }
-
-  // Прожекторы фар — только у машины игрока (оптимизация v8)
-  let headSpotL: THREE.SpotLight | undefined;
-  let headSpotR: THREE.SpotLight | undefined;
-  let learnerSign: THREE.Mesh | undefined;
-
-  if (isPlayer) {
-    const makeSpot = (sx: number) => {
-      const sp = new THREE.SpotLight(0xfff6dc, 0, 26, 0.52, 0.55, 1.4);
-      sp.position.set(sx, 0.66, frontZ);
-      sp.target.position.set(sx * 0.9, 0.05, frontZ + 12);
-      chassis.add(sp, sp.target);
-      return sp;
-    };
-    headSpotL = makeSpot(W * 0.34);
-    headSpotR = makeSpot(-W * 0.34);
-
-    // Табличка «У» на крыше (0.28 м, перенос из v2)
-    const signMat = new THREE.MeshBasicMaterial({ map: learnerTex });
-    const sideMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 });
-    learnerSign = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, 0.28, 0.1),
-      [sideMat, sideMat, sideMat, sideMat, signMat, signMat]
-    );
-    learnerSign.position.set(0, H + 0.13, centerShiftZ - 0.12);
-    chassis.add(learnerSign);
-  }
-
-  // Колёса: передние в поворотных кулаках (Аккерман), задние на оси
-  const flPivot = new THREE.Group();
-  const frPivot = new THREE.Group();
-  const trackHalf = W / 2 - ww * 0.44;
-  flPivot.position.set(trackHalf, wr, wb / 2);
-  frPivot.position.set(-trackHalf, wr, wb / 2);
-
-  const wFL = createWheelMesh(wr, ww);
-  const wFR = createWheelMesh(wr, ww);
-  const wRL = createWheelMesh(wr, ww);
-  const wRR = createWheelMesh(wr, ww);
-  wRL.position.set(trackHalf, wr, -wb / 2);
-  wRR.position.set(-trackHalf, wr, -wb / 2);
-  flPivot.add(wFL);
-  frPivot.add(wFR);
-  root.add(flPivot, frPivot, wRL, wRR);
-
-  return {
-    root,
-    chassis,
-    flPivot,
-    frPivot,
-    wheelMeshes: [wFL, wFR, wRL, wRR],
-    steerWheelMesh,
-    blinkLeftMats,
-    blinkRightMats,
-    brakeMat,
-    reverseMat,
-    headlightMat,
-    headSpotL,
-    headSpotR,
-    learnerSign,
-  };
-}
+// === [SEC:render-car] Колёса и процедурная 3D-модель Kia Ceed JD / автопарка (см. src/render/vehiclesAndPeds.ts) ===
 
 // === [SEC:render-init] Контроллер 3D-сцены, зеркальные буферы, орбита и пресеты качества ===
 export class SceneController {
@@ -554,20 +196,26 @@ export class SceneController {
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    const skyTex = makeSkyTexture();
+    const skyTex = makeCloudySkyTexture();
     const shadowTex = makeContactShadowTexture();
     const learnerTex = makeLearnerSignTexture();
-    this.sharedTextures.push(skyTex, shadowTex, learnerTex);
+    const grassTex = makeUrbanGrassTexture();
+    const playerPlateTex = makeRussianLicensePlateTexture("У 077 КС");
+    const civilPlateTex = makeRussianLicensePlateTexture("А 482 МН");
+    const clusterTex = makeInstrumentClusterTexture();
+    grassTex.repeat.set(160, 160);
+    // Индексы sharedTextures: 0 sky, 1 shadow, 2 learner, 3 grass, 4 playerPlate, 5 civilPlate, 6 cluster
+    this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
-    this.scene.fog = new THREE.Fog(0xbcd3e6, 75, 220);
+    this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
 
     this.camera = new THREE.PerspectiveCamera(56, 16 / 9, 0.12, 420);
 
-    // Освещение
-    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x3b493f, 0.85);
+    // Освещение (естественный дневной свет средней полосы + тёплое солнце)
+    const hemi = new THREE.HemisphereLight(0xdff0ff, 0x435244, 0.9);
     this.scene.add(hemi);
 
-    this.sun = new THREE.DirectionalLight(0xfff6e5, 1.35);
+    this.sun = new THREE.DirectionalLight(0xfff5e2, 1.38);
     this.sun.position.set(28, 46, -22);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -581,9 +229,6 @@ export class SceneController {
     this.scene.add(this.sun, this.sun.target);
 
     // Травяная подложка с фактурой городского газона (масштабируется в loadWorld под реальные размеры карты)
-    const grassTex = makeUrbanGrassTexture();
-    grassTex.repeat.set(160, 160);
-    this.sharedTextures.push(grassTex);
     this.groundMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshStandardMaterial({ map: grassTex, roughness: 0.95 })
@@ -596,8 +241,17 @@ export class SceneController {
 
     this.scene.add(this.worldGroup);
 
-    // Машина игрока Kia Ceed
-    this.playerRig = buildProceduralCar("ceed", 0xd97706, true, shadowTex, learnerTex);
+    // Детализированный учебный Kia Ceed JD (госномер ГОСТ, оптика, 5-спицевые диски, салон Supervision)
+    this.playerRig = buildDetailedCar(
+      "ceed",
+      0xd97706,
+      true,
+      shadowTex,
+      learnerTex,
+      playerPlateTex,
+      clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER
+    );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
         obj.layers.set(PLAYER_EXTERIOR_LAYER);
@@ -707,9 +361,11 @@ export class SceneController {
     }
 
     const roadMats = createRoadMaterialPack();
-    const winTex = makeBuildingWindowTexture();
+    const cityEnv = createCityEnvironmentPack();
     const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
     const learnerTex = this.sharedTextures[2] as THREE.CanvasTexture;
+    const civilPlateTex = this.sharedTextures[5] as THREE.CanvasTexture;
+    const clusterTex = this.sharedTextures[6] as THREE.CanvasTexture;
     const { asphaltMat, whiteMarkMat } = roadMats;
 
     // Масштабируем повтор текстуры газона пропорционально размеру мира (1 тайл ≈ 9 м)
@@ -871,9 +527,9 @@ export class SceneController {
       }
     }
 
-    // Препятствия: припаркованные машины, здания, деревья и дорожная инфраструктура ГОСТ (бордюры, конусы, мачты, ограждения, островки)
+    // Препятствия: автопарк, здания РФ/СНГ (панельные/кирпичные/адм.), многоярусные деревья и инфраструктура ГОСТ
     for (const obs of world.obstacles) {
-      this.addObstacleMesh(obs, world, roadMats, winTex, shadowTex, learnerTex);
+      this.addObstacleMesh(obs, world, roadMats, cityEnv, shadowTex, learnerTex, civilPlateTex, clusterTex);
     }
 
     // Светофоры ГОСТ Р 52282 (Т.1 + Г-консоль + П.1 + табличка 6.16 «СТОП») и стоп-линии 1.12
@@ -882,32 +538,12 @@ export class SceneController {
     }
 
     // Пешеходные переходы ГОСТ 1.14.1 (бело-жёлтая «зебра», тактильная плитка, знаки 5.19.1/5.19.2) и пешеходы
-    for (const cw of world.crosswalks) {
+    world.crosswalks.forEach((cw, cwIdx) => {
       buildGostCrosswalk(this.worldGroup, cw, roadMats);
-
-      // Фигура пешехода
-      const ped = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(0.36, 0.58, 0.22),
-        new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.65 })
-      );
-      body.position.y = 1.05;
-      body.castShadow = true;
-      const head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.13, 10, 10),
-        new THREE.MeshStandardMaterial({ color: 0xf1c7a3 })
-      );
-      head.position.y = 1.5;
-      const legGeo = new THREE.BoxGeometry(0.13, 0.68, 0.14);
-      const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
-      const legL = new THREE.Mesh(legGeo, legMat);
-      legL.position.set(0.09, 0.38, 0);
-      const legR = new THREE.Mesh(legGeo, legMat);
-      legR.position.set(-0.09, 0.38, 0);
-      ped.add(body, head, legL, legR);
-      this.worldGroup.add(ped);
-      this.pedVisuals.push({ crosswalkId: cw.id, group: ped, legL, legR });
-    }
+      const pedVis = buildDetailedPedestrian(cw.id, cwIdx, shadowTex);
+      this.worldGroup.add(pedVis.group);
+      this.pedVisuals.push(pedVis);
+    });
 
     // Дорожные знаки ГОСТ Р 52290-2004 (все 12 классов, фигурная подложка, хомуты и ориентация по потоку sign.h)
     const renderedSignIds = new Set<string>();
@@ -955,10 +591,8 @@ export class SceneController {
       this.checkpointMeshes.push({ id: cp.id, mesh: ring });
     }
 
-    // Декоративные деревья по периметру только для встроенных сценариев (в своём сценарии деревья — объекты карты)
+    // Декоративные деревья РФ/СНГ (липы, клёны, берёзы, ели) для встроенных сценариев
     if (world.scenarioId !== "custom") {
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 });
-      const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f6a44, roughness: 0.85 });
       const treeCoords: Array<[number, number]> =
         world.scenarioId === "city_osm"
           ? [
@@ -968,16 +602,9 @@ export class SceneController {
           : [
               [-13, -8], [13, -8], [-13, 13], [13, 13], [0, -14], [0, 18],
             ];
-      for (const [tx, tz] of treeCoords) {
-        const tg = new THREE.Group();
-        tg.position.set(tx, 0, tz);
-        const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.8, 7), trunkMat);
-        tr.position.y = 0.9;
-        const cr = new THREE.Mesh(new THREE.DodecahedronGeometry(1.45, 0), crownMat);
-        cr.position.y = 2.65;
-        tg.add(tr, cr);
-        this.worldGroup.add(tg);
-      }
+      treeCoords.forEach(([tx, tz], tIdx) => {
+        this.worldGroup.add(buildRealisticTree(tx, tz, 4.8, cityEnv, `${world.scenarioId}-t${tIdx}`));
+      });
     }
 
     this.resetOrbit();
@@ -988,12 +615,23 @@ export class SceneController {
     obs: ObstacleBox,
     world: WorldData,
     roadMats: RoadMaterialPack,
-    winTex: THREE.CanvasTexture,
+    cityEnv: CityEnvironmentPack,
     shadowTex: THREE.CanvasTexture,
-    learnerTex: THREE.CanvasTexture
+    learnerTex: THREE.CanvasTexture,
+    civilPlateTex: THREE.CanvasTexture,
+    clusterTex: THREE.CanvasTexture
   ): void {
     if (obs.kind === "parked_car" && obs.model) {
-      const rig = buildProceduralCar(obs.model, obs.color ?? 0x94a3b8, false, shadowTex, learnerTex);
+      const rig = buildDetailedCar(
+        obs.model,
+        obs.color ?? 0x94a3b8,
+        false,
+        shadowTex,
+        learnerTex,
+        civilPlateTex,
+        clusterTex,
+        OWN_MIRROR_HARDWARE_LAYER
+      );
       rig.root.position.set(obs.cx, 0, obs.cz);
       rig.root.rotation.y = obs.h;
       this.worldGroup.add(rig.root);
@@ -1006,44 +644,14 @@ export class SceneController {
     }
 
     if (obs.kind === "building") {
-      const mat = new THREE.MeshStandardMaterial({
-        color: obs.color ?? 0x556472,
-        map: winTex,
-        roughness: 0.82,
-      });
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(obs.halfX * 2, obs.height, obs.halfZ * 2),
-        mat
-      );
-      mesh.position.set(obs.cx, obs.height / 2, obs.cz);
-      mesh.rotation.y = obs.h;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.worldGroup.add(mesh);
-      this.buildingMeshes.push(mesh);
+      const bld = buildRussianBuilding(obs, cityEnv);
+      this.worldGroup.add(bld);
+      this.buildingMeshes.push(bld);
       return;
     }
 
     if (obs.kind === "tree") {
-      const tg = new THREE.Group();
-      tg.position.set(obs.cx, 0, obs.cz);
-      const h = Math.max(2.2, obs.height);
-      const trunkH = h * 0.44;
-      const crownR = Math.max(0.85, Math.max(obs.halfX, obs.halfZ) * 2.1, h * 0.32);
-      const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.14, 0.21, trunkH, 7),
-        new THREE.MeshStandardMaterial({ color: 0x5b4029, roughness: 0.9 })
-      );
-      trunk.position.y = trunkH / 2;
-      trunk.castShadow = true;
-      const crown = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(crownR, 0),
-        new THREE.MeshStandardMaterial({ color: obs.color ?? 0x2f6a44, roughness: 0.85 })
-      );
-      crown.position.y = trunkH + crownR * 0.65;
-      crown.castShadow = true;
-      tg.add(trunk, crown);
-      this.worldGroup.add(tg);
+      this.worldGroup.add(buildRealisticTree(obs.cx, obs.cz, Math.max(3.4, obs.height), cityEnv, obs.id));
     }
   }
 
@@ -1153,9 +761,11 @@ export class SceneController {
       const pose = getPedestrianPose(cw, state.time);
       pv.group.position.set(pose.x, 0, pose.z);
       pv.group.rotation.y = pose.h;
-      const swing = Math.sin(pose.walkPhase) * 0.42;
+      const swing = Math.sin(pose.walkPhase) * 0.44;
       pv.legL.rotation.x = swing;
       pv.legR.rotation.x = -swing;
+      pv.armL.rotation.x = -swing * 0.72;
+      pv.armR.rotation.x = swing * 0.72;
     }
 
     const activeCp = world.checkpoints[state.currentCheckpointIndex];
