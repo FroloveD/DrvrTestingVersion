@@ -32,10 +32,14 @@ export type DetailedCarRig = {
   headUnitScreen?: THREE.Mesh;
   rearCamScreen?: THREE.Mesh;
   rearCamOverlay?: THREE.Mesh;
-  /** Анимированные физические органы управления в салоне Kia Ceed JD. */
+  /** Анимированные физические органы управления в салоне Kia Ceed JD (в т.ч. интерактивный рычаг 6АКПП Shiftronic). */
   gearLeverPivot?: THREE.Object3D;
   gearGateDot?: THREE.Mesh;
   gearGateDotMat?: THREE.MeshBasicMaterial;
+  gearKnobCapMat?: THREE.MeshStandardMaterial;
+  gearGateRimMat?: THREE.MeshStandardMaterial;
+  /** Невидимые коллайдеры рычага и пазов кулисы (`lever`, `P`, `R`, `N`, `D`, `M`, `M+`, `M-`) для raycast в салоне. */
+  shifterPickTargets?: THREE.Object3D[];
   handbrakePivot?: THREE.Object3D;
   leftStalkPivot?: THREE.Object3D;
   hazardBtnMat?: THREE.MeshBasicMaterial;
@@ -51,33 +55,115 @@ export type DetailedCarRig = {
   driverGroup?: THREE.Group;
 };
 
-/** Текстура кулисы селектора АКПП `P – R – N – D` на центральном тоннеле (64×160). */
+/** Идентификатор зоны интерактивного 3D-селектора 6АКПП Shiftronic в салоне Kia Ceed JD. */
+export type ShifterHitId = "lever" | "P" | "R" | "N" | "D" | "M" | "M+" | "M-";
+
+/** Геометрия кулисы 6АКПП Shiftronic в локальных координатах кузова (`+X` к водителю, `+Z` вперёд). */
+export const SHIFTER_LAYOUT = {
+  gateX: 0.022,
+  gateY: 0.545,
+  gateOffsetZ: 0.44, // прибавляется к centerShiftZ = (frontOverhang - rearOverhang) * 0.5
+  mainRailX: 0.032,
+  manualRailX: 0.064,
+  mainDotX: 0.006,
+  manualDotX: 0.048,
+  knobPlaneY: 0.655,
+  offP: 0.058,
+  offR: 0.022,
+  offN: -0.014,
+  offD: -0.05,
+  offMPlus: -0.014,
+  offMMinus: -0.08,
+} as const;
+
+/**
+ * Текстура подсвеченной кулисы 6АКПП Shiftronic `P – R – N – D` + боковой ручной паз `+ / M / −`
+ * на центральном тоннеле Kia Ceed JD (160×320; `u=0` слева — сторона водителя `+X`, `v=1` сверху — вперёд `+Z`).
+ */
 function makeShifterGateTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
-  c.width = 64;
-  c.height = 160;
+  c.width = 160;
+  c.height = 320;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#11161d";
-  g.fillRect(0, 0, 64, 160);
+
+  // Рояльный чёрный лак с тонкой металлической окантовкой
+  const bg = g.createLinearGradient(0, 0, 160, 320);
+  bg.addColorStop(0, "#151c26");
+  bg.addColorStop(0.5, "#0d1219");
+  bg.addColorStop(1, "#18212d");
+  g.fillStyle = bg;
+  g.fillRect(0, 0, 160, 320);
+
   g.strokeStyle = "#94a3b8";
-  g.lineWidth = 3;
-  g.strokeRect(3, 3, 58, 154);
-  // Прорезь хода рычага слева и подписи режимов справа
-  g.fillStyle = "#05070a";
-  g.fillRect(12, 18, 14, 124);
+  g.lineWidth = 5;
+  g.strokeRect(4, 4, 152, 312);
+  g.strokeStyle = "rgba(255,255,255,0.12)";
+  g.lineWidth = 1.5;
+  g.strokeRect(10, 10, 140, 300);
+
+  // Хромированная окантовка основной прорези P–R–N–D (x≈68) и ручного паза Shiftronic +/M/− слева к водителю (x≈28)
+  g.strokeStyle = "#64748b";
+  g.lineWidth = 22;
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  g.beginPath();
+  g.moveTo(68, 56);
+  g.lineTo(68, 246);
+  g.lineTo(28, 246);
+  g.moveTo(28, 186);
+  g.lineTo(28, 286);
+  g.stroke();
+
+  // Внутренняя тёмная прорезь кулисы со шторкой
+  g.strokeStyle = "#04060a";
+  g.lineWidth = 15;
+  g.beginPath();
+  g.moveTo(68, 56);
+  g.lineTo(68, 246);
+  g.lineTo(28, 246);
+  g.moveTo(28, 186);
+  g.lineTo(28, 286);
+  g.stroke();
+
+  // Тонкие риски фиксаторов P / R / N / D
+  g.strokeStyle = "rgba(148,163,184,0.38)";
+  g.lineWidth = 2;
+  for (const y of [63, 123, 183, 243]) {
+    g.beginPath();
+    g.moveTo(82, y);
+    g.lineTo(94, y);
+    g.stroke();
+  }
+
+  // Подсвеченные символы P – R – N – D справа от основной прорези
   const labels: Array<[string, number, string]> = [
-    ["P", 32, "#e2e8f0"],
-    ["R", 64, "#f87171"],
-    ["N", 96, "#cbd5e1"],
-    ["D", 128, "#52d6bd"],
+    ["P", 63, "#f1f5f9"],
+    ["R", 123, "#ff6b6b"],
+    ["N", 183, "#cbd5e1"],
+    ["D", 243, "#52d6bd"],
   ];
-  g.font = "900 18px system-ui, sans-serif";
+  g.font = "900 32px system-ui, sans-serif";
   g.textAlign = "center";
   g.textBaseline = "middle";
   for (const [txt, y, col] of labels) {
     g.fillStyle = col;
-    g.fillText(txt, 44, y);
+    g.fillText(txt, 124, y);
   }
+
+  // Подсветка ручного паза Shiftronic (+ / M / −) со стороны водителя
+  g.fillStyle = "#f5b942";
+  g.font = "900 26px system-ui, sans-serif";
+  g.fillText("+", 28, 156);
+  g.fillText("−", 28, 304);
+  g.font = "800 17px system-ui, sans-serif";
+  g.fillStyle = "#fcd34d";
+  g.fillText("M", 49, 221);
+
+  // Нижняя микроподпись SHIFTRONIC
+  g.font = "700 11px system-ui, sans-serif";
+  g.fillStyle = "#7c909d";
+  g.fillText("SHIFT", 114, 294);
+
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -345,6 +431,9 @@ export function buildDetailedCar(
   let gearLeverPivot: THREE.Object3D | undefined;
   let gearGateDot: THREE.Mesh | undefined;
   let gearGateDotMat: THREE.MeshBasicMaterial | undefined;
+  let gearKnobCapMat: THREE.MeshStandardMaterial | undefined;
+  let gearGateRimMat: THREE.MeshStandardMaterial | undefined;
+  let shifterPickTargets: THREE.Object3D[] | undefined;
   let handbrakePivot: THREE.Object3D | undefined;
   let leftStalkPivot: THREE.Object3D | undefined;
   let hazardBtnMat: THREE.MeshBasicMaterial | undefined;
@@ -599,40 +688,91 @@ export function buildDetailedCar(
     }
     centerStack.add(hazardBtn, climatePanel, climateLcd);
 
-    // Центральный тоннель, селектор АКПП с кулисой P–R–N–D, механический ручник и подлокотник
-    const consoleTunnel = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.23, 0.96), darkTrimMat);
-    consoleTunnel.position.set(0, sillY + 0.165, centerShiftZ + 0.18);
+    // Центральный тоннель, интерактивный селектор 6АКПП Shiftronic (P–R–N–D + M+/−), ручник и подлокотник
+    const consoleTunnel = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.252, 0.96), darkTrimMat);
+    consoleTunnel.position.set(0, sillY + 0.175, centerShiftZ + 0.18);
     const consoleArmrest = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.09, 0.34), mirrorBezelMat);
-    consoleArmrest.position.set(0, sillY + 0.32, centerShiftZ - 0.12);
+    consoleArmrest.position.set(0, sillY + 0.33, centerShiftZ - 0.12);
 
-    const gateZ = centerShiftZ + 0.44;
-    const gateY = sillY + 0.283;
-    const gateBezel = new THREE.Mesh(new THREE.BoxGeometry(0.118, 0.012, 0.185), satinSilverMat);
-    gateBezel.position.set(0.02, gateY, gateZ);
+    const gateZ = centerShiftZ + SHIFTER_LAYOUT.gateOffsetZ;
+    const gateY = SHIFTER_LAYOUT.gateY;
+    gearGateRimMat = new THREE.MeshStandardMaterial({
+      color: 0xb8c4d0,
+      metalness: 0.72,
+      roughness: 0.28,
+      emissive: 0x000000,
+      emissiveIntensity: 0,
+    });
+    const gateBezel = new THREE.Mesh(new THREE.BoxGeometry(0.148, 0.014, 0.21), gearGateRimMat);
+    gateBezel.position.set(SHIFTER_LAYOUT.gateX, gateY, gateZ);
     const gatePlate = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.092, 0.165),
-      new THREE.MeshBasicMaterial({ map: makeShifterGateTexture() })
+      new THREE.PlaneGeometry(0.128, 0.192),
+      new THREE.MeshBasicMaterial({ map: makeShifterGateTexture(), toneMapped: false })
     );
     gatePlate.rotation.x = -Math.PI / 2;
     gatePlate.rotation.z = Math.PI;
-    gatePlate.position.set(0.02, gateY + 0.007, gateZ);
+    gatePlate.position.set(SHIFTER_LAYOUT.gateX, gateY + 0.008, gateZ);
 
     gearGateDotMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, toneMapped: false });
-    gearGateDot = new THREE.Mesh(new THREE.CircleGeometry(0.0065, 10), gearGateDotMat);
+    gearGateDot = new THREE.Mesh(new THREE.CircleGeometry(0.0068, 12), gearGateDotMat);
     gearGateDot.rotation.x = -Math.PI / 2;
-    gearGateDot.position.set(0.008, gateY + 0.0085, gateZ + 0.05);
+    gearGateDot.position.set(SHIFTER_LAYOUT.mainDotX, gateY + 0.0095, gateZ + SHIFTER_LAYOUT.offP);
 
     gearLeverPivot = new THREE.Group();
-    gearLeverPivot.position.set(0.042, gateY + 0.005, gateZ + 0.05);
-    const shiftBoot = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.048, 8), mirrorBezelMat);
-    shiftBoot.position.y = 0.022;
-    const shiftShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.008, 0.105, 8), chromeMat);
+    gearLeverPivot.position.set(SHIFTER_LAYOUT.mainRailX, gateY + 0.006, gateZ + SHIFTER_LAYOUT.offP);
+    const shiftBoot = new THREE.Mesh(new THREE.ConeGeometry(0.033, 0.05, 10), mirrorBezelMat);
+    shiftBoot.position.y = 0.023;
+    const shiftCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.016, 10), chromeMat);
+    shiftCollar.position.y = 0.098;
+    const shiftShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0072, 0.0082, 0.106, 10), chromeMat);
     shiftShaft.position.y = 0.068;
-    const shiftKnob = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.038, 0.068), mirrorBezelMat);
-    shiftKnob.position.set(0, 0.125, 0.006);
-    const shiftKnobCap = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.01, 0.05), satinSilverMat);
-    shiftKnobCap.position.set(0, 0.145, 0.006);
-    gearLeverPivot.add(shiftBoot, shiftShaft, shiftKnob, shiftKnobCap);
+    const shiftKnob = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.042, 0.072), mirrorBezelMat);
+    shiftKnob.position.set(0, 0.128, 0.006);
+    gearKnobCapMat = new THREE.MeshStandardMaterial({
+      color: 0xc2ceda,
+      metalness: 0.74,
+      roughness: 0.25,
+      emissive: 0x000000,
+      emissiveIntensity: 0,
+    });
+    const shiftKnobCap = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.011, 0.054), gearKnobCapMat);
+    shiftKnobCap.position.set(0, 0.15, 0.006);
+    // Передняя хромированная клавиша снятия блокировки P/R (как на реальном селекторе Kia Ceed JD)
+    const shiftTrigger = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.018, 0.01), chromeMat);
+    shiftTrigger.position.set(0, 0.124, 0.043);
+    gearLeverPivot.add(shiftBoot, shiftShaft, shiftCollar, shiftKnob, shiftKnobCap, shiftTrigger);
+
+    // Невидимые точные зоны наведения/клика/перетаскивания 3D-рычага АКПП и пазов кулисы
+    const hitMat = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      colorWrite: false,
+    });
+    const knobHit = new THREE.Mesh(new THREE.BoxGeometry(0.092, 0.165, 0.098), hitMat);
+    knobHit.position.set(0, 0.098, 0.006);
+    knobHit.userData.shifterHit = "lever" satisfies ShifterHitId;
+    gearLeverPivot.add(knobHit);
+
+    const slotGroup = new THREE.Group();
+    const slotDefs: Array<[ShifterHitId, number, number, number, number]> = [
+      ["P", 0.008, SHIFTER_LAYOUT.offP, 0.088, 0.034],
+      ["R", 0.008, SHIFTER_LAYOUT.offR, 0.088, 0.034],
+      ["N", 0.008, SHIFTER_LAYOUT.offN, 0.088, 0.034],
+      ["D", 0.0, SHIFTER_LAYOUT.offD, 0.072, 0.036],
+      ["M", SHIFTER_LAYOUT.manualRailX, SHIFTER_LAYOUT.offD, 0.042, 0.03],
+      ["M+", SHIFTER_LAYOUT.manualRailX, SHIFTER_LAYOUT.offMPlus, 0.044, 0.04],
+      ["M-", SHIFTER_LAYOUT.manualRailX, SHIFTER_LAYOUT.offMMinus, 0.044, 0.034],
+    ];
+    shifterPickTargets = [knobHit];
+    for (const [id, sx, sz, sw, sd] of slotDefs) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.02, sd), hitMat);
+      m.position.set(sx, gateY + 0.014, gateZ + sz);
+      m.userData.shifterHit = id;
+      slotGroup.add(m);
+      shifterPickTargets.push(m);
+    }
+    chassis.add(slotGroup);
 
     // Рычаг стояночного тормоза (поднят на холодном старте, опускается при снятии Space)
     handbrakePivot = new THREE.Group();
@@ -1112,6 +1252,9 @@ export function buildDetailedCar(
     gearLeverPivot,
     gearGateDot,
     gearGateDotMat,
+    gearKnobCapMat,
+    gearGateRimMat,
+    shifterPickTargets,
     handbrakePivot,
     leftStalkPivot,
     hazardBtnMat,

@@ -25,11 +25,19 @@ import { cropOsmPackToPolygon, parseMapFileText, type NormalizedOsmPack } from "
 import { buildRouteFromRoads, listRouteCandidates, streetNameAt } from "../maps/route";
 import { checkScenarioRoute } from "../maps/routeCheck";
 import { SceneController, type PerfMetrics } from "../render/sceneController";
+import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import { customFromOsmPack, type CustomScenarioDef } from "../scenarios/custom";
 import { autoFixScenarioRoute } from "../scenarios/editorOps";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange, stepGearSequential } from "../sim/controls";
+import {
+  applyShifterTarget,
+  checkEngineToggle,
+  checkGearChange,
+  stepGearSequential,
+  stepShifterGate,
+  type ShifterTarget,
+} from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
@@ -477,6 +485,32 @@ export function SimulatorView({
     drawRadius: 145,
   });
 
+  const [shifterGlance, setShifterGlance] = useState(false);
+  const [hudGearHint, setHudGearHint] = useState<{
+    slot: "P" | "R" | "N" | "D";
+    left: number;
+    top: number;
+    below: boolean;
+  } | null>(null);
+  const [cockpitShifterUi, setCockpitShifterUi] = useState<{
+    hit: ShifterHitId;
+    dragging: boolean;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (cameraMode !== "cockpit") {
+      setShifterGlance(false);
+      setCockpitShifterUi(null);
+      sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
+    }
+  }, [cameraMode]);
+
+  useEffect(() => {
+    if (uiHidden) setHudGearHint(null);
+  }, [uiHidden]);
+
   useEffect(() => {
     optsRef.current = {
       cameraMode,
@@ -552,6 +586,85 @@ export function SimulatorView({
     },
     [onNotify]
   );
+
+  // Реф таймера подавления повтора предупреждений при плавном ведении 3D-рычага АКПП мышью
+  const shifterNotifyAtRef = useRef(0);
+  const notifyShifterOnce = useCallback(
+    (msg: string, throttle = false) => {
+      const now = performance.now();
+      if (throttle && now - shifterNotifyAtRef.current < 900) return;
+      shifterNotifyAtRef.current = now;
+      onNotify(msg);
+    },
+    [onNotify]
+  );
+
+  /** Переключение передачи 3D-рычагом АКПП Shiftronic в салоне (перетаскивание или клик по пазу кулисы). */
+  const engageCockpitShifter = useCallback(
+    (target: ShifterTarget, opts?: { toggleManualOnClick?: boolean; fromDrag?: boolean }): Gear | null => {
+      const inp = inputRef.current;
+      const st = stateRef.current;
+      const { next, blockedReason } = applyShifterTarget(inp, st.v, st.autoSubGear, target, {
+        toggleManualOnClick: opts?.toggleManualOnClick,
+      });
+      if (blockedReason) {
+        notifyShifterOnce(blockedReason, Boolean(opts?.fromDrag));
+        return null;
+      }
+      if (!next) return null;
+      inp.gear = next;
+      const nextSub = isManualGear(next) ? Number(next) : st.autoSubGear;
+      setHud((current) => ({
+        ...current,
+        state: { ...current.state, gear: next, autoSubGear: nextSub },
+      }));
+      return next;
+    },
+    [notifyShifterOnce]
+  );
+
+  /** Пошаговое переключение 3D-рычага АКПП (колесом мыши или одиночным кликом по рукоятке). */
+  const stepCockpitShifter = useCallback(
+    (dir: 1 | -1) => {
+      const inp = inputRef.current;
+      const st = stateRef.current;
+      const { next, blockedReason } = stepShifterGate(inp, st.v, st.autoSubGear, dir);
+      if (blockedReason) {
+        notifyShifterOnce(blockedReason, false);
+        return;
+      }
+      if (!next) return;
+      inp.gear = next;
+      const nextSub = isManualGear(next) ? Number(next) : st.autoSubGear;
+      setHud((current) => ({
+        ...current,
+        state: { ...current.state, gear: next, autoSubGear: nextSub },
+      }));
+    },
+    [notifyShifterOnce]
+  );
+
+  /** Быстрый взгляд водителя на 3D-рычаг АКПП в салоне и обратно на дорогу (клавиша G или кнопка «КПП»). */
+  const toggleShifterGlance = useCallback(() => {
+    const ctrl = sceneCtrlRef.current;
+    if (!ctrl) return;
+    if (optsRef.current.cameraMode !== "cockpit") {
+      setCameraMode("cockpit");
+      // Если ещё не смотрели на рычаг — сразу направляем взгляд на кулису АКПП
+      if (!ctrl.isCockpitShifterView()) {
+        setShifterGlance(ctrl.toggleCockpitShifterView());
+      } else {
+        setShifterGlance(true);
+      }
+      return;
+    }
+    const looking = ctrl.toggleCockpitShifterView();
+    setShifterGlance(looking);
+    if (!looking) {
+      setCockpitShifterUi(null);
+      ctrl.setShifterInteraction(null, false, 0);
+    }
+  }, []);
 
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
@@ -951,6 +1064,9 @@ export function SimulatorView({
         case "Digit4":
           setCameraMode("orbit");
           break;
+        case "KeyG":
+          toggleShifterGlance();
+          break;
         case "Backspace":
           e.preventDefault();
           resetAttempt(worldRef.current, COLD_START);
@@ -976,11 +1092,40 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify]);
+  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, toggleShifterGlance, onNotify]);
 
-  // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
-  // Инвариант #12: ЛКМ — руль (вправо уменьшает swDeg), ПКМ — орбита, колесо — зум.
+  // === [SEC:sim-pointer] Мышь на холсте, 3D-рычаг АКПП в салоне, экранный руль, педали и импорт OSM ===
+  // Инвариант #12: ЛКМ — руль (вправо уменьшает swDeg; при захвате 3D-рычага АКПП — кулиса), ПКМ — орбита, колесо — зум.
   const pointerDragRef = useRef<{ id: number; btn: number; lastX: number; lastY: number } | null>(null);
+  const shifterHoverRef = useRef<ShifterHitId | null>(null);
+  const shifterDragRef = useRef<{
+    id: number;
+    initialHit: ShifterHitId;
+    startClientX: number;
+    startClientY: number;
+    moved: boolean;
+    offsetX: number;
+    offsetZ: number;
+    gateZ: number;
+    /** Точка X входа в паз D — защищает от случайного срыва в боковой паз M при прямом ходе P→R→N→D. */
+    dAnchorX: number | null;
+    /** Точка (X, Z) входа в ручной паз M — задаёт точный центр качания +/− и возврата вправо M→D. */
+    mAnchorX: number | null;
+    mAnchorZ: number | null;
+    /** Пружинный фиксатор качания рычага вперёд `+` / назад `−` в ручном пазу Shiftronic. */
+    manualLatch: -1 | 0 | 1;
+  } | null>(null);
+
+  const readCanvasNorm = (canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      normX: (clientX - rect.left) / rect.width,
+      normY: (clientY - rect.top) / rect.height,
+      localX: clientX - rect.left,
+      localY: clientY - rect.top,
+    };
+  };
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button === 1) {
@@ -988,34 +1133,233 @@ export function SimulatorView({
       return;
     }
     if (e.button !== 0 && e.button !== 2) return;
+
+    // В режиме салона ЛКМ по 3D-рычагу или кулисе АКПП захватывает селектор, не вращая руль
+    const ctrl = sceneCtrlRef.current;
+    if (e.button === 0 && ctrl && optsRef.current.cameraMode === "cockpit") {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const hit = pos ? ctrl.pickCockpitShifter(pos.normX, pos.normY) : null;
+      if (pos && hit) {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const anchor = ctrl.getShifterLocalAnchor();
+        const planeHit = ctrl.projectToShifterLocal(pos.normX, pos.normY);
+        const offsetX = planeHit ? planeHit.x - anchor.leverX : 0;
+        const offsetZ = planeHit ? planeHit.z - anchor.leverZ : 0;
+        const curGear = inputRef.current.gear;
+        shifterDragRef.current = {
+          id: e.pointerId,
+          initialHit: hit,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          moved: false,
+          offsetX,
+          offsetZ,
+          gateZ: anchor.gateZ,
+          dAnchorX: curGear === "D" ? SHIFTER_LAYOUT.mainRailX : null,
+          mAnchorX: isManualGear(curGear) ? SHIFTER_LAYOUT.manualRailX : null,
+          mAnchorZ: isManualGear(curGear) ? SHIFTER_LAYOUT.offD : null,
+          manualLatch: 0,
+        };
+        shifterHoverRef.current = hit;
+        ctrl.setShifterInteraction(hit, true, 0);
+        setCockpitShifterUi({ hit, dragging: true, x: pos.localX, y: pos.localY });
+        return;
+      }
+    }
+
     e.currentTarget.setPointerCapture(e.pointerId);
     pointerDragRef.current = { id: e.pointerId, btn: e.button, lastX: e.clientX, lastY: e.clientY };
     if (e.button === 0) holdingSteerRef.current = true;
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const ctrl = sceneCtrlRef.current;
+
+    // 1. Активное перетаскивание 3D-рычага АКПП по H/L-образной кулисе P–R–N–D | +M−
+    const sDrag = shifterDragRef.current;
+    if (sDrag && sDrag.id === e.pointerId) {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      if (!pos || !ctrl) return;
+      if (!sDrag.moved && Math.hypot(e.clientX - sDrag.startClientX, e.clientY - sDrag.startClientY) >= 5) {
+        sDrag.moved = true;
+      }
+      if (!sDrag.moved) {
+        setCockpitShifterUi({ hit: sDrag.initialHit, dragging: true, x: pos.localX, y: pos.localY });
+        return;
+      }
+      const planeHit = ctrl.projectToShifterLocal(pos.normX, pos.normY);
+      if (!planeHit) return;
+      const relX = planeHit.x - sDrag.offsetX;
+      const dz = planeHit.z - sDrag.offsetZ - sDrag.gateZ;
+      const curGear = inputRef.current.gear;
+      let activeBadge: ShifterHitId = "lever";
+
+      if (isManualGear(curGear)) {
+        const mRefX = sDrag.mAnchorX ?? SHIFTER_LAYOUT.manualRailX;
+        const mRefZ = sDrag.mAnchorZ ?? SHIFTER_LAYOUT.offD;
+        const mDelta = dz - mRefZ;
+        // Поперечная перемычка M → D открыта в средней зоне паза (при ходе вверх/вниз к +/− держит стенка кулисы)
+        if (relX <= mRefX - 0.021 && Math.abs(mDelta) < 0.032) {
+          const switched = engageCockpitShifter("D", { fromDrag: true });
+          sDrag.manualLatch = 0;
+          sDrag.mAnchorX = null;
+          sDrag.mAnchorZ = null;
+          ctrl.setShifterInteraction("D", true, 0);
+          activeBadge = "D";
+          if (switched === "D") {
+            sDrag.dAnchorX = relX;
+          }
+        } else if (mDelta >= 0.02) {
+          // Пружинное качание рычага вперёд (+) — повышение ступени M1..M6
+          if (sDrag.manualLatch !== 1) {
+            sDrag.manualLatch = 1;
+            engageCockpitShifter("M+", { fromDrag: true });
+          }
+          ctrl.setShifterInteraction("M+", true, 1);
+          activeBadge = "M+";
+        } else if (mDelta <= -0.02) {
+          // Пружинное качание рычага назад (−) — понижение ступени M6..M1
+          if (sDrag.manualLatch !== -1) {
+            sDrag.manualLatch = -1;
+            engageCockpitShifter("M-", { fromDrag: true });
+          }
+          ctrl.setShifterInteraction("M-", true, -1);
+          activeBadge = "M-";
+        } else {
+          if (Math.abs(mDelta) < 0.011) sDrag.manualLatch = 0;
+          ctrl.setShifterInteraction("M", true, 0);
+          activeBadge = "M";
+        }
+      } else {
+        // Из положения D боковой ход влево (к водителю) переводит рычаг через перемычку в паз Shiftronic M
+        let enteredManual = false;
+        if (curGear === "D") {
+          if (sDrag.dAnchorX === null) sDrag.dAnchorX = relX;
+          if (relX - sDrag.dAnchorX >= 0.021 && dz < -0.008 && dz > -0.11) {
+            const switched = engageCockpitShifter("M", { fromDrag: true });
+            if (switched) {
+              sDrag.manualLatch = 0;
+              sDrag.dAnchorX = null;
+              sDrag.mAnchorX = relX;
+              sDrag.mAnchorZ = dz;
+              activeBadge = "M";
+              enteredManual = true;
+            }
+          } else {
+            sDrag.dAnchorX = Math.min(sDrag.dAnchorX, Math.max(relX, SHIFTER_LAYOUT.mainRailX));
+          }
+        }
+        if (!enteredManual) {
+          // Продольный ход по основной прорези P (+0.058) ↔ R (+0.022) ↔ N (-0.014) ↔ D (-0.050)
+          const targetMain: "P" | "R" | "N" | "D" =
+            dz >= 0.04 ? "P" : dz >= 0.004 ? "R" : dz >= -0.032 ? "N" : "D";
+          if (targetMain !== curGear) {
+            const switched = engageCockpitShifter(targetMain, { fromDrag: true });
+            sDrag.dAnchorX = switched === "D" ? relX : null;
+            sDrag.mAnchorX = null;
+            sDrag.mAnchorZ = null;
+            activeBadge = targetMain;
+          } else {
+            if (curGear !== "D") {
+              sDrag.dAnchorX = null;
+              sDrag.mAnchorX = null;
+              sDrag.mAnchorZ = null;
+            }
+            activeBadge = curGear;
+          }
+        }
+        ctrl.setShifterInteraction(activeBadge, true, 0);
+      }
+
+      setCockpitShifterUi({ hit: activeBadge, dragging: true, x: pos.localX, y: pos.localY });
+      return;
+    }
+
+    // 2. Вращение руля (ЛКМ) или обзор камеры/головы (ПКМ)
     const drag = pointerDragRef.current;
-    if (!drag || drag.id !== e.pointerId) return;
-    const dx = e.clientX - drag.lastX;
-    const dy = e.clientY - drag.lastY;
-    drag.lastX = e.clientX;
-    drag.lastY = e.clientY;
-    if (drag.btn === 0) {
-      // Инвариант №6: движение мыши вправо уменьшает swDeg (поворот вправо)
-      inputRef.current.steerWheelDeg = clamp(
-        inputRef.current.steerWheelDeg - dx * 2.1,
-        -STEER_WHEEL.maxDeg,
-        STEER_WHEEL.maxDeg
-      );
-    } else if (drag.btn === 2) {
-      sceneCtrlRef.current?.adjustOrbit(dx, dy);
+    if (drag && drag.id === e.pointerId) {
+      const dx = e.clientX - drag.lastX;
+      const dy = e.clientY - drag.lastY;
+      drag.lastX = e.clientX;
+      drag.lastY = e.clientY;
+      if (drag.btn === 0) {
+        // Инвариант №6: движение мыши вправо уменьшает swDeg (поворот вправо)
+        inputRef.current.steerWheelDeg = clamp(
+          inputRef.current.steerWheelDeg - dx * 2.1,
+          -STEER_WHEEL.maxDeg,
+          STEER_WHEEL.maxDeg
+        );
+      } else if (drag.btn === 2 && ctrl) {
+        ctrl.adjustOrbit(dx, dy);
+        if (optsRef.current.cameraMode === "cockpit") {
+          setShifterGlance(ctrl.isCockpitShifterView());
+        }
+      }
+      return;
+    }
+
+    // 3. Свободное наведение курсора в салоне: подсветка 3D-рычага АКПП и всплывающая подсказка
+    if (ctrl && optsRef.current.cameraMode === "cockpit") {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const hit = pos ? ctrl.pickCockpitShifter(pos.normX, pos.normY) : null;
+      if (pos && hit) {
+        shifterHoverRef.current = hit;
+        ctrl.setShifterInteraction(hit, false, 0);
+        setCockpitShifterUi({ hit, dragging: false, x: pos.localX, y: pos.localY });
+      } else if (shifterHoverRef.current !== null) {
+        shifterHoverRef.current = null;
+        ctrl.setShifterInteraction(null, false, 0);
+        setCockpitShifterUi(null);
+      }
     }
   };
 
   const handleCanvasPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const sDrag = shifterDragRef.current;
+    if (sDrag && sDrag.id === e.pointerId) {
+      shifterDragRef.current = null;
+      const ctrl = sceneCtrlRef.current;
+      // Короткий клик без перетаскивания: по пазу P/R/N/D/M/+/− — точный выбор, по рукоятке — шаг по кулисе
+      if (!sDrag.moved) {
+        if (sDrag.initialHit === "lever") {
+          if (inputRef.current.gear === "D") {
+            engageCockpitShifter("M");
+          } else if (isManualGear(inputRef.current.gear)) {
+            engageCockpitShifter("D");
+          } else {
+            stepCockpitShifter(1);
+          }
+        } else {
+          engageCockpitShifter(sDrag.initialHit, { toggleManualOnClick: sDrag.initialHit === "M" });
+        }
+      }
+      if (ctrl && optsRef.current.cameraMode === "cockpit") {
+        const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+        const hit = pos ? ctrl.pickCockpitShifter(pos.normX, pos.normY) : null;
+        shifterHoverRef.current = hit;
+        ctrl.setShifterInteraction(hit, false, 0);
+        setCockpitShifterUi(pos && hit ? { hit, dragging: false, x: pos.localX, y: pos.localY } : null);
+      } else {
+        shifterHoverRef.current = null;
+        ctrl?.setShifterInteraction(null, false, 0);
+        setCockpitShifterUi(null);
+      }
+      return;
+    }
+
     if (pointerDragRef.current?.id === e.pointerId) {
       if (pointerDragRef.current.btn === 0) holdingSteerRef.current = false;
       pointerDragRef.current = null;
+    }
+  };
+
+  const handleCanvasPointerLeave = () => {
+    if (shifterDragRef.current) return;
+    if (shifterHoverRef.current !== null) {
+      shifterHoverRef.current = null;
+      sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
+      setCockpitShifterUi(null);
     }
   };
 
@@ -1557,11 +1901,28 @@ export function SimulatorView({
           onPointerMove={handleCanvasPointerMove}
           onPointerUp={handleCanvasPointerEnd}
           onPointerCancel={handleCanvasPointerEnd}
+          onPointerLeave={handleCanvasPointerLeave}
           onWheel={(e) => {
             e.preventDefault();
-            sceneCtrlRef.current?.adjustZoom(e.deltaY);
+            const ctrl = sceneCtrlRef.current;
+            if (ctrl && cameraMode === "cockpit" && shifterHoverRef.current !== null && Math.abs(e.deltaY) > 0) {
+              // Вращение колеса над 3D-рычагом АКПП: вниз — P→R→N→D (в M: −1), вверх — D→N→R→P (в M: +1)
+              const inMan = isManualGear(inputRef.current.gear);
+              const dir: 1 | -1 = inMan ? (e.deltaY < 0 ? 1 : -1) : e.deltaY > 0 ? 1 : -1;
+              stepCockpitShifter(dir);
+              return;
+            }
+            ctrl?.adjustZoom(e.deltaY);
           }}
-          className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
+          className={`block w-full h-full touch-none ${
+            cockpitShifterUi
+              ? cockpitShifterUi.dragging
+                ? "cursor-grabbing"
+                : cockpitShifterUi.hit === "lever"
+                  ? "cursor-grab"
+                  : "cursor-pointer"
+              : "cursor-grab active:cursor-grabbing"
+          }`}
         />
 
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в «Салоне» отражения рендерятся на физических 3D-зеркалах) и руль */}
@@ -2128,8 +2489,9 @@ export function SimulatorView({
                   ["A / D", "Руль влево (+X) / вправо (−X)"],
                   ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
                   ["ПКМ + колесо", "Вращение и зум камеры"],
-                  ["Shift / RShift·X", "КПП вверх ▲ / вниз ▼ (M1–M6)"],
+                  ["Shift / RShift·X", "Ручной режим M1–M6 (▲ / ▼)"],
                   ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
+                  ["G · 3D-рычаг", "Взгляд на АКПП и переключение мышью"],
                   ["I (в P/N)", "Запуск ДВС только из P или N"],
                   ["Q / E / Z", "Поворотники лев. / прав. / аварийка"],
                   ["I / Space / B", "Двигатель / Ручник / Ремень"],
@@ -2190,6 +2552,21 @@ export function SimulatorView({
                 {label}
               </button>
             ))}
+            {cameraMode === "cockpit" && (
+              <button
+                type="button"
+                data-testid="cockpit-look-shifter"
+                onClick={toggleShifterGlance}
+                title="Направить взгляд на 3D-рычаг АКПП в салоне и обратно на дорогу (клавиша G или ПКМ вниз-вправо)"
+                className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
+                  shifterGlance
+                    ? "bg-[#f5b942]/25 border-[#f5b942]/70 text-[#f5b942]"
+                    : "bg-[#091017]/80 border-[rgba(148,176,194,.18)] text-[#c5d4de] hover:text-white"
+                }`}
+              >
+                {shifterGlance ? "↑ Дорога (G)" : "Рычаг КПП (G)"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowTrajectory((v) => !v)}
@@ -2347,16 +2724,37 @@ export function SimulatorView({
                 <Icon name="alert" size={14} />
               </button>
 
-              {/* Селектор 6-ст. КПП Shiftronic: P / R / N / D (D1–D6) + ручной Shift (M1–M6) */}
-              <div className="flex items-center gap-1 border-l hairline pl-2.5">
+              {/* Селектор 6-ст. КПП Shiftronic: P / R / N / D (D1–D6) + ручной Shift (M1–M6) с подсказкой при наведении */}
+              <div
+                data-testid="hud-gear-selector"
+                onPointerLeave={() => setHudGearHint(null)}
+                className="flex items-center gap-1 border-l hairline pl-2.5"
+              >
                 {(["P", "R", "N", "D"] as const).map((g) => {
                   const isDriveSlot = g === "D";
                   const active = s.gear === g || (isDriveSlot && manualMode);
+                  const showHint = (el: HTMLElement) => {
+                    const host = containerRef.current;
+                    if (!host) return;
+                    const hr = host.getBoundingClientRect();
+                    const br = el.getBoundingClientRect();
+                    const boxW = Math.min(316, Math.max(240, hr.width - 16));
+                    const centerX = br.left - hr.left + br.width / 2;
+                    const left = clamp(centerX - boxW / 2, 8, Math.max(8, hr.width - boxW - 8));
+                    const spaceAbove = br.top - hr.top;
+                    const below = spaceAbove < 190;
+                    const top = below ? br.bottom - hr.top + 8 : br.top - hr.top - 8;
+                    setHudGearHint({ slot: g, left, top, below });
+                  };
                   return (
                     <button
                       key={g}
                       type="button"
+                      data-gear-slot={g}
                       onClick={() => setGear(g)}
+                      onPointerEnter={(e) => showHint(e.currentTarget)}
+                      onFocus={(e) => showHint(e.currentTarget)}
+                      onBlur={() => setHudGearHint(null)}
                       onContextMenu={
                         isDriveSlot
                           ? (e) => {
@@ -2365,16 +2763,16 @@ export function SimulatorView({
                             }
                           : undefined
                       }
-                      title={
+                      aria-label={
                         g === "P"
-                          ? "P (Parking) — стоянка, тяги нет. Включается только на остановке"
+                          ? "P — парковка"
                           : g === "R"
-                            ? "Задний ход (R)"
+                            ? "R — задний ход"
                             : g === "N"
-                              ? "Нейтраль (N)"
+                              ? "N — нейтраль"
                               : manualMode
-                                ? `Ручной режим ${gearDisplay} (Shift ▲ / RShift·X ▼) — ЛКМ: Авто D (F), ПКМ: +1`
-                                : "Автомат D1–D6 (F) · Shift — ручной режим M1–M6 (▲), RShift/X — вниз (▼)"
+                                ? `D — вернуть автомат из ${gearDisplay}`
+                                : "D — автомат D1–D6"
                       }
                       className={`mono h-8 min-w-[30px] px-2 rounded-lg text-xs font-bold border transition ${
                         active
@@ -2483,7 +2881,173 @@ export function SimulatorView({
           );
         })}
 
-        {/* В режиме H на экране остаются только зеркала. Вернуть HUD — клавиша H. */}
+        {/* Всплывающая подсказка по переключению 6АКПП Shiftronic при наведении на селектор HUD */}
+        {!uiHidden && hudGearHint && (
+          <div
+            role="tooltip"
+            data-testid="hud-gearbox-hint"
+            style={{
+              left: hudGearHint.left,
+              top: hudGearHint.top,
+              transform: hudGearHint.below ? "none" : "translateY(-100%)",
+            }}
+            className="pointer-events-none absolute z-[92] w-[min(316px,calc(100%-16px))] rounded-xl border border-[#52d6bd]/35 bg-[#070d14]/95 px-3 py-2.5 text-[11px] leading-snug text-[#c5d4de] shadow-2xl backdrop-blur"
+          >
+            <div className="flex items-center justify-between gap-2 pb-1.5 mb-1.5 border-b border-white/10">
+              <span className="mono text-[10px] font-extrabold text-[#52d6bd]">6АКПП SHIFTRONIC · ПОДСКАЗКА</span>
+              <span
+                className={`mono px-1.5 py-0.5 rounded text-[10px] font-extrabold ${
+                  manualMode
+                    ? "bg-[#f5b942]/20 text-[#f5b942]"
+                    : s.gear === "D"
+                      ? "bg-[#52d6bd]/20 text-[#52d6bd]"
+                      : s.gear === "R"
+                        ? "bg-[#ff6b6b]/20 text-[#ff8a8a]"
+                        : "bg-white/10 text-white"
+                }`}
+              >
+                Сейчас: {gearDisplay}
+              </span>
+            </div>
+
+            <div className="text-[11px] font-semibold text-white mb-1.5">
+              {hudGearHint.slot === "P" && "P (Парковка) — блокировка колёс, только на полной остановке (S)."}
+              {hudGearHint.slot === "R" && "R (Задний ход) — движение назад до 14 км/ч + камера заднего вида."}
+              {hudGearHint.slot === "N" && "N (Нейтраль) — колёса разобщены с ДВС, разрешён запуск (I)."}
+              {hudGearHint.slot === "D" &&
+                (manualMode
+                  ? `Активен ручной ${gearDisplay}: ЛКМ по кнопке или F — вернуть автомат D; ПКМ — +1.`
+                  : "D (Автомат D1–D6) — коробка сама меняет 6 ступеней; ПКМ — ручной +1.")}
+            </div>
+
+            <div className="space-y-1 text-[10.5px] text-[#a9bcc8]">
+              <div>
+                <span className="mono font-bold text-[#f5b942]">P · R · N · F</span> — прямой выбор{" "}
+                <span className="text-white">P / R / N / Авто D</span>{" "}
+                <span className="text-[#52d6bd]">(F или клик D возвращает D из M)</span>
+              </div>
+              <div>
+                <span className="mono font-bold text-[#f5b942]">Shift ▲ / RShift·X ▼</span> — ручной паз{" "}
+                <span className="text-white">M1–M6</span> (защита от перекрута и заглохания)
+              </div>
+              <div>
+                <span className="mono font-bold text-[#f5b942]">В салоне (2 · G)</span> — перетаскивайте или кликайте{" "}
+                <span className="text-white">3D-рычаг АКПП</span> (влево — M +/−, вправо — D)
+              </div>
+              {!s.engineOn && (
+                <div className="text-[#f5b942] pt-0.5">Сначала запустите двигатель клавишей I (в P или N).</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Всплывающая подсказка и живая схема кулисы при наведении/перетаскивании 3D-рычага АКПП в салоне */}
+        {cameraMode === "cockpit" && cockpitShifterUi && (() => {
+          const cw = containerRef.current?.clientWidth ?? 960;
+          const ch = containerRef.current?.clientHeight ?? 600;
+          const cardW = Math.min(312, Math.max(236, cw - 16));
+          const preferRight = cockpitShifterUi.x + 22 + cardW <= cw - 8;
+          const left = preferRight
+            ? cockpitShifterUi.x + 22
+            : Math.max(8, cockpitShifterUi.x - cardW - 18);
+          const top = clamp(cockpitShifterUi.y - 84, 10, Math.max(10, ch - 196));
+          const zoneLabel: Record<ShifterHitId, string> = {
+            lever: cockpitShifterUi.dragging ? "Перемещение рычага" : "Рукоятка рычага",
+            P: "Паз P · Парковка",
+            R: "Паз R · Задний ход",
+            N: "Паз N · Нейтраль",
+            D: "Паз D · Автомат D1–D6",
+            M: "Паз M · Ручной Shiftronic",
+            "M+": "Качание + · Передача ▲",
+            "M-": "Качание − · Передача ▼",
+          };
+          return (
+            <div
+              role="tooltip"
+              data-testid="cockpit-shifter-hint"
+              style={{ left, top }}
+              className="pointer-events-none absolute z-[92] w-[min(312px,calc(100%-16px))] rounded-xl border border-[#f5b942]/45 bg-[#070d14]/95 px-3 py-2.5 text-[11px] leading-snug text-[#c5d4de] shadow-2xl backdrop-blur"
+            >
+              <div className="flex items-center justify-between gap-2 pb-1.5 mb-1.5 border-b border-white/10">
+                <span className="mono text-[10px] font-extrabold text-[#f5b942]">3D-РЫЧАГ 6АКПП · {zoneLabel[cockpitShifterUi.hit]}</span>
+                <span className="mono px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-extrabold text-white">
+                  {gearDisplay}
+                </span>
+              </div>
+
+              {/* Наглядная мини-схема кулисы P – R – N – D ⇄ M (+/−) */}
+              <div className="flex items-center justify-between gap-1.5 mb-1.5 rounded-lg bg-[#0c1520] border hairline px-2 py-1 mono text-[10px]">
+                <div className="flex items-center gap-1">
+                  {(["P", "R", "N", "D"] as const).map((slot) => {
+                    const cur = s.gear === slot;
+                    const aim = cockpitShifterUi.hit === slot;
+                    return (
+                      <span
+                        key={slot}
+                        className={`px-1.5 py-0.5 rounded font-extrabold ${
+                          cur
+                            ? slot === "D"
+                              ? "bg-[#52d6bd] text-[#071512]"
+                              : slot === "R"
+                                ? "bg-[#ff6b6b] text-[#1a0707]"
+                                : "bg-[#cbd5e1] text-[#0b1118]"
+                            : aim
+                              ? "border border-[#52d6bd]/60 text-white"
+                              : "text-[#7c909d]"
+                        }`}
+                      >
+                        {slot === "D" && cur ? gearDisplay : slot}
+                      </span>
+                    );
+                  })}
+                </div>
+                <span className="text-[#64748b]">⇄</span>
+                <div className="flex items-center gap-1">
+                  <span className={cockpitShifterUi.hit === "M-" ? "text-[#f5b942] font-extrabold" : "text-[#7c909d]"}>−</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded font-extrabold ${
+                      manualMode
+                        ? "bg-[#f5b942] text-[#17130a]"
+                        : cockpitShifterUi.hit === "M"
+                          ? "border border-[#f5b942]/60 text-[#f5b942]"
+                          : "text-[#9bafbc]"
+                    }`}
+                  >
+                    {manualMode ? gearDisplay : "M"}
+                  </span>
+                  <span className={cockpitShifterUi.hit === "M+" ? "text-[#f5b942] font-extrabold" : "text-[#7c909d]"}>+</span>
+                </div>
+              </div>
+
+              <div className="space-y-0.5 text-[10.5px] text-[#a9bcc8]">
+                <div>
+                  <span className="text-white font-semibold">ЛКМ вверх/вниз</span> (или клик по пазу) —{" "}
+                  <span className="mono text-[#52d6bd]">P ↔ R ↔ N ↔ D</span>
+                </div>
+                <div>
+                  <span className="text-white font-semibold">Из D влево</span> (к себе) —{" "}
+                  <span className="mono text-[#f5b942]">M1–M6</span>: вперёд <span className="mono text-white">+</span>, назад{" "}
+                  <span className="mono text-white">−</span>
+                </div>
+                <div>
+                  <span className="text-white font-semibold">Из M вправо</span> (клик <span className="mono text-white">D</span> или{" "}
+                  <span className="mono text-[#52d6bd]">F</span>) — возврат в автомат{" "}
+                  <span className="mono text-[#52d6bd]">D1–D6</span>
+                </div>
+                <div>
+                  <span className="text-white font-semibold">Колесо</span> — шаг передачи ·{" "}
+                  <span className="mono text-[#f5b942]">Shift / RShift·X</span> ·{" "}
+                  <span className="mono text-[#9bafbc]">G</span> — дорога
+                </div>
+                {!s.engineOn && (
+                  <div className="text-[#f5b942] pt-0.5">ДВС заглушен — нажмите I, чтобы вывести рычаг из P.</div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* В режиме H на экране остаются только зеркала (и 3D-салон с интерактивным рычагом АКПП). Вернуть HUD — H. */}
       </div>
 
       {/* Компактная нижняя строка метаданных (сворачиваемая, атрибуция ODbL сохраняется всегда) */}

@@ -74,7 +74,14 @@ import {
 } from "../scenarios/editorOps";
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS, stepGearSequential } from "./controls";
+import {
+  applyShifterTarget,
+  checkEngineToggle,
+  checkGearChange,
+  PARK_LOCK_MAX_SPEED_MS,
+  stepGearSequential,
+  stepShifterGate,
+} from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
@@ -1370,6 +1377,20 @@ export const extraCases: SelfTestCase[] = [
       assert(cur === "P", `Полный спуск должен вернуть в P, получено ${cur}`);
       // Переход из D по Shift▲ на ходу повышает ступень в ручной режим
       assert(stepGearSequential({ gear: "D", engineOn: true }, 12, 2, 1).next === "3", "Shift▲ из D2 на ходу должен включать M3");
+
+      // 1b. Физическая 3D-кулиса салона (applyShifterTarget / stepShifterGate): P↔R↔N↔D ⇄ M (+/−)
+      assert(applyShifterTarget({ gear: "P", engineOn: false }, 0, 1, "D").next === null, "3D-рычаг из P без ДВС должен блокироваться");
+      assert(stepShifterGate({ gear: "P", engineOn: true }, 0, 1, 1).next === "R", "Шаг 3D-рычага P→R");
+      assert(stepShifterGate({ gear: "R", engineOn: true }, 0, 1, 1).next === "N", "Шаг 3D-рычага R→N");
+      assert(stepShifterGate({ gear: "N", engineOn: true }, 0, 1, 1).next === "D", "Шаг 3D-рычага N→D");
+      assert(applyShifterTarget({ gear: "D", engineOn: true }, 12, 3, "M").next === "3", "Перевод рычага D3→M фиксирует M3");
+      assert(applyShifterTarget({ gear: "3", engineOn: true }, 12, 3, "M+").next === "4", "Качание M+ повышает M3→M4");
+      assert(applyShifterTarget({ gear: "4", engineOn: true }, 12, 4, "M-").next === "3", "Качание M- понижает M4→M3");
+      assert(applyShifterTarget({ gear: "1", engineOn: true }, 0, 1, "M-").next === null, "Упор M- на M1 не выбрасывает в N");
+      assert(applyShifterTarget({ gear: "3", engineOn: true }, 15, 3, "D").next === "D", "Возврат рычага M3→D включает автомат D");
+      assert(applyShifterTarget({ gear: "2", engineOn: true }, 8, 2, "M", { toggleManualOnClick: true }).next === "D", "Повторный клик по M возвращает D");
+      assert(applyShifterTarget({ gear: "D", engineOn: true }, 5, 2, "R").next === null, "Включение R на скорости вперёд блокируется");
+      assert(applyShifterTarget({ gear: "D", engineOn: true }, 5, 2, "P").next === null, "Включение P на скорости блокируется");
 
       // 2. Плавная раскрутка и спад оборотов на холостом ходу (P): без скачков, скорость 0
       let idleState = createInitialState(track, true);

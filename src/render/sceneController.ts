@@ -43,8 +43,10 @@ import {
   buildDetailedPedestrian,
   makeInstrumentClusterTexture,
   makeRussianLicensePlateTexture,
+  SHIFTER_LAYOUT,
   type DetailedCarRig,
   type DetailedPedestrianVisual,
+  type ShifterHitId,
 } from "./vehiclesAndPeds";
 import type {
   CameraMode,
@@ -206,6 +208,19 @@ export class SceneController {
   private cockpitFov = 68;
   private lastCameraMode: CameraMode = "chase";
   private camLookTarget = new THREE.Vector3();
+
+  // Интерактивный 3D-рычаг 6АКПП Shiftronic в салоне (без аллокаций в кадре)
+  private readonly shifterRaycaster = new THREE.Raycaster();
+  private readonly shifterNdc = new THREE.Vector2();
+  private readonly shifterInvChassis = new THREE.Matrix4();
+  private readonly shifterLocalRay = new THREE.Ray();
+  private readonly shifterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -SHIFTER_LAYOUT.knobPlaneY);
+  private readonly shifterLocalHit = new THREE.Vector3();
+  private readonly shifterProjTmp = new THREE.Vector3();
+  private shifterHover: ShifterHitId | null = null;
+  private shifterDragging = false;
+  private shifterManualPulse: -1 | 0 | 1 = 0;
+  private savedHeadBeforeShifter: { yaw: number; pitch: number; fov: number } | null = null;
 
   // Общие текстуры (освобождаются при dispose)
   private readonly sharedTextures: THREE.Texture[] = [];
@@ -375,8 +390,9 @@ export class SceneController {
   }
 
   adjustOrbit(deltaX: number, deltaY: number): void {
+    this.savedHeadBeforeShifter = null;
     this.orbitYaw -= deltaX * 0.0065;
-    this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.38);
+    this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.42);
   }
 
   adjustZoom(wheelDelta: number): void {
@@ -389,10 +405,105 @@ export class SceneController {
   }
 
   resetOrbit(): void {
+    this.savedHeadBeforeShifter = null;
     this.orbitYaw = 0;
     this.orbitPitch = 0.36;
     this.orbitDist = 9.2;
     this.cockpitFov = 68;
+  }
+
+  /** Быстрый перевод взгляда водителя в салоне на 3D-рычаг 6АКПП Shiftronic и обратно на дорогу (клавиша G). */
+  toggleCockpitShifterView(): boolean {
+    if (this.isCockpitShifterView()) {
+      const prev = this.savedHeadBeforeShifter;
+      this.savedHeadBeforeShifter = null;
+      this.orbitYaw = prev ? prev.yaw : 0;
+      this.orbitPitch = prev ? prev.pitch : 0.36;
+      this.cockpitFov = prev ? prev.fov : 68;
+      return false;
+    }
+    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
+    this.orbitYaw = -0.82;
+    this.orbitPitch = 1.34;
+    this.cockpitFov = 62;
+    return true;
+  }
+
+  /** Смотрит ли сейчас камера салона вниз-вправо на консоль рычага АКПП. */
+  isCockpitShifterView(): boolean {
+    return this.orbitPitch > 1.05 && this.orbitYaw < -0.45 && this.orbitYaw > -1.35;
+  }
+
+  /** Обновляет подсветку наведения/захвата и пружинный ход `+/−` 3D-рычага АКПП. */
+  setShifterInteraction(hovered: ShifterHitId | null, dragging: boolean, manualPulse: -1 | 0 | 1 = 0): void {
+    this.shifterHover = hovered;
+    this.shifterDragging = dragging;
+    this.shifterManualPulse = manualPulse;
+  }
+
+  /**
+   * Проверяет попадание курсора (нормализованные координаты холста `[0..1]`) в 3D-рычаг АКПП или пазы кулисы.
+   * Вызывается только в режиме камеры `cockpit` по компактному списку из 8 коллайдеров (< 0,02 мс).
+   */
+  pickCockpitShifter(normX: number, normY: number): ShifterHitId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.shifterPickTargets;
+    if (!targets || targets.length === 0) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    // Сначала проверяем рукоятку рычага — захват за набалдашник всегда имеет приоритет над плоской кулисой
+    const knobHits = this.shifterRaycaster.intersectObject(targets[0], false);
+    if (knobHits.length > 0) return "lever";
+    const slotHits = this.shifterRaycaster.intersectObjects(targets.slice(1), false);
+    if (slotHits.length > 0) {
+      return (slotHits[0].object.userData.shifterHit as ShifterHitId | undefined) ?? null;
+    }
+    return null;
+  }
+
+  /** Проецирует луч курсора (`[0..1]`) на горизонтальную плоскость хода 3D-рычага АКПП в локальных координатах кузова. */
+  projectToShifterLocal(normX: number, normY: number): { x: number; z: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    this.shifterInvChassis.copy(this.playerRig.chassis.matrixWorld).invert();
+    this.shifterLocalRay.copy(this.shifterRaycaster.ray).applyMatrix4(this.shifterInvChassis);
+    const hit = this.shifterLocalRay.intersectPlane(this.shifterPlane, this.shifterLocalHit);
+    if (!hit) return null;
+    return { x: hit.x, z: hit.z };
+  }
+
+  /** Возвращает текущее локальное положение основания 3D-рычага АКПП `(x, z)` и центр кулисы `gateZ`. */
+  getShifterLocalAnchor(): { leverX: number; leverZ: number; gateZ: number } {
+    const gateZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
+    const piv = this.playerRig.gearLeverPivot;
+    return {
+      leverX: piv ? piv.position.x : SHIFTER_LAYOUT.mainRailX,
+      leverZ: piv ? piv.position.z : gateZ + SHIFTER_LAYOUT.offP,
+      gateZ,
+    };
+  }
+
+  /** Возвращает нормализованные экранные координаты `[0..1]` рукоятки или паза 3D-селектора в режиме `cockpit`. */
+  getShifterTargetScreenPoint(id: ShifterHitId): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.shifterPickTargets;
+    if (!targets) return null;
+    const obj = targets.find((t) => t.userData.shifterHit === id);
+    if (!obj) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    obj.getWorldPosition(this.shifterProjTmp);
+    this.shifterProjTmp.project(this.camera);
+    if (this.shifterProjTmp.z < -1 || this.shifterProjTmp.z > 1) return null;
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
   }
 
   applyQuality(preset: QualityPreset): void {
@@ -844,7 +955,7 @@ export class SceneController {
 
     // Живые органы управления и 3D-дисплеи салона Kia Ceed JD (6-ст. Shiftronic, ручник, подрулевой, педали, Supervision, ШГУ)
     if (rig.gearLeverPivot) {
-      const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + 0.44;
+      const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
       const inManualGate =
         state.gear === "1" ||
         state.gear === "2" ||
@@ -852,22 +963,50 @@ export class SceneController {
         state.gear === "4" ||
         state.gear === "5" ||
         state.gear === "6";
-      const shiftPulse = inManualGate && state.shiftTimer > 0 ? 0.014 : 0;
+      const dragPulse = inManualGate ? this.shifterManualPulse * 0.022 : 0;
+      const shiftPulse =
+        inManualGate && dragPulse === 0 && state.shiftTimer > 0 ? 0.015 : dragPulse;
       const gOff =
         state.gear === "P"
-          ? 0.05
+          ? SHIFTER_LAYOUT.offP
           : state.gear === "R"
-            ? 0.017
+            ? SHIFTER_LAYOUT.offR
             : state.gear === "N"
-              ? -0.017
-              : -0.05 + shiftPulse;
-      rig.gearLeverPivot.position.x = inManualGate ? 0.058 : 0.042;
+              ? SHIFTER_LAYOUT.offN
+              : SHIFTER_LAYOUT.offD + shiftPulse;
+      rig.gearLeverPivot.position.x = inManualGate
+        ? SHIFTER_LAYOUT.manualRailX
+        : SHIFTER_LAYOUT.mainRailX;
       rig.gearLeverPivot.position.z = gateBaseZ + gOff;
-      if (rig.gearGateDot) rig.gearGateDot.position.z = gateBaseZ + gOff;
+      // Лёгкий реалистичный наклон штока вдоль хода кулисы и в сторону паза Shiftronic
+      rig.gearLeverPivot.rotation.x = clamp((gOff + 0.004) * 1.45, -0.14, 0.14);
+      rig.gearLeverPivot.rotation.z = inManualGate ? -0.09 : 0;
+      if (rig.gearGateDot) {
+        rig.gearGateDot.position.x = inManualGate
+          ? SHIFTER_LAYOUT.manualDotX
+          : SHIFTER_LAYOUT.mainDotX;
+        rig.gearGateDot.position.z = gateBaseZ + gOff;
+      }
       if (rig.gearGateDotMat) {
         rig.gearGateDotMat.color.setHex(
-          state.gear === "R" ? 0xff4d4d : state.gear === "D" ? 0x52d6bd : 0xf59e0b
+          state.gear === "R"
+            ? 0xff5a5a
+            : state.gear === "D"
+              ? 0x52d6bd
+              : inManualGate
+                ? 0xf5b942
+                : 0xe2e8f0
         );
+      }
+      // Тактильная подсветка набалдашника и рамки кулисы при наведении/захвате мышью в салоне
+      const activeGlow = opts.cameraMode === "cockpit" && (this.shifterDragging || this.shifterHover !== null);
+      if (rig.gearKnobCapMat) {
+        rig.gearKnobCapMat.emissive.setHex(this.shifterDragging ? 0xf5b942 : activeGlow ? 0x52d6bd : 0x000000);
+        rig.gearKnobCapMat.emissiveIntensity = this.shifterDragging ? 0.55 : activeGlow ? 0.34 : 0;
+      }
+      if (rig.gearGateRimMat) {
+        rig.gearGateRimMat.emissive.setHex(this.shifterDragging ? 0xf5b942 : activeGlow ? 0x52d6bd : 0x000000);
+        rig.gearGateRimMat.emissiveIntensity = this.shifterDragging ? 0.32 : activeGlow ? 0.2 : 0;
       }
     }
     if (rig.handbrakePivot) {
@@ -1216,7 +1355,9 @@ export class SceneController {
       const localEyeY = 1.195;
       const localEyeZ = -0.06;
       const headYaw = clamp(this.orbitYaw * 0.72, -1.55, 1.55);
-      const headPitch = clamp(-0.02 - (this.orbitPitch - 0.36) * 0.45, -0.42, 0.34);
+      // При базовом orbitPitch = 0.36 наклон равен -0.02 рад (вперёд на дорогу), а ПКМ вниз или G открывает обзор рычага АКПП
+      const pitchDelta = this.orbitPitch - 0.36;
+      const headPitch = clamp(-0.02 - pitchDelta * (pitchDelta > 0 ? 0.66 : 0.45), -0.74, 0.34);
       const cosP = Math.cos(headPitch);
       if (this.camera.fov !== this.cockpitFov) {
         this.camera.fov = this.cockpitFov;
@@ -1234,6 +1375,14 @@ export class SceneController {
       this.camera.up.set(0, 1, 0).transformDirection(pose);
       this.camera.lookAt(this.cockpitLookWorld);
       return;
+    }
+
+    // При выходе из салона возвращаем нормальные углы внешней камеры, если был включён взгляд на КПП (G)
+    if (this.savedHeadBeforeShifter) {
+      this.orbitYaw = this.savedHeadBeforeShifter.yaw;
+      this.orbitPitch = this.savedHeadBeforeShifter.pitch;
+      this.cockpitFov = this.savedHeadBeforeShifter.fov;
+      this.savedHeadBeforeShifter = null;
     }
 
     this.camera.up.set(0, 1, 0);
