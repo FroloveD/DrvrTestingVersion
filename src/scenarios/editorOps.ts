@@ -70,6 +70,8 @@ export type PlaceOptions = {
   calibration: Pick<CalibrationConfig, "perpBayWidth" | "perpBayLength" | "parBayWidth" | "parBayLength">;
   headingRad?: number;
   snapStep?: number;
+  roadWidth?: number;
+  cornerRadiusM?: number;
 };
 
 const round2 = (v: number): number => Number(v.toFixed(2));
