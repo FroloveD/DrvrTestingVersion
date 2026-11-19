@@ -824,8 +824,32 @@ try {
   await lotSurface.uncheck();
   const lotRemoved = !(await lotSurface.isChecked());
   await lotSurface.check();
-  check("O0 стартовую асфальтовую площадку можно отключить и вернуть из параметров карты",
-    lotInitiallyEnabled && lotRemoved && await lotSurface.isChecked());
+  const lotRect = page.getByTestId("map-lot-surface").locator("rect");
+  await page.getByTestId("editor-tool-select").click();
+  const lotBefore = {
+    x: Number(await lotRect.getAttribute("data-center-x")),
+    z: Number(await lotRect.getAttribute("data-center-z")),
+    hx: Number(await lotRect.getAttribute("data-half-x")),
+    hz: Number(await lotRect.getAttribute("data-half-z")),
+  };
+  const lotBox = await lotRect.boundingBox();
+  await page.mouse.move(lotBox.x + lotBox.width / 2, lotBox.y + lotBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(lotBox.x + lotBox.width / 2 + 45, lotBox.y + lotBox.height / 2 - 30, { steps: 6 });
+  await page.mouse.up();
+  await sleep(120);
+  const movedLot = Number(await lotRect.getAttribute("data-center-x")) !== lotBefore.x || Number(await lotRect.getAttribute("data-center-z")) !== lotBefore.z;
+  const resize = page.getByTestId("map-lot-resize-e-n");
+  const resizeBox = await resize.boundingBox();
+  await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + resizeBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(resizeBox.x + resizeBox.width / 2 + 35, resizeBox.y + resizeBox.height / 2 - 25, { steps: 5 });
+  await page.mouse.up();
+  await sleep(120);
+  const resizedLot = Number(await lotRect.getAttribute("data-half-x")) !== lotBefore.hx || Number(await lotRect.getAttribute("data-half-z")) !== lotBefore.hz;
+  check("O0 стартовую площадку можно отключить, переместить и изменить её размеры угловыми ручками",
+    lotInitiallyEnabled && lotRemoved && await lotSurface.isChecked() && movedLot && resizedLot,
+    `move=${movedLot}, resize=${resizedLot}`);
 
   // 1. Импортируем локальный .osm XML с дорогой, светофором, знаком STOP, забором и деревом
   const osmXml = `<?xml version="1.0" encoding="UTF-8"?>
