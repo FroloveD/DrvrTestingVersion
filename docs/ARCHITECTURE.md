@@ -49,7 +49,7 @@
 requestAnimationFrame(now)
   │
   ├─ 1. Сбор сырого ввода:
-  │     клавиатура (keysRef) + опциональные независимые мышиные вводы (руль / ЛКМ >400 мс газ, выключены по умолчанию) + Shift с плавным множителем тяги x1..x2 + SVG-руль + тач-педали + readBrowserGamepad() → readGamepad()
+  │     клавиатура (keysRef) + независимые опции мыши (руль в режиме free без ЛКМ или hold с перетаскиванием; газ по удержанию ЛКМ >400 мс, всё выключено по умолчанию) + Shift с плавным множителем тяги x1..x2 + SVG-руль + тач-педали + readBrowserGamepad() → readGamepad()
   │     Блокировки P/стартера проходят через checkGearChange / checkEngineToggle (src/sim/controls.ts)
   │
   ├─ 2. Аккумулятор времени: acc += min(frameDt, 0.1); пока acc >= FIXED_DT (1/60 с):
