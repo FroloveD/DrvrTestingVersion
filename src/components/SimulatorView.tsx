@@ -1343,8 +1343,8 @@ export function SimulatorView({
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
 
-        {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
-        {!webglFallback && showRearMirror && (
+        {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в «Салоне» отражения рендерятся на физических 3D-зеркалах) и руль */}
+        {!webglFallback && cameraMode !== "cockpit" && showRearMirror && (
           <FloatingPanel
             id="mirrorRear"
             title="Зеркало заднего вида"
@@ -1362,7 +1362,7 @@ export function SimulatorView({
             <canvas ref={rearMirrorRef} role="img" aria-label="Отражение в зеркале заднего вида" width={320} height={96} className="block w-full h-auto" />
           </FloatingPanel>
         )}
-        {!webglFallback && showMirrors && (
+        {!webglFallback && cameraMode !== "cockpit" && showMirrors && (
           <FloatingPanel
             id="mirrorLeft"
             layout={layout.mirrorLeft}
@@ -1378,7 +1378,7 @@ export function SimulatorView({
             <canvas ref={leftMirrorRef} role="img" aria-label="Отражение в левом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
         )}
-        {!webglFallback && showMirrors && (
+        {!webglFallback && cameraMode !== "cockpit" && showMirrors && (
           <FloatingPanel
             id="mirrorRight"
             layout={layout.mirrorRight}
