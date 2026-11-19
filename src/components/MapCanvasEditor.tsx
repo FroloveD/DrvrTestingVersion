@@ -711,7 +711,7 @@ export function MapCanvasEditor({
                     onPointerDown={(e) => beginObjectDrag(e, { kind: "sign_zone", id: sn.id })}
                   />}
                 </g>
-              );}
+              );
             })}
 
           {/* Пешеходные переходы «зебра» */}
