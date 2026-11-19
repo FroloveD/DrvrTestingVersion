@@ -1157,11 +1157,36 @@ try {
         await page.getByTestId("route-edit-checkpoint-0").fill("Проверить перекрёсток и выполнить задание инструктора.");
         const marker = page.getByTestId("route-checkpoint-marker-0");
         const initialPosition = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
-        const markerBox = await marker.boundingBox();
-        if (!markerBox) throw new Error("Маркер контрольной точки не имеет экранных координат");
-        await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+        const dragPoints = await marker.evaluate((el) => {
+          const svg = el.ownerSVGElement;
+          const routeLine = [...svg.querySelectorAll("polyline")].at(-1);
+          const points = Array.from(routeLine.points);
+          const x = Number(el.getAttribute("cx")), y = Number(el.getAttribute("cy"));
+          let best = null;
+          for (let i = 0; i < points.length - 1; i++) {
+            const a = points[i], b = points[i + 1];
+            const dx = b.x - a.x, dy = b.y - a.y, length2 = dx * dx + dy * dy;
+            if (!length2) continue;
+            const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / length2));
+            const px = a.x + t * dx, py = a.y + t * dy;
+            const distance = Math.hypot(x - px, y - py);
+            if (!best || distance < best.distance) best = { distance, px, py, dx, dy, length: Math.sqrt(length2) };
+          }
+          if (!best) return null;
+          const advance = Math.min(5, best.length * 0.2);
+          const target = { x: best.px + (best.dx / best.length) * advance, y: best.py + (best.dy / best.length) * advance };
+          const matrix = svg.getScreenCTM();
+          const screen = (point) => {
+            const p = svg.createSVGPoint(); p.x = point.x; p.y = point.y;
+            const result = p.matrixTransform(matrix);
+            return { x: result.x, y: result.y };
+          };
+          return { from: screen({ x, y }), to: screen(target) };
+        });
+        if (!dragPoints) throw new Error("Не удалось вычислить точку переноса вдоль маршрута");
+        await page.mouse.move(dragPoints.from.x, dragPoints.from.y);
         await page.mouse.down();
-        await page.mouse.move(markerBox.x + markerBox.width / 2 + 5, markerBox.y + markerBox.height / 2 + 2, { steps: 3 });
+        await page.mouse.move(dragPoints.to.x, dragPoints.to.y, { steps: 8 });
         await page.mouse.up();
         const movedPosition = await until(async () => {
           const position = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
@@ -1221,9 +1246,68 @@ try {
         check("P16 новое положение контрольной точки переживает перезагрузку",
           Boolean(movedPosition) && restoredPosition.x === movedPosition.x && restoredPosition.y === movedPosition.y,
           JSON.stringify(restoredPosition));
+
+        const sharedRoute = await page.evaluate(() => new Promise((resolve, reject) => {
+          const request = indexedDB.open("cdt-route-catalog", 2);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result;
+            const tx = db.transaction(["routes", "maps"], "readonly");
+            const routeRequest = tx.objectStore("routes").getAll();
+            const mapRequest = tx.objectStore("maps").getAll();
+            tx.oncomplete = () => {
+              const routes = routeRequest.result;
+              const maps = mapRequest.result;
+              const route = routes[0];
+              const map = maps.find((item) => item.fingerprint === route?.mapFingerprint);
+              resolve(route && map ? {
+                ...route,
+                id: route.id + "-shared-test",
+                title: "Маршрут P · общий snapshot",
+                scenarioSnapshot: { ...map.scenarioSnapshot, title: "Маршрут P · общий snapshot" },
+              } : null);
+              db.close();
+            };
+            tx.onerror = () => reject(tx.error);
+          };
+        }));
+        const sharedImport = page.locator('input[type="file"][accept=".json,application/json"]');
+        await sharedImport.setInputFiles({
+          name: "shared-map-route.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify({ schema: "cdt.routes.v1", routes: [sharedRoute] })),
+        });
+        await page.getByText("Импортировано маршрутов: 1").waitFor({ timeout: 5000 });
+        const storageStats = await page.evaluate(() => new Promise((resolve, reject) => {
+          const request = indexedDB.open("cdt-route-catalog", 2);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result;
+            const tx = db.transaction(["routes", "maps"], "readonly");
+            const routeRequest = tx.objectStore("routes").getAll();
+            const mapRequest = tx.objectStore("maps").getAll();
+            tx.oncomplete = () => {
+              resolve({
+                routes: routeRequest.result.length,
+                maps: mapRequest.result.length,
+                embeddedSnapshots: routeRequest.result.filter((route) => Boolean(route.scenarioSnapshot)).length,
+              });
+              db.close();
+            };
+            tx.onerror = () => reject(tx.error);
+          };
+        }));
+        check("P18 два маршрута одной карты используют один общий snapshot",
+          storageStats.routes === 2 && storageStats.maps === 1 && storageStats.embeddedSnapshots === 0,
+          JSON.stringify(storageStats));
+        await page.reload();
+        await tab(page, "Каталог маршрутов");
+        await page.getByTestId("route-card").first().waitFor({ timeout: 5000 });
+        check("P19 общий snapshot и оба маршрута переживают перезагрузку",
+          await page.getByTestId("route-card").count() === 2);
       }
     }
-    check("P17 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    check("P20 ошибок JavaScript в полном цикле каталога маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
   } catch (e) {
     check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));

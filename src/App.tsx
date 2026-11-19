@@ -367,8 +367,8 @@ export default function App() {
                 >
                   <Icon name={item.icon} size={14} />
                   {/* На узких экранах — короткая подпись, полное название остаётся в подсказке */}
-                  <span className="hidden min-[1340px]:inline">{item.label}</span>
-                  <span className="min-[1340px]:hidden">{item.short}</span>
+                  <span className="hidden min-[1500px]:inline">{item.label}</span>
+                  <span className="min-[1500px]:hidden">{item.short}</span>
                   {item.badge && (
                     <span
                       className={`mono text-[10px] px-1.5 rounded-full ${
