@@ -23,6 +23,7 @@ import {
   makeCloudySkyTexture,
   type CityEnvironmentPack,
 } from "./cityBuildings";
+import { CockpitDisplayController } from "./cockpitDisplays";
 import {
   buildGostCrosswalk,
   buildGostRoadSign,
@@ -150,6 +151,8 @@ export class SceneController {
   private readonly parkedCarRoots: THREE.Object3D[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
   private readonly bayVisuals: BayVisual[] = [];
+  private readonly cockpitDisplays: CockpitDisplayController;
+  private readonly envMapRT: THREE.WebGLRenderTarget | null = null;
   private readonly playerRig: CarRig;
   private isLargeWorld = false;
   private totalBuildings = 0;
@@ -234,11 +237,24 @@ export class SceneController {
     const playerPlateTex = makeRussianLicensePlateTexture("У 077 КС");
     const civilPlateTex = makeRussianLicensePlateTexture("А 482 МН");
     const clusterTex = makeInstrumentClusterTexture();
+    this.cockpitDisplays = new CockpitDisplayController();
     grassTex.repeat.set(160, 160);
     // Индексы sharedTextures: 0 sky, 1 shadow, 2 learner, 3 grass, 4 playerPlate, 5 civilPlate, 6 cluster
     this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
     this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
+
+    // Физически корректная IBL-карта окружения из 360°-неба (блики облаков и солнца на лаке Kia Ceed, хроме и стёклах; 0 draw calls)
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      pmrem.compileEquirectangularShader();
+      this.envMapRT = pmrem.fromEquirectangular(skyTex);
+      this.scene.environment = this.envMapRT.texture;
+      this.scene.environmentIntensity = 0.56;
+      pmrem.dispose();
+    } catch {
+      this.envMapRT = null;
+    }
 
     this.camera = new THREE.PerspectiveCamera(56, 16 / 9, 0.12, 420);
 
@@ -272,7 +288,7 @@ export class SceneController {
 
     this.scene.add(this.worldGroup);
 
-    // Детализированный учебный Kia Ceed JD (госномер ГОСТ, оптика, 5-спицевые диски, салон Supervision)
+    // Детализированный учебный Kia Ceed JD (лак clearcoat, ДХО, живой салон Supervision, 7" ШГУ + R-камера, 3D-зеркала)
     this.playerRig = buildDetailedCar(
       "ceed",
       0xd97706,
@@ -280,8 +296,12 @@ export class SceneController {
       shadowTex,
       learnerTex,
       playerPlateTex,
-      clusterTex,
-      OWN_MIRROR_HARDWARE_LAYER
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      {
+        headUnitTex: this.cockpitDisplays.headUnitTex,
+        rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
+      }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -367,15 +387,18 @@ export class SceneController {
     if (preset === "low") {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
+      this.scene.environment = null;
     } else if (preset === "medium") {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       this.renderer.shadowMap.enabled = true;
       this.sun.shadow.mapSize.set(1024, 1024);
+      this.scene.environment = this.envMapRT?.texture ?? null;
     } else {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       this.renderer.shadowMap.enabled = true;
       const sz = this.isLargeWorld ? 1024 : 2048;
       this.sun.shadow.mapSize.set(sz, sz);
+      this.scene.environment = this.envMapRT?.texture ?? null;
     }
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
@@ -793,13 +816,57 @@ export class SceneController {
     for (const m of rig.blinkLeftMats) m.color.setHex(leftLit ? 0xffb020 : 0x9a621e);
     for (const m of rig.blinkRightMats) m.color.setHex(rightLit ? 0xffb020 : 0x9a621e);
 
-    rig.brakeMat.color.setHex(isBraking || state.handbrake ? 0xff2a2a : state.lights ? 0xb91c1c : 0x6b1515);
+    const lightsActive = state.lights && state.engineOn;
+    rig.brakeMat.color.setHex(isBraking || state.handbrake ? 0xff2a2a : lightsActive ? 0xb91c1c : 0x6b1515);
     rig.reverseMat.color.setHex(state.gear === "R" && state.engineOn ? 0xf8fafc : 0x334155);
-    rig.headlightMat.color.setHex(state.lights && state.engineOn ? 0xfffbeb : 0x94a3b8);
+    rig.headlightMat.color.setHex(lightsActive ? 0xfffbeb : 0x94a3b8);
+    if (rig.drlMat) rig.drlMat.color.setHex(state.engineOn ? 0xf0f9ff : 0x64748b);
+    if (rig.plateLightMat) rig.plateLightMat.color.setHex(lightsActive ? 0xfef9c3 : 0x334155);
+    if (rig.headlightBeamGroup) rig.headlightBeamGroup.visible = lightsActive;
     if (rig.headSpotL && rig.headSpotR) {
-      const inten = state.lights && state.engineOn ? 1.8 : 0;
+      const inten = lightsActive ? 2.1 : 0;
       rig.headSpotL.intensity = inten;
       rig.headSpotR.intensity = inten;
+    }
+
+    // Живые органы управления и 3D-дисплеи салона Kia Ceed JD (АКПП, ручник, подрулевой, аварийка, педали, ремень, Supervision, ШГУ)
+    if (rig.gearLeverPivot) {
+      const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + 0.44;
+      const gOff = state.gear === "P" ? 0.05 : state.gear === "R" ? 0.017 : state.gear === "N" ? -0.017 : -0.05;
+      rig.gearLeverPivot.position.z = gateBaseZ + gOff;
+      if (rig.gearGateDot) rig.gearGateDot.position.z = gateBaseZ + gOff;
+      if (rig.gearGateDotMat) {
+        rig.gearGateDotMat.color.setHex(
+          state.gear === "R" ? 0xff4d4d : state.gear === "D" ? 0x52d6bd : 0xf59e0b
+        );
+      }
+    }
+    if (rig.handbrakePivot) {
+      rig.handbrakePivot.rotation.x = state.handbrake ? -0.44 : -0.05;
+    }
+    if (rig.leftStalkPivot) {
+      // Как на реальном Kia Ceed JD: левый поворотник Q — рычажок вниз (-Y), правый E — вверх (+Y)
+      rig.leftStalkPivot.rotation.z = state.signal === "left" ? -0.17 : state.signal === "right" ? 0.17 : 0;
+    }
+    if (rig.hazardBtnMat) {
+      rig.hazardBtnMat.color.setHex(state.signal === "hazard" && blinkOn ? 0xff2e2e : 0x8a1c1c);
+    }
+    if (rig.startBtnMat) {
+      rig.startBtnMat.color.setHex(state.engineOn ? 0x22c55e : 0xd97706);
+    }
+    if (rig.brakePedalPivot) {
+      rig.brakePedalPivot.rotation.x = isBraking ? -0.22 : 0;
+    }
+    if (rig.gasPedalPivot) {
+      const throttleFrac = state.engineOn && !isBraking ? clamp((state.rpm - 820) / 3600, 0, 1) : 0;
+      rig.gasPedalPivot.rotation.x = -throttleFrac * 0.24;
+    }
+    if (rig.seatbeltStrap) {
+      rig.seatbeltStrap.visible = state.belt;
+    }
+    if (opts.cameraMode === "cockpit") {
+      // Внутри dirty-кеш: 0 мс в покое; в движении обновляем не чаще ~20 Гц (за исключением мгновенных переключений)
+      this.cockpitDisplays.update(state, world, leftLit, rightLit);
     }
 
     // Подвижная тень солнца: пересчитывается при старте и реальном смещении/повороте машины (0 лишних GPU-проходов в покое)
@@ -948,11 +1015,13 @@ export class SceneController {
     // (включая самый первый кадр после loadWorld, так что зеркала сразу получают актуальные тени).
     this.frameCounter++;
     const inCockpit = opts.cameraMode === "cockpit";
-    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors);
+    const inReverseCam = inCockpit && state.engineOn && state.gear === "R";
+    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors, inReverseCam);
 
-    if (inCockpit && (opts.showRearMirror || opts.showMirrors)) {
+    const needCockpitRear = inCockpit && (opts.showRearMirror || inReverseCam);
+    if (inCockpit && (needCockpitRear || opts.showMirrors)) {
       const stride = this.qualityPreset === "low" ? 4 : this.isLargeWorld ? 3 : 2;
-      if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
+      if (needCockpitRear && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
         this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
         this.cockpitRearPrimed = true;
       }
@@ -986,8 +1055,8 @@ export class SceneController {
     this.renderer.render(this.scene, this.camera);
   }
 
-  /** Переключает материал физических 3D-полотeн между живым отражением и амальгамным стеклом покоя. */
-  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean): void {
+  /** Переключает материал физических 3D-полотeн зеркал и камеры заднего вида R на 7" ШГУ. */
+  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean, activeRevCam = false): void {
     const rig = this.playerRig;
     if (rig.rearMirrorGlass) {
       const target = activeRear ? this.cockpitRearMat : this.mirrorIdleMat;
@@ -1001,7 +1070,14 @@ export class SceneController {
       const target = activeSide ? this.cockpitRightMat : this.mirrorIdleMat;
       if (rig.rightMirrorGlass.material !== target) rig.rightMirrorGlass.material = target;
     }
-    if (!activeRear) this.cockpitRearPrimed = false;
+    if (rig.rearCamScreen && rig.rearCamOverlay && rig.headUnitScreen) {
+      const target = activeRevCam ? this.cockpitRearMat : this.mirrorIdleMat;
+      if (rig.rearCamScreen.material !== target) rig.rearCamScreen.material = target;
+      rig.rearCamScreen.visible = activeRevCam;
+      rig.rearCamOverlay.visible = activeRevCam;
+      rig.headUnitScreen.visible = !activeRevCam;
+    }
+    if (!activeRear && !activeRevCam) this.cockpitRearPrimed = false;
     if (!activeSide) this.cockpitSidePrimed = false;
   }
 
@@ -1218,9 +1294,13 @@ export class SceneController {
   }
 
   dispose(): void {
-    this.syncPhysicalMirrorMaterials(false, false);
+    this.syncPhysicalMirrorMaterials(false, false, false);
+    this.scene.environment = null;
+    this.groundMesh.geometry.dispose();
+    (this.groundMesh.material as THREE.Material).dispose();
     this.clearWorldResources();
     this.disposeGroup(this.playerRig.root);
+    this.cockpitDisplays.dispose();
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();
@@ -1229,6 +1309,7 @@ export class SceneController {
     this.cockpitLeftMat.dispose();
     this.cockpitRightMat.dispose();
     this.mirrorIdleMat.dispose();
+    this.envMapRT?.dispose();
     this.rearRT.dispose();
     this.sideRT.dispose();
     this.cockpitRearRT.dispose();

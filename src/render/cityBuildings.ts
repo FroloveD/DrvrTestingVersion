@@ -22,6 +22,8 @@ export type CityEnvironmentPack = {
   balconyFrameMat: THREE.MeshStandardMaterial;
   doorMat: THREE.MeshStandardMaterial;
   apronMat: THREE.MeshStandardMaterial;
+  addressPlaqueMat: THREE.MeshBasicMaterial;
+  benchWoodMat: THREE.MeshStandardMaterial;
   barkMat: THREE.MeshStandardMaterial;
   birchMat: THREE.MeshStandardMaterial;
   soilMat: THREE.MeshStandardMaterial;
@@ -53,46 +55,166 @@ function makeRng(seedInit: number): () => number {
   };
 }
 
-/** Живописное дневное небо средней полосы с мягкими слоисто-кучевыми облаками и дымкой у горизонта (512×256). */
+/**
+ * Бесшовная 360°-панорама дневного неба средней полосы (`EquirectangularReflectionMapping`, 1024×512):
+ * релеевский зенит, объёмные кучево-слоистые облака с тёплой кромкой и теневым основанием,
+ * солнечный диск с ореолом (согласованный с направлением `DirectionalLight` +26, +44, -20)
+ * и мягкий рефлекс земли в нижней полусфере для реалистичных PBR-отражений на кузове и стёклах.
+ */
 export function makeCloudySkyTexture(): THREE.CanvasTexture {
-  const w = 512;
-  const h = 256;
+  const w = 1024;
+  const h = 512;
+  const horizonY = h * 0.5;
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
   const g = c.getContext("2d")!;
 
-  const grad = g.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, "#2f6299");
-  grad.addColorStop(0.36, "#5d93c6");
-  grad.addColorStop(0.68, "#9ec3e2");
-  grad.addColorStop(0.88, "#cde0ef");
-  grad.addColorStop(1, "#e2ecf4");
-  g.fillStyle = grad;
+  // Верхняя полусфера (зенит -> горизонт) и нижняя полусфера (городской рефлекс для IBL-кубмапы)
+  const skyGrad = g.createLinearGradient(0, 0, 0, h);
+  skyGrad.addColorStop(0, "#24558b");
+  skyGrad.addColorStop(0.18, "#447db6");
+  skyGrad.addColorStop(0.35, "#7cb0da");
+  skyGrad.addColorStop(0.46, "#bdd8ec");
+  skyGrad.addColorStop(0.5, "#dce9f3");
+  skyGrad.addColorStop(0.53, "#bcc8ce");
+  skyGrad.addColorStop(0.66, "#6f7b78");
+  skyGrad.addColorStop(1, "#3f4847");
+  g.fillStyle = skyGrad;
   g.fillRect(0, 0, w, h);
 
-  // Мягкие облачные гряды в верхней/средней части неба
+  // Положение солнца в сферической развёртке, согласованное с вектором (+26, +44, -20)
+  const sunX = w * 0.34;
+  const sunY = horizonY * 0.44;
+  const drawWrappedDisc = (cx: number, cy: number, rx: number, ry: number, draw: (ctx: CanvasRenderingContext2D) => void) => {
+    for (const shift of [-w, 0, w]) {
+      const x = cx + shift;
+      if (x + rx < 0 || x - rx > w) continue;
+      g.save();
+      g.translate(x, cy);
+      g.scale(1, ry / rx);
+      draw(g);
+      g.restore();
+    }
+  };
+
+  // Атмосферное рассеяние Ми вокруг солнца и тёплое подсвечивание горизонта
+  drawWrappedDisc(sunX, horizonY * 0.92, 290, 74, (ctx) => {
+    const hg = ctx.createRadialGradient(0, 0, 6, 0, 0, 290);
+    hg.addColorStop(0, "rgba(255,244,218,0.42)");
+    hg.addColorStop(0.5, "rgba(255,238,205,0.16)");
+    hg.addColorStop(1, "rgba(255,238,205,0)");
+    ctx.fillStyle = hg;
+    ctx.beginPath();
+    ctx.arc(0, 0, 290, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  drawWrappedDisc(sunX, sunY, 150, 150, (ctx) => {
+    const sg = ctx.createRadialGradient(0, 0, 3, 0, 0, 150);
+    sg.addColorStop(0, "rgba(255,253,242,0.98)");
+    sg.addColorStop(0.08, "rgba(255,249,224,0.88)");
+    sg.addColorStop(0.24, "rgba(255,241,206,0.34)");
+    sg.addColorStop(0.6, "rgba(245,236,218,0.1)");
+    sg.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.arc(0, 0, 150, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Лёгкие перистые полосы в верхнем ярусе
   const rand = makeRng(2026);
-  for (let i = 0; i < 48; i++) {
+  for (let i = 0; i < 24; i++) {
     const cx = rand() * w;
-    const cy = 38 + rand() * 118;
-    const rx = 28 + rand() * 68;
-    const ry = 8 + rand() * 18;
-    const alpha = 0.08 + rand() * 0.14;
-    g.save();
-    g.translate(cx, cy);
-    g.scale(1, ry / rx);
-    const cg = g.createRadialGradient(0, -rx * 0.15, 2, 0, 0, rx);
-    cg.addColorStop(0, `rgba(252,254,255,${alpha})`);
-    cg.addColorStop(0.65, `rgba(232,241,250,${alpha * 0.55})`);
-    cg.addColorStop(1, "rgba(255,255,255,0)");
-    g.fillStyle = cg;
-    g.beginPath();
-    g.arc(0, 0, rx, 0, Math.PI * 2);
-    g.fill();
-    g.restore();
+    const cy = 36 + rand() * 78;
+    const rx = 65 + rand() * 120;
+    const ry = 4 + rand() * 8;
+    const a = 0.05 + rand() * 0.09;
+    drawWrappedDisc(cx, cy, rx, ry, (ctx) => {
+      const cg = ctx.createRadialGradient(0, 0, 2, 0, 0, rx);
+      cg.addColorStop(0, `rgba(250,253,255,${a})`);
+      cg.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.arc(0, 0, rx, 0, Math.PI * 2);
+      ctx.fill();
+    });
   }
 
+  // Объёмные кучево-слоистые облака (бесшовно по долготе, с серо-голубым донышком и светлой вершиной)
+  for (let i = 0; i < 64; i++) {
+    const cx = rand() * w;
+    const cy = 96 + rand() * (horizonY - 114);
+    const persp = 0.55 + (1 - cy / horizonY) * 0.75;
+    const rx = (34 + rand() * 78) * persp;
+    const ry = (11 + rand() * 22) * persp;
+    const alpha = 0.14 + rand() * 0.2;
+    const sunProx = Math.max(0, 1 - Math.min(Math.abs(cx - sunX), w - Math.abs(cx - sunX)) / 260);
+    // Теневое основание облака
+    drawWrappedDisc(cx, cy + ry * 0.34, rx * 0.96, ry * 0.62, (ctx) => {
+      const bg = ctx.createRadialGradient(0, 0, 2, 0, 0, rx * 0.96);
+      bg.addColorStop(0, `rgba(148,171,196,${alpha * 0.65})`);
+      bg.addColorStop(1, "rgba(148,171,196,0)");
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.arc(0, 0, rx * 0.96, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    // Освещённая солнцем купольная шапка облака
+    const topR = Math.round(248 + sunProx * 7);
+    const topG = Math.round(251 + sunProx * 2);
+    const topB = Math.round(255 - sunProx * 14);
+    drawWrappedDisc(cx, cy, rx, ry, (ctx) => {
+      const cg = ctx.createRadialGradient(0, -rx * 0.22, 2, 0, 0, rx);
+      cg.addColorStop(0, `rgba(${topR},${topG},${topB},${alpha})`);
+      cg.addColorStop(0.62, `rgba(234,243,251,${alpha * 0.58})`);
+      cg.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.arc(0, 0, rx, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // Мягкая воздушная дымка прямо у линии горизонта (скрывает границу дальнего тумана)
+  const haze = g.createLinearGradient(0, horizonY - 30, 0, horizonY + 18);
+  haze.addColorStop(0, "rgba(204,224,240,0)");
+  haze.addColorStop(0.62, "rgba(206,225,240,0.68)");
+  haze.addColorStop(1, "rgba(198,219,237,0)");
+  g.fillStyle = haze;
+  g.fillRect(0, horizonY - 30, w, 48);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  return tex;
+}
+
+/** Текстура сине-белого домового аншлага (адресной таблички РФ, 128×48). */
+function makeAddressPlaqueTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 48;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#f8fafc";
+  g.fillRect(0, 0, 128, 48);
+  g.fillStyle = "#1d4ed8";
+  g.fillRect(3, 3, 122, 42);
+  g.strokeStyle = "#f8fafc";
+  g.lineWidth = 2;
+  g.strokeRect(6, 6, 116, 36);
+  // Белое поле номера дома справа (классический городской аншлаг РФ)
+  g.fillStyle = "#f8fafc";
+  g.fillRect(88, 7, 33, 34);
+  g.font = "800 11px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText("УЛИЦА", 47, 18);
+  g.fillStyle = "#dbeafe";
+  g.fillRect(16, 28, 62, 5);
+  g.fillStyle = "#1e3a8a";
+  g.font = "900 18px system-ui, sans-serif";
+  g.fillText("12", 104, 25);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -390,11 +512,13 @@ export function createCityEnvironmentPack(): CityEnvironmentPack {
     roofMat: new THREE.MeshStandardMaterial({ map: makeRoofMembraneTexture(), roughness: 0.92 }),
     plinthMat: new THREE.MeshStandardMaterial({ color: 0x3e464f, roughness: 0.86 }),
     corniceMat: new THREE.MeshStandardMaterial({ color: 0xdbe1e7, roughness: 0.78 }),
-    metalFlashMat: new THREE.MeshStandardMaterial({ color: 0x9aa6b4, metalness: 0.5, roughness: 0.42 }),
-    balconyGlassMat: new THREE.MeshStandardMaterial({ color: 0x7b9ab5, roughness: 0.22, metalness: 0.35 }),
+    metalFlashMat: new THREE.MeshStandardMaterial({ color: 0xa4b2c2, metalness: 0.62, roughness: 0.34 }),
+    balconyGlassMat: new THREE.MeshStandardMaterial({ color: 0x7fa6c4, roughness: 0.12, metalness: 0.52 }),
     balconyFrameMat: new THREE.MeshStandardMaterial({ color: 0xe6ecf2, roughness: 0.65 }),
     doorMat: new THREE.MeshStandardMaterial({ color: 0x2e3640, metalness: 0.35, roughness: 0.55 }),
     apronMat: new THREE.MeshStandardMaterial({ color: 0x4b535c, roughness: 0.92 }),
+    addressPlaqueMat: new THREE.MeshBasicMaterial({ map: makeAddressPlaqueTexture() }),
+    benchWoodMat: new THREE.MeshStandardMaterial({ color: 0x8b5e34, roughness: 0.78 }),
     barkMat: new THREE.MeshStandardMaterial({ color: 0x533c28, roughness: 0.94 }),
     birchMat: new THREE.MeshStandardMaterial({ map: makeBirchBarkTexture(), roughness: 0.86 }),
     soilMat: new THREE.MeshStandardMaterial({ color: 0x352a20, roughness: 0.97 }),
@@ -435,6 +559,8 @@ export function finalizeCityEnvironmentPack(env: CityEnvironmentPack): {
     env.balconyFrameMat,
     env.doorMat,
     env.apronMat,
+    env.addressPlaqueMat,
+    env.benchWoodMat,
     env.barkMat,
     env.birchMat,
     env.soilMat,
@@ -447,6 +573,7 @@ export function finalizeCityEnvironmentPack(env: CityEnvironmentPack): {
   }
   if (env.roofMat.map) textures.push(env.roofMat.map);
   if (env.birchMat.map) textures.push(env.birchMat.map);
+  if (env.addressPlaqueMat.map) textures.push(env.addressPlaqueMat.map);
   return { materials, textures };
 }
 
@@ -572,6 +699,45 @@ export function emitRussianBuilding(chunks: SpatialChunkBatcher, obs: ObstacleBo
       const clz = longAlongZ ? along : halfDepth + 0.24;
       batch.addBox(env.doorMat, wx(dlx, dlz), 1.15, wz(dlx, dlz), 1.35, 2.25, 0.08, doorYaw);
       batch.addBox(env.corniceMat, wx(clx, clz), 2.48, wz(clx, clz), 2.1, 0.13, 0.55, doorYaw, { keepBottom: true });
+      // Дворовая деревянная скамейка на металлических опорах у главного подъезда жилого дома (в пределах отмостки)
+      if (ei === 0 && (style === "panel" || style === "brick") && facadeSpan >= 15) {
+        const bAlong = along + 1.85;
+        const bsx = longAlongZ ? halfDepth + 0.28 : bAlong;
+        const bsz = longAlongZ ? bAlong : halfDepth + 0.28;
+        batch.addBox(env.benchWoodMat, wx(bsx, bsz), 0.45, wz(bsx, bsz), 1.35, 0.06, 0.34, doorYaw);
+        batch.addBox(env.doorMat, wx(bsx, bsz), 0.22, wz(bsx, bsz), 1.18, 0.42, 0.28, doorYaw);
+      }
+    }
+    // Сине-белый адресный аншлаг РФ на углу главного фасада (высота 3.15 м — хорошо читается из салона)
+    const plaqueAlong = -facadeSpan * 0.42;
+    const plx = longAlongZ ? halfDepth + 0.035 : plaqueAlong;
+    const plz = longAlongZ ? plaqueAlong : halfDepth + 0.035;
+    batch.addVerticalQuad(env.addressPlaqueMat, wx(plx, plz), 3.15, wz(plx, plz), 0.92, 0.34, doorYaw);
+  }
+
+  // Угловые оцинкованные водосточные трубы на кирпичных, административных и коммерческих зданиях
+  if (style !== "panel" && h >= 5.5 && facadeSpan >= 10) {
+    const pipeH = h - 0.12;
+    for (const sgn of [-1, 1]) {
+      const px = longAlongZ ? halfDepth + 0.055 : sgn * (facadeSpan * 0.485);
+      const pz = longAlongZ ? sgn * (facadeSpan * 0.485) : halfDepth + 0.055;
+      batch.addBox(env.metalFlashMat, wx(px, pz), pipeH * 0.5 + 0.1, wz(px, pz), 0.09, pipeH, 0.09, yaw);
+    }
+  }
+
+  // Наружные блоки сплит-систем (кондиционеров) на фасадах жилых многоэтажек (детерминированно, 1–2 на дом)
+  if ((style === "panel" || style === "brick") && facadeSpan >= 14 && h >= 9.5) {
+    const acYaw = longAlongZ ? yaw + Math.PI * 0.5 : yaw;
+    const acCount = seed % 2 === 0 ? 2 : 1;
+    for (let ai = 0; ai < acCount; ai++) {
+      const aAlong = (((seed >> (ai * 3 + 2)) % 7) / 6 - 0.5) * (facadeSpan * 0.72);
+      const aFloor = 1 + ((seed >> (ai * 4 + 1)) % Math.max(1, Math.min(4, Math.floor((h - 4) / 3.1))));
+      const ay = 1.6 + aFloor * 3.05;
+      if (ay + 0.6 >= h) continue;
+      const side = ai === 0 ? 1 : -1;
+      const alx = longAlongZ ? side * (halfDepth + 0.14) : aAlong;
+      const alz = longAlongZ ? aAlong : side * (halfDepth + 0.14);
+      batch.addBox(env.balconyFrameMat, wx(alx, alz), ay, wz(alx, alz), 0.74, 0.5, 0.26, acYaw, { keepBottom: true });
     }
   }
 
