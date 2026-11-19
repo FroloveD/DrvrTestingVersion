@@ -168,6 +168,17 @@ try {
   const d1Shown = /\bD1\b/.test(await page.evaluate(() => document.body.innerText));
   check("A4b клавиши Shift / Right Shift переключают КПП (R→N→M1→M2→M1), F возвращает D1", m2Shown && m1Shown && d1Shown, `M2=${m2Shown} M1=${m1Shown} D1=${d1Shown}`);
 
+  // A4c: Shift при нажатом тормозе — режим энергичного торможения, а не переключение передачи вверх
+  await page.keyboard.down("KeyS");
+  await sleep(140);
+  const gearBeforeShiftBrake = await page.evaluate(() => window.__cdtCockpit?.gear?.() ?? "");
+  await page.keyboard.press("ShiftLeft");
+  await sleep(200);
+  const brakePosBoost = await page.evaluate(() => window.__cdtCockpit?.state?.()?.brakePos ?? 0);
+  await page.keyboard.up("KeyS");
+  check("A4c Shift + тормоз усиливает давление в гидроприводе и не переключает передачу вверх",
+    brakePosBoost > 0.05 && gearBeforeShiftBrake === "D", JSON.stringify({ brakePosBoost, gearBeforeShiftBrake }));
+
   await page.keyboard.press("KeyH");
   await sleep(500);
   text = await low(page);
@@ -905,6 +916,33 @@ try {
       radioState?.mode === "radio" && radioState?.radioPlaying === true && radioPaused &&
       hazardOn && lightsAfter !== lightsBefore && /"mode":"radio"/.test(huStored || ""),
     JSON.stringify({ controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
+
+  // K9: взгляд водителя тремя детентами (левое зеркало → дорога → правое) и сигнал клаксона
+  await page.keyboard.press("Digit2");
+  await sleep(260);
+  const detent0 = await page.evaluate(() => window.__cdtCockpit?.look?.()?.detent ?? 99);
+  const yawRoad = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
+  await page.getByTestId("head-detent-left").click();
+  await sleep(420);
+  const yawLeft = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
+  await page.getByTestId("head-detent-right").click();
+  await sleep(420);
+  const yawRight = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
+  const arrowsLeft = await page.evaluate(() => window.__cdtCockpit?.look?.()?.detent ?? 99);
+  await page.getByTestId("head-detent-road").click();
+  await sleep(420);
+  const backRoad = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
+  // Клавиша H — клаксон: в ядре появляется horn, звук не падает с ошибкой
+  await page.keyboard.down("h");
+  await sleep(220);
+  const hornOn = await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === true);
+  await page.keyboard.up("h");
+  await sleep(180);
+  const hornOff = await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === false);
+  check("K9 взгляд тремя детентами (левое зеркало → дорога → правое) и сигнал H на руле",
+    detent0 === 0 && Math.abs(yawRoad) < 6 && yawLeft > 30 && yawRight < -30 && backRoad > -6 && backRoad < 6 &&
+      arrowsLeft === -1 && hornOn && hornOff,
+    JSON.stringify({ detent0, yawRoad, yawLeft, yawRight, backRoad, arrowsLeft, hornOn, hornOff }));
 
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();

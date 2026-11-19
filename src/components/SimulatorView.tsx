@@ -1256,6 +1256,8 @@ export function SimulatorView({
         detent: sceneCtrlRef.current?.getHeadDetent() ?? 0,
         yawDeg: sceneCtrlRef.current?.getHeadYawDeg() ?? 0,
       }),
+      /** Живое состояние ядра (для смоук-проверок: сигнал, передача, скорость). */
+      state: () => stateRef.current,
       setHeadDetent: (detent: -1 | 0 | 1) => {
         sceneCtrlRef.current?.setHeadDetent(detent);
         setHeadDetentUi(detent === 0 ? "road" : detent > 0 ? "left" : "right");
@@ -1651,7 +1653,13 @@ export function SimulatorView({
           setGear("D");
           break;
         case "ShiftLeft":
-          shiftGear(1);
+          // Shift + тормоз — энергичный ход педали (усиление тормозного давления), без тормоза — ступень вверх.
+          // Повтор сюда не доходит (`e.repeat` отсекается выше), поэтому фронт нажатия определяется однозначно.
+          if (inp.brake > 0.05) {
+            onNotify("Энергичное торможение: давление в гидроприводе растёт вдвое быстрее");
+          } else {
+            shiftGear(1);
+          }
           break;
         case "ShiftRight":
         case "KeyX":
