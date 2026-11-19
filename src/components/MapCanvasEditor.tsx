@@ -790,21 +790,11 @@ export function MapCanvasEditor({
             </g>
           )}
 
-          {/* Границы мира */}
-          <rect
-            x={-def.bounds.maxX}
-            y={-def.bounds.maxZ}
-            width={def.bounds.maxX - def.bounds.minX}
-            height={def.bounds.maxZ - def.bounds.minZ}
-            fill="rgba(15,25,35,0.42)"
-            stroke="#2b3c4d"
-            strokeDasharray={`${scale * 0.9} ${scale * 0.7}`}
-            strokeWidth={thin * 1.1}
-            style={{ pointerEvents: "none" }}
-          />
+          {/* Границы мира или точный контур площадки */}
+          {boundaryPoly ? <polygon data-testid="map-boundary-polygon" points={boundaryPoly.map(p => `${-p.x},${-p.z}`).join(" ")} fill={def.useLotSurface !== false ? "#19232e" : "rgba(15,25,35,0.42)"} stroke="#2b3c4d" strokeWidth={thin * 1.1} style={{ pointerEvents: "none" }} /> : <rect x={-def.bounds.maxX} y={-def.bounds.maxZ} width={def.bounds.maxX-def.bounds.minX} height={def.bounds.maxZ-def.bounds.minZ} fill="rgba(15,25,35,0.42)" stroke="#2b3c4d" strokeDasharray={`${scale*0.9} ${scale*0.7}`} strokeWidth={thin*1.1} style={{ pointerEvents: "none" }} />}
 
           {/* Базовая асфальтовая площадка автодрома */}
-          {def.useLotSurface !== false && (
+          {def.useLotSurface !== false && !boundaryPoly && (
             <g data-testid="map-lot-surface">
               <rect
                 x={-(def.lotCenterX ?? 0) - def.lotHalfX}
@@ -846,9 +836,6 @@ export function MapCanvasEditor({
             </g>
           )}
 
-          {/* Граница мира и асфальтовая площадка */}
-          {boundaryPoly ? <polygon data-testid="map-boundary-polygon" points={boundaryPoly.map(p => `${-p.x},${-p.z}`).join(" ")} fill={def.useLotSurface !== false ? "#19232e" : "rgba(15,28,39,0.52)"} stroke="#f5b942" strokeWidth={thin * 1.5} /> : <rect x={-def.bounds.maxX} y={-def.bounds.maxZ} width={def.bounds.maxX-def.bounds.minX} height={def.bounds.maxZ-def.bounds.minZ} fill="rgba(15,25,35,0.32)" stroke="#2b3c4d" strokeDasharray={`${scale} ${scale*0.7}`} strokeWidth={thin} />}
-          {def.useLotSurface !== false && !boundaryPoly && <rect data-testid="map-lot-rect" x={-(def.lotCenterX ?? 0)-def.lotHalfX} y={-(def.lotCenterZ ?? 0)-def.lotHalfZ} width={def.lotHalfX*2} height={def.lotHalfZ*2} fill="#19232e" stroke="#2a3948" strokeWidth={thin} />}
           {boundaryPoly && <g data-testid="map-boundary-overlay"><polygon points={boundaryPoly.map(p => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke={boundaryValid ? "#f5b942" : "#ff6b6b"} strokeDasharray={`${scale} ${scale*0.6}`} strokeWidth={Math.max(0.24,thin*1.8)} />{boundaryPoly.map((p,i)=><circle key={i} cx={-p.x} cy={-p.z} r={Math.max(0.5,signUnit*0.45)} fill="#f5b942" stroke="#071018" strokeWidth={thin} className="cursor-move" onPointerDown={e=>beginObjectDrag(e,{kind:"boundary_point",index:i})} />)}</g>}
           {tool === "boundary" && draftBoundary.length > 0 && <polyline points={draftBoundary.map(p=>`${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#52d6bd" strokeWidth={Math.max(0.25,thin*2)} strokeDasharray={`${scale} ${scale*0.5}`} />}
           {/* Сегменты дорог (импорт OSM и собственные) */}
