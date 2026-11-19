@@ -39,6 +39,9 @@ export type CustomScenarioDef = {
   defaultSpeedLimitKmh: number;
   lotHalfX: number; // полуразмер асфальтовой площадки по X (м)
   lotHalfZ: number; // полуразмер асфальтовой площадки по Z (м)
+  /** Центр прямоугольной стартовой площадки в координатах карты (м); старые сценарии используют 0. */
+  lotCenterX?: number;
+  lotCenterZ?: number;
   /** Рисовать ли прямоугольную асфальтовую площадку (true для автодрома, false для уличной сети). */
   useLotSurface?: boolean;
   /** Произвольные сегменты дорог (импортированные из OSM/GeoJSON или добавленные в редакторе). */
@@ -82,6 +85,8 @@ export function defaultCustomScenario(): CustomScenarioDef {
     defaultSpeedLimitKmh: 20,
     lotHalfX: 16,
     lotHalfZ: 12,
+    lotCenterX: 0,
+    lotCenterZ: 0,
     useLotSurface: true,
     roads: [],
     bays: [
@@ -201,6 +206,8 @@ export function normalizeCustomScenario(raw: Partial<CustomScenarioDef>): Custom
     start: raw.start ? { ...base.start, ...raw.start } : base.start,
     bounds: raw.bounds ? { ...base.bounds, ...raw.bounds } : base.bounds,
     useLotSurface: raw.useLotSurface !== undefined ? Boolean(raw.useLotSurface) : true,
+    lotCenterX: Number.isFinite(raw.lotCenterX) ? Number(raw.lotCenterX) : 0,
+    lotCenterZ: Number.isFinite(raw.lotCenterZ) ? Number(raw.lotCenterZ) : 0,
     roads: Array.isArray(raw.roads)
       ? raw.roads.map((r) => ({ ...r, points: Array.isArray(r.points) ? r.points.map((p) => ({ ...p })) : [] }))
       : [],
@@ -256,6 +263,8 @@ export function customFromWorld(world: WorldData, title: string): CustomScenario
     defaultSpeedLimitKmh: world.defaultSpeedLimitKmh,
     lotHalfX: Number(lotHalfX.toFixed(1)),
     lotHalfZ: Number(lotHalfZ.toFixed(1)),
+    lotCenterX: 0,
+    lotCenterZ: 0,
     useLotSurface: isLot,
     roads,
     bays: world.bays.map((b) => ({ ...b })),
@@ -427,8 +436,8 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
     roads.push({
       id: "custom-lot",
       points: [
-        { x: -def.lotHalfX, z: 0 },
-        { x: def.lotHalfX, z: 0 },
+        { x: (def.lotCenterX ?? 0) - def.lotHalfX, z: def.lotCenterZ ?? 0 },
+        { x: (def.lotCenterX ?? 0) + def.lotHalfX, z: def.lotCenterZ ?? 0 },
       ],
       width: def.lotHalfZ * 2,
       lanes: 1,
