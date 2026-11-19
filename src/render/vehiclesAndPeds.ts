@@ -24,7 +24,24 @@ export type DetailedCarRig = {
   headSpotL?: THREE.SpotLight;
   headSpotR?: THREE.SpotLight;
   learnerSign?: THREE.Object3D;
+  /** Физические зеркальные полотна Kia Ceed JD для прямого GPU-отражения в виде из салона. */
+  rearMirrorGlass?: THREE.Mesh;
+  leftMirrorGlass?: THREE.Mesh;
+  rightMirrorGlass?: THREE.Mesh;
+  /** Силуэт водителя (виден снаружи, скрывается в режиме камеры из салона). */
+  driverGroup?: THREE.Group;
 };
+
+/** Плоскость зеркального полотна с горизонтально отражёнными UV (`u' = 1 - u`) для честного зеркала без CPU-readback. */
+function makeMirroredPlaneGeometry(width: number, height: number): THREE.PlaneGeometry {
+  const geo = new THREE.PlaneGeometry(width, height);
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setX(i, 1 - uv.getX(i));
+  }
+  uv.needsUpdate = true;
+  return geo;
+}
 
 export type DetailedPedestrianVisual = {
   crosswalkId: string;
@@ -234,6 +251,20 @@ export function buildDetailedCar(
   const reflectorMat = new THREE.MeshBasicMaterial({ color: 0x991b1b });
   const blinkLeftMats: THREE.MeshBasicMaterial[] = [];
   const blinkRightMats: THREE.MeshBasicMaterial[] = [];
+  const mirrorBezelMat = new THREE.MeshStandardMaterial({ color: 0x10151c, roughness: 0.62, metalness: 0.14 });
+  const mirrorDefaultGlassMat = new THREE.MeshStandardMaterial({ color: 0x7d93a6, metalness: 0.88, roughness: 0.12 });
+  const asphericLineMat = new THREE.MeshBasicMaterial({ color: 0x1e293b, transparent: true, opacity: 0.42 });
+  let rearMirrorGlass: THREE.Mesh | undefined;
+  let leftMirrorGlass: THREE.Mesh | undefined;
+  let rightMirrorGlass: THREE.Mesh | undefined;
+  let driverGroup: THREE.Group | undefined;
+
+  /** Назначает всем мешам узла зеркала выделенный слой, чтобы зеркала не рендерили сами себя. */
+  const setMirrorLayer = (obj: THREE.Object3D) => {
+    obj.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.layers.set(mirrorHardwareLayer);
+    });
+  };
 
   if (isPlayer) {
     // Полый кузов Kia Ceed JD (инвариант №7: салон полый, водитель и кресла внутри, обзор назад чист)
@@ -332,8 +363,8 @@ export function buildDetailedCar(
 
     // Детализированный салон: торпедо, козырёк и шкалы приборов Supervision, ШГУ, тоннель АКПП, кресла и водитель
     const dashZ = centerShiftZ + cabinLen * 0.35;
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.1, 0.27, 0.4), darkTrimMat);
-    dash.position.set(0, beltY - 0.03, dashZ);
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.1, 0.24, 0.38), darkTrimMat);
+    dash.position.set(0, beltY - 0.055, dashZ + 0.02);
     const binnacle = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 0.24), darkTrimMat);
     binnacle.position.set(W * 0.23, beltY + 0.11, dashZ - 0.02);
     const cluster = new THREE.Mesh(
@@ -346,13 +377,14 @@ export function buildDetailedCar(
       new THREE.PlaneGeometry(0.22, 0.12),
       new THREE.MeshBasicMaterial({ color: 0x172b3a })
     );
-    headUnit.position.set(0, beltY + 0.04, dashZ - 0.205);
+    headUnit.position.set(0, beltY + 0.02, dashZ - 0.176);
     headUnit.rotation.y = Math.PI;
     const consoleTunnel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.92), darkTrimMat);
     consoleTunnel.position.set(0, sillY + 0.16, centerShiftZ + 0.18);
     chassis.add(dash, binnacle, cluster, headUnit, consoleTunnel);
 
     const seatMat = new THREE.MeshStandardMaterial({ color: 0x28313c, roughness: 0.86 });
+    const doorCardMat = new THREE.MeshStandardMaterial({ color: 0x202730, roughness: 0.8 });
     for (const side of [1, -1] as const) {
       const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.12, 0.48), seatMat);
       cushion.position.set(side * W * 0.24, 0.44, centerShiftZ + 0.04);
@@ -361,10 +393,69 @@ export function buildDetailedCar(
       seatBack.rotation.x = -0.14;
       const headrest = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.09), seatMat);
       headrest.position.set(side * W * 0.24, 1.04, centerShiftZ - 0.23);
-      chassis.add(cushion, seatBack, headrest);
+
+      // Внутренняя обшивка передних дверей с подлокотником и хромированной ручкой
+      const doorCard = new THREE.Mesh(new THREE.BoxGeometry(0.028, lowerH - 0.08, cabinLen * 0.48), doorCardMat);
+      doorCard.position.set(side * (W / 2 - wall - 0.012), sillY + 0.06 + (lowerH - 0.08) / 2, centerShiftZ + 0.36);
+      const armrest = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.045, 0.42), darkTrimMat);
+      armrest.position.set(side * (W / 2 - wall - 0.032), beltY - 0.16, centerShiftZ + 0.3);
+      const innerPull = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.024, 0.09), chromeMat);
+      innerPull.position.set(side * (W / 2 - wall - 0.028), beltY - 0.09, centerShiftZ + 0.48);
+      // Сложенный солнцезащитный козырёк под кромкой потолка (не перекрывает обзор)
+      const visor = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.018, 0.13), seatMat);
+      visor.position.set(side * 0.36, roofY - 0.034, centerShiftZ + roofLen * 0.4 - 0.03);
+      visor.rotation.x = 0.08;
+      chassis.add(cushion, seatBack, headrest, doorCard, armrest, innerPull, visor);
     }
 
-    // Водитель на левом кресле (+X)
+    // Физическое салонное зеркало заднего вида под верхним краем лобового стекла (с живым отражением в «Салоне»)
+    const rearMirrorAssembly = new THREE.Group();
+    const sensorPod = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.052, 0.11), mirrorBezelMat);
+    sensorPod.position.set(0, roofY - 0.032, centerShiftZ + 0.745);
+    sensorPod.rotation.x = -0.34;
+    const rearStem = new THREE.Mesh(new THREE.CylinderGeometry(0.0085, 0.0105, 0.082, 8), mirrorBezelMat);
+    rearStem.position.set(0, 1.36, centerShiftZ + 0.692);
+    rearStem.rotation.x = -0.62;
+    const ballJoint = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 8), mirrorBezelMat);
+    ballJoint.position.set(0, 1.334, centerShiftZ + 0.66);
+
+    const rearHead = new THREE.Group();
+    rearHead.position.set(0, 1.326, centerShiftZ + 0.644);
+    // Разворот зеркального полотна (-Z) к глазам водителя (+X, чуть вниз)
+    rearHead.rotation.order = "YXZ";
+    rearHead.rotation.y = -0.27;
+    rearHead.rotation.x = -0.11;
+    const rgw = 0.272;
+    const rgh = 0.078;
+    const rf = 0.0065;
+    const rearBack = new THREE.Mesh(new THREE.BoxGeometry(rgw + rf * 2, rgh + rf * 2, 0.018), mirrorBezelMat);
+    rearBack.position.z = 0.012;
+    const rearCap = new THREE.Mesh(new THREE.BoxGeometry(rgw * 0.78, rgh * 0.72, 0.014), darkTrimMat);
+    rearCap.position.z = 0.025;
+    // Утопленная рамка по периметру салонного зеркала
+    const rTop = new THREE.Mesh(new THREE.BoxGeometry(rgw + rf * 2, rf, 0.01), mirrorBezelMat);
+    rTop.position.set(0, (rgh + rf) / 2, -0.001);
+    const rBot = new THREE.Mesh(new THREE.BoxGeometry(rgw + rf * 2, rf, 0.01), mirrorBezelMat);
+    rBot.position.set(0, -(rgh + rf) / 2, -0.001);
+    const rSideL = new THREE.Mesh(new THREE.BoxGeometry(rf, rgh, 0.01), mirrorBezelMat);
+    rSideL.position.set((rgw + rf) / 2, 0, -0.001);
+    const rSideR = new THREE.Mesh(new THREE.BoxGeometry(rf, rgh, 0.01), mirrorBezelMat);
+    rSideR.position.set(-(rgw + rf) / 2, 0, -0.001);
+    // Флажок антибликового переключения «день/ночь» снизу по центру
+    const dayNightTab = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.012, 0.016), darkTrimMat);
+    dayNightTab.position.set(0, -rgh / 2 - rf - 0.005, 0.003);
+    dayNightTab.rotation.x = 0.25;
+
+    rearMirrorGlass = new THREE.Mesh(makeMirroredPlaneGeometry(rgw, rgh), mirrorDefaultGlassMat);
+    rearMirrorGlass.rotation.y = Math.PI;
+    rearMirrorGlass.position.z = -0.001;
+    rearHead.add(rearBack, rearCap, rTop, rBot, rSideL, rSideR, dayNightTab, rearMirrorGlass);
+    rearMirrorAssembly.add(sensorPod, rearStem, ballJoint, rearHead);
+    setMirrorLayer(rearMirrorAssembly);
+    chassis.add(rearMirrorAssembly);
+
+    // Водитель на левом кресле (+X; виден снаружи, скрывается в виде из салона)
+    driverGroup = new THREE.Group();
     const driverX = W * 0.23;
     const driverZ = centerShiftZ - 0.02;
     const torso = new THREE.Mesh(
@@ -382,7 +473,8 @@ export function buildDetailedCar(
       new THREE.MeshStandardMaterial({ color: 0x3b2a1e, roughness: 0.82 })
     );
     hair.position.copy(head.position);
-    chassis.add(torso, head, hair);
+    driverGroup.add(torso, head, hair);
+    chassis.add(driverGroup);
   } else {
     // Детализированный припаркованный автомобиль (седан / хэтчбек / кроссовер Sorento)
     const lower = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, lowerH - 0.05, L - 0.04), paintMat);
@@ -487,17 +579,77 @@ export function buildDetailedCar(
       const blinkR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.07), bMat);
       blinkR.position.set(side * (W * 0.45), beltY - 0.08, rearZ - 0.012);
 
-      const mirrorStalk = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.045, 0.05), darkTrimMat);
-      mirrorStalk.position.set(side * (W / 2 + 0.02), beltY + 0.03, centerShiftZ + 0.52);
-      const mirrorHousing = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.095, 0.11), paintMat);
-      mirrorHousing.position.set(side * (W / 2 + 0.068), beltY + 0.065, centerShiftZ + 0.52);
-      const blinkSide = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.13), bMat);
-      blinkSide.position.set(side * (W / 2 + 0.028), beltY + 0.055, centerShiftZ + 0.52);
+      // Физическое боковое зеркало Kia Ceed JD в переднем углу двери (парус, стойка, двухцветный корпус, рамка и полотно)
+      const sideMirrorGrp = new THREE.Group();
+      const mountZ = centerShiftZ + 0.65;
+      const mirrorSail = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.088, 0.13), darkTrimMat);
+      mirrorSail.position.set(side * (W / 2 - 0.016), beltY + 0.038, mountZ + 0.1);
+      const mirrorStalk = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.036, 0.052), darkTrimMat);
+      mirrorStalk.position.set(side * (W / 2 + 0.032), beltY + 0.04, mountZ + 0.076);
+      mirrorStalk.rotation.z = -side * 0.24;
 
-      mirrorStalk.layers.set(mirrorHardwareLayer);
-      mirrorHousing.layers.set(mirrorHardwareLayer);
-      blinkSide.layers.set(mirrorHardwareLayer);
-      chassis.add(blinkF, blinkR, mirrorStalk, mirrorHousing, blinkSide);
+      const mirrorHead = new THREE.Group();
+      mirrorHead.position.set(side * (W / 2 + 0.12), beltY + 0.118, mountZ);
+      // Разворот зеркального полотна (-Z) к глазам водителя: левое мягко внутрь, правое сильнее (левый руль +X)
+      mirrorHead.rotation.order = "YXZ";
+      mirrorHead.rotation.y = side === 1 ? 0.34 : -0.58;
+      mirrorHead.rotation.x = 0.08;
+
+      const sw = 0.208;
+      const sh = 0.126;
+      const sf = 0.0085;
+      // Окрашенная в цвет кузова аэродинамическая крышка + матово-чёрное основание и утопленная обойма
+      const shellBody = new THREE.Mesh(new THREE.BoxGeometry(sw + sf * 2 + 0.012, sh + sf * 2 + 0.008, 0.056), paintMat);
+      shellBody.position.set(0, 0.004, 0.034);
+      const shellNose = new THREE.Mesh(new THREE.BoxGeometry(sw * 0.86, sh * 0.78, 0.028), paintMat);
+      shellNose.position.set(side * 0.006, 0.002, 0.072);
+      const shellBase = new THREE.Mesh(new THREE.BoxGeometry(sw + sf * 2 + 0.008, 0.02, 0.056), darkTrimMat);
+      shellBase.position.set(0, -(sh + sf * 2) / 2 + 0.004, 0.033);
+      const innerBack = new THREE.Mesh(new THREE.BoxGeometry(sw + sf * 2, sh + sf * 2, 0.01), mirrorBezelMat);
+      innerBack.position.z = 0.008;
+
+      const sTop = new THREE.Mesh(new THREE.BoxGeometry(sw + sf * 2 + 0.008, sf, 0.012), mirrorBezelMat);
+      sTop.position.set(0, (sh + sf) / 2, 0.001);
+      const sBot = new THREE.Mesh(new THREE.BoxGeometry(sw + sf * 2 + 0.008, sf, 0.011), mirrorBezelMat);
+      sBot.position.set(0, -(sh + sf) / 2, 0.0015);
+      const sLeft = new THREE.Mesh(new THREE.BoxGeometry(sf, sh, 0.011), mirrorBezelMat);
+      sLeft.position.set((sw + sf) / 2, 0, 0.0015);
+      const sRight = new THREE.Mesh(new THREE.BoxGeometry(sf, sh, 0.011), mirrorBezelMat);
+      sRight.position.set(-(sw + sf) / 2, 0, 0.0015);
+
+      const sGlass = new THREE.Mesh(makeMirroredPlaneGeometry(sw, sh), mirrorDefaultGlassMat);
+      sGlass.rotation.y = Math.PI;
+      sGlass.position.z = -0.001;
+      // Гравированная вертикальная риска асферической зоны на наружном крае зеркала
+      const aspheric = new THREE.Mesh(new THREE.PlaneGeometry(0.0018, sh - 0.012), asphericLineMat);
+      aspheric.rotation.y = Math.PI;
+      aspheric.position.set(side * (sw * 0.3), 0, -0.0022);
+
+      // Светодиодный повторитель поворотника в корпусе зеркала (с выходом на наружный торец)
+      const blinkFrontStrip = new THREE.Mesh(new THREE.BoxGeometry(sw * 0.56, 0.018, 0.022), bMat);
+      blinkFrontStrip.position.set(side * (sw * 0.2), -0.01, 0.078);
+      const blinkEdgeTip = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.022, 0.052), bMat);
+      blinkEdgeTip.position.set(side * (sw / 2 + sf + 0.008), -0.008, 0.034);
+
+      mirrorHead.add(
+        shellBody,
+        shellNose,
+        shellBase,
+        innerBack,
+        sTop,
+        sBot,
+        sLeft,
+        sRight,
+        sGlass,
+        aspheric,
+        blinkFrontStrip,
+        blinkEdgeTip
+      );
+      sideMirrorGrp.add(mirrorSail, mirrorStalk, mirrorHead);
+      setMirrorLayer(sideMirrorGrp);
+      if (side === 1) leftMirrorGlass = sGlass;
+      else rightMirrorGlass = sGlass;
+      chassis.add(blinkF, blinkR, sideMirrorGrp);
     }
   }
 
@@ -564,6 +716,10 @@ export function buildDetailedCar(
     headSpotL,
     headSpotR,
     learnerSign,
+    rearMirrorGlass,
+    leftMirrorGlass,
+    rightMirrorGlass,
+    driverGroup,
   };
 }
 

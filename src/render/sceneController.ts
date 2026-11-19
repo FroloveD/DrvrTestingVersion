@@ -136,6 +136,7 @@ export class SceneController {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly sun: THREE.DirectionalLight;
+  private readonly groundMesh: THREE.Mesh;
   private readonly worldGroup = new THREE.Group();
   private readonly buildingMeshes: THREE.Object3D[] = [];
   private readonly signalVisuals: SignalVisual[] = [];
@@ -167,6 +168,20 @@ export class SceneController {
    * зеркала выглядит затемнённым и «тонированным», поэтому применяем linear → sRGB.
    */
   private readonly srgbLut: Uint8Array;
+  private readonly cockpitRearRT: THREE.WebGLRenderTarget;
+  private readonly cockpitLeftRT: THREE.WebGLRenderTarget;
+  private readonly cockpitRightRT: THREE.WebGLRenderTarget;
+  private readonly cockpitRearMat: THREE.MeshBasicMaterial;
+  private readonly cockpitLeftMat: THREE.MeshBasicMaterial;
+  private readonly cockpitRightMat: THREE.MeshBasicMaterial;
+  private readonly mirrorIdleMat: THREE.Material;
+  private readonly cockpitEyeWorld = new THREE.Vector3();
+  private readonly cockpitLookWorld = new THREE.Vector3();
+  private cockpitRearPrimed = false;
+  private cockpitSidePrimed = false;
+  private qualityPreset: QualityPreset = "high";
+  private cockpitFov = 68;
+  private lastCameraMode: CameraMode = "chase";
   private frameCounter = 0;
 
   // Управление орбитальной камерой
@@ -228,14 +243,15 @@ export class SceneController {
     this.scene.add(this.sun, this.sun.target);
 
     // Травяная подложка
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(1400, 1400),
+    this.groundMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
       new THREE.MeshStandardMaterial({ map: grassTex, roughness: 0.95 })
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.02;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    this.groundMesh.scale.set(1400, 1400, 1);
+    this.groundMesh.rotation.x = -Math.PI / 2;
+    this.groundMesh.position.y = -0.02;
+    this.groundMesh.receiveShadow = true;
+    this.scene.add(this.groundMesh);
 
     this.scene.add(this.worldGroup);
 
@@ -274,6 +290,17 @@ export class SceneController {
     this.sideBuf = new Uint8Array(320 * 160 * 4);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
 
+    // Физические 3D-зеркала в салоне: прямой GPU-рендер без CPU readback.
+    this.cockpitRearRT = new THREE.WebGLRenderTarget(512, 160, { depthBuffer: true });
+    this.cockpitLeftRT = new THREE.WebGLRenderTarget(384, 240, { depthBuffer: true });
+    this.cockpitRightRT = new THREE.WebGLRenderTarget(384, 240, { depthBuffer: true });
+    this.cockpitRearMat = new THREE.MeshBasicMaterial({ map: this.cockpitRearRT.texture, color: 0xf6fafd });
+    this.cockpitLeftMat = new THREE.MeshBasicMaterial({ map: this.cockpitLeftRT.texture, color: 0xf6fafd });
+    this.cockpitRightMat = new THREE.MeshBasicMaterial({ map: this.cockpitRightRT.texture, color: 0xf6fafd });
+    this.mirrorIdleMat =
+      (this.playerRig.rearMirrorGlass?.material as THREE.Material | undefined) ??
+      new THREE.MeshStandardMaterial({ color: 0x7d93a6, metalness: 0.88, roughness: 0.12 });
+
     // LUT linear → sRGB с небольшим усилением экспозиции
     this.srgbLut = new Uint8Array(256);
     for (let i = 0; i < 256; i++) {
@@ -296,6 +323,10 @@ export class SceneController {
   }
 
   adjustZoom(wheelDelta: number): void {
+    if (this.lastCameraMode === "cockpit") {
+      this.cockpitFov = clamp(this.cockpitFov + wheelDelta * 0.03, 50, 88);
+      return;
+    }
     this.orbitDist = clamp(this.orbitDist * (1 + wheelDelta * 0.0009), 4.6, 42);
   }
 
@@ -303,9 +334,11 @@ export class SceneController {
     this.orbitYaw = 0;
     this.orbitPitch = 0.36;
     this.orbitDist = 9.2;
+    this.cockpitFov = 68;
   }
 
   applyQuality(preset: QualityPreset): void {
+    this.qualityPreset = preset;
     if (preset === "low") {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
@@ -332,6 +365,24 @@ export class SceneController {
     this.checkpointMeshes.length = 0;
     this.bayVisuals.length = 0;
 
+    // Подгоняем подложку, дальность камеры и туман под фактический размер OSM/пользовательского мира.
+    const spanX = Math.max(120, world.bounds.maxX - world.bounds.minX);
+    const spanZ = Math.max(120, world.bounds.maxZ - world.bounds.minZ);
+    const maxSpan = Math.max(spanX, spanZ);
+    const midX = (world.bounds.minX + world.bounds.maxX) * 0.5;
+    const midZ = (world.bounds.minZ + world.bounds.maxZ) * 0.5;
+    this.groundMesh.position.set(midX, -0.02, midZ);
+    this.groundMesh.scale.set(Math.max(1400, spanX + 900), Math.max(1400, spanZ + 900), 1);
+    const targetFar = maxSpan > 340 ? Math.min(2400, Math.max(520, maxSpan * 0.85)) : 420;
+    if (this.camera.far !== targetFar) {
+      this.camera.far = targetFar;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.near = maxSpan > 340 ? 110 : 75;
+      this.scene.fog.far = maxSpan > 340 ? Math.min(560, Math.max(280, maxSpan * 0.55)) : 220;
+    }
+
     const roadMats = createRoadMaterialPack();
     const cityEnv = createCityEnvironmentPack();
     const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
@@ -339,6 +390,8 @@ export class SceneController {
     const civilPlateTex = this.sharedTextures[5] as THREE.CanvasTexture;
     const clusterTex = this.sharedTextures[6] as THREE.CanvasTexture;
     const { asphaltMat, whiteMarkMat } = roadMats;
+    const grassTex = this.sharedTextures[3] as THREE.CanvasTexture | undefined;
+    if (grassTex) grassTex.repeat.set(Math.round(this.groundMesh.scale.x / 9), Math.round(this.groundMesh.scale.y / 9));
 
     // Асфальтовая площадка произвольной (неквадратной/вогнутой) формы и 3D-кромка границы мира
     const makeWorldPolygonGeo = (pts: readonly { x: number; z: number }[]): THREE.ShapeGeometry => {
@@ -653,6 +706,7 @@ export class SceneController {
     rig.steerWheelMesh.rotation.z = -(state.swDeg * Math.PI) / 180;
 
     if (rig.learnerSign) rig.learnerSign.visible = opts.showLearnerSign;
+    if (rig.driverGroup) rig.driverGroup.visible = opts.cameraMode !== "cockpit";
 
     // Поворотники (период 700 мс, как в v8)
     const { blinkOn, leftLit, rightLit } = getTurnSignalFlash(state.signal, state.time);
@@ -763,16 +817,44 @@ export class SceneController {
       setPts(this.trajLineR, rightTrack, col);
     }
 
-    // 6. Камера
+    // 6. Камера (обновляем матрицу кузова заранее, чтобы салон и физические зеркала не дрожали относительно головы)
+    this.lastCameraMode = opts.cameraMode;
+    this.playerRig.chassis.updateWorldMatrix(true, false);
     this.updateCamera(state, opts.cameraMode);
 
-    // 7. Зеркала (без пересчёта карты теней, боковые раз в 3 кадра)
+    // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели
     this.frameCounter++;
-    if (mirrors && (opts.showMirrors || opts.showRearMirror)) {
+    const inCockpit = opts.cameraMode === "cockpit";
+    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors);
+
+    if (inCockpit && (opts.showRearMirror || opts.showMirrors)) {
+      const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
+      this.renderer.shadowMap.autoUpdate = false;
+      const stride = this.qualityPreset === "low" ? 3 : 2;
+      try {
+        if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
+          this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
+          this.cockpitRearPrimed = true;
+        }
+        // Боковые зеркала настроены по методике автошколы: внутренняя кромка показывает борт своего авто, остальное — полосу и бордюр
+        const mountX = CAR.width / 2 + 0.13;
+        if (opts.showMirrors) {
+          const prime = !this.cockpitSidePrimed;
+          if (prime || this.frameCounter % stride === 0) {
+            this.renderMirrorTarget(this.cockpitLeftRT, this.sideCam, mountX, 0.945, 0.65, -0.37, -0.105, 44);
+          }
+          if (prime || this.frameCounter % stride === 1) {
+            this.renderMirrorTarget(this.cockpitRightRT, this.sideCam, -mountX, 0.945, 0.65, 0.37, -0.105, 44);
+          }
+          this.cockpitSidePrimed = true;
+        }
+      } finally {
+        this.renderer.shadowMap.autoUpdate = prevShadowAuto;
+      }
+    } else if (!inCockpit && mirrors && (opts.showMirrors || opts.showRearMirror)) {
       const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
       this.renderer.shadowMap.autoUpdate = false;
       try {
-        this.playerRig.chassis.updateWorldMatrix(true, false);
         if (opts.showRearMirror && mirrors.rear && this.frameCounter % 2 === 0) {
           this.renderInto(this.rearRT, this.rearCam, this.rearBuf, 0, 1.24, 0.25, 0, -0.08, 38, mirrors.rear);
         }
@@ -790,6 +872,60 @@ export class SceneController {
     }
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Переключает материал физических 3D-полотeн между живым отражением и амальгамным стеклом покоя. */
+  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean): void {
+    const rig = this.playerRig;
+    if (rig.rearMirrorGlass) {
+      const target = activeRear ? this.cockpitRearMat : this.mirrorIdleMat;
+      if (rig.rearMirrorGlass.material !== target) rig.rearMirrorGlass.material = target;
+    }
+    if (rig.leftMirrorGlass) {
+      const target = activeSide ? this.cockpitLeftMat : this.mirrorIdleMat;
+      if (rig.leftMirrorGlass.material !== target) rig.leftMirrorGlass.material = target;
+    }
+    if (rig.rightMirrorGlass) {
+      const target = activeSide ? this.cockpitRightMat : this.mirrorIdleMat;
+      if (rig.rightMirrorGlass.material !== target) rig.rightMirrorGlass.material = target;
+    }
+    if (!activeRear) this.cockpitRearPrimed = false;
+    if (!activeSide) this.cockpitSidePrimed = false;
+  }
+
+  /** Прямой GPU-рендер отражения в текстуру физического 3D-зеркала салона (без CPU readback). */
+  private renderMirrorTarget(
+    rt: THREE.WebGLRenderTarget,
+    cam: THREE.PerspectiveCamera,
+    localX: number,
+    localY: number,
+    localZ: number,
+    yawOffset: number,
+    pitchDown: number,
+    fov: number
+  ): void {
+    const aspect = rt.width / rt.height;
+    if (cam.fov !== fov || Math.abs(cam.aspect - aspect) > 1e-5) {
+      cam.fov = fov;
+      cam.aspect = aspect;
+      cam.updateProjectionMatrix();
+    }
+    const pose = this.playerRig.chassis.matrixWorld;
+    const yaw = Math.PI + yawOffset;
+    cam.position.set(localX, localY, localZ).applyMatrix4(pose);
+    cam.up.set(0, 1, 0).transformDirection(pose);
+    cam.lookAt(
+      this.mirrorLookTarget
+        .set(localX + Math.sin(yaw), localY + pitchDown, localZ + Math.cos(yaw))
+        .applyMatrix4(pose)
+    );
+    const previous = this.renderer.getRenderTarget();
+    try {
+      this.renderer.setRenderTarget(rt);
+      this.renderer.render(this.scene, cam);
+    } finally {
+      this.renderer.setRenderTarget(previous);
+    }
   }
 
   private renderInto(
@@ -855,28 +991,39 @@ export class SceneController {
   private updateCamera(s: SimState, mode: CameraMode): void {
     const fx = Math.sin(s.h);
     const fz = Math.cos(s.h);
-    const lx = Math.cos(s.h);
-    const lz = -Math.sin(s.h);
 
     if (mode === "cockpit") {
-      // Водительское место слева (+X)
-      const eyeX = s.x + lx * (CAR.width * 0.23) - fx * 0.02;
-      const eyeY = 1.19;
-      const eyeZ = s.z + lz * (CAR.width * 0.23) - fz * 0.02;
-      const lookYaw = s.h + this.orbitYaw * 0.65;
-      this.camera.fov = 64;
-      this.camera.updateProjectionMatrix();
-      this.camera.position.set(eyeX, eyeY, eyeZ);
-      this.camera.lookAt(
-        eyeX + Math.sin(lookYaw) * 18,
-        eyeY - 0.12 - (this.orbitPitch - 0.36) * 6,
-        eyeZ + Math.cos(lookYaw) * 18
-      );
+      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами)
+      const pose = this.playerRig.chassis.matrixWorld;
+      const localEyeX = CAR.width * 0.225;
+      const localEyeY = 1.195;
+      const localEyeZ = -0.06;
+      const headYaw = clamp(this.orbitYaw * 0.72, -1.55, 1.55);
+      const headPitch = clamp(-0.02 - (this.orbitPitch - 0.36) * 0.45, -0.42, 0.34);
+      const cosP = Math.cos(headPitch);
+      if (this.camera.fov !== this.cockpitFov) {
+        this.camera.fov = this.cockpitFov;
+        this.camera.updateProjectionMatrix();
+      }
+      this.cockpitEyeWorld.set(localEyeX, localEyeY, localEyeZ).applyMatrix4(pose);
+      this.cockpitLookWorld
+        .set(
+          localEyeX + Math.sin(headYaw) * cosP * 18,
+          localEyeY + Math.sin(headPitch) * 18,
+          localEyeZ + Math.cos(headYaw) * cosP * 18
+        )
+        .applyMatrix4(pose);
+      this.camera.position.copy(this.cockpitEyeWorld);
+      this.camera.up.set(0, 1, 0).transformDirection(pose);
+      this.camera.lookAt(this.cockpitLookWorld);
       return;
     }
 
-    this.camera.fov = 55;
-    this.camera.updateProjectionMatrix();
+    this.camera.up.set(0, 1, 0);
+    if (this.camera.fov !== 55) {
+      this.camera.fov = 55;
+      this.camera.updateProjectionMatrix();
+    }
 
     if (mode === "top") {
       // Вид инструктора сверху (вперёд машины — вверх экрана)
@@ -945,14 +1092,22 @@ export class SceneController {
   }
 
   dispose(): void {
+    this.syncPhysicalMirrorMaterials(false, false);
     this.disposeGroup(this.worldGroup);
     this.disposeGroup(this.playerRig.root);
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();
     (this.trajLineR.material as THREE.Material).dispose();
+    this.cockpitRearMat.dispose();
+    this.cockpitLeftMat.dispose();
+    this.cockpitRightMat.dispose();
+    this.mirrorIdleMat.dispose();
     this.rearRT.dispose();
     this.sideRT.dispose();
+    this.cockpitRearRT.dispose();
+    this.cockpitLeftRT.dispose();
+    this.cockpitRightRT.dispose();
     this.sharedTextures.forEach((t) => t.dispose());
     this.renderer.dispose();
   }
