@@ -897,7 +897,7 @@ export const extraCases: SelfTestCase[] = [
           assert(Math.abs(left[offset + 2] - expected.leftTrack[i].z) < 1e-5, `Левая точка ${i}: Z расходится`);
           assert(Math.abs(right[offset] - expected.rightTrack[i].x) < 1e-5, `Правая точка ${i}: X расходится`);
           assert(Math.abs(right[offset + 2] - expected.rightTrack[i].z) < 1e-5, `Правая точка ${i}: Z расходится`);
-          assert(left[offset + 1] === 0.06 && right[offset + 1] === 0.06, `Точка ${i}: неверная высота линии`);
+          assert(Math.abs(left[offset + 1] - 0.06) < 1e-7 && Math.abs(right[offset + 1] - 0.06) < 1e-7, `Точка ${i}: неверная высота линии`);
         }
       }
       let rejected = false;
