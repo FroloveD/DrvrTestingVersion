@@ -168,7 +168,7 @@ cdt.gamepad.profile.v2  включённое устройство, откали�
 cdt.activeStudent.v1    активный ученик в кабинете инструктора
 cdt.instructorName.v1   имя инструктора для сверки
 cdt.blindReview.v1      слепой режим: вердикты скрыты до оценки
-cdt.strategy.v3         прогресс по следующим действиям стратегии
+cdt.strategy.v4         прогресс по следующим действиям стратегии
 cdt.licenseNote.v1      решение владельца по лицензии
 cdt-checklist-v1        чек-лист исторического аудита (AuditView)
 cdt.attempts.journal.v1 устаревший ключ: переносится в IndexedDB и удаляется
