@@ -754,7 +754,8 @@ export class SceneController {
 
     // Дороги и разметка
     for (const road of world.roads) {
-      const rounded = (road.cornerRadiusM ?? 0) > 0 && road.points.length >= 3;
+      const roadPoints = roadGeometryPoints(road.points, road.cornerRadiusM ?? 0);
+      const rounded = (road.cornerRadiusM ?? 0) > 0 && roadPoints.length >= 3;
       const isStreetRoad =
         world.scenarioId === "city_osm" ||
         (world.scenarioId === "custom" && road.id !== "custom-lot");
@@ -765,7 +766,7 @@ export class SceneController {
         const addRibbon = (width: number, y: number, material: THREE.Material) => {
           const vertices: number[] = [];
           const indices: number[] = [];
-          const pts = road.points;
+          const pts = roadPoints;
           for (let i = 0; i < pts.length; i++) {
             const prev = pts[Math.max(0, i - 1)];
             const next = pts[Math.min(pts.length - 1, i + 1)];
@@ -794,9 +795,9 @@ export class SceneController {
         addRibbon(road.width, 0.012, asphaltMat);
       }
 
-      for (let i = 0; i < road.points.length - 1; i++) {
-        const p0 = road.points[i];
-        const p1 = road.points[i + 1];
+      for (let i = 0; i < roadPoints.length - 1; i++) {
+        const p0 = roadPoints[i];
+        const p1 = roadPoints[i + 1];
         const dx = p1.x - p0.x;
         const dz = p1.z - p0.z;
         const len = Math.hypot(dx, dz);
