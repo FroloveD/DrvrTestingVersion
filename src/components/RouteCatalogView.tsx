@@ -2,7 +2,7 @@
  * @module components/RouteCatalogView
  * @layer ui
  * @role Интерактивное создание и управление каталогом экзаменационных маршрутов по импортированной OSM-карте.
- * @tests T34 (ядро маршрутизации), Browser Smoke P.
+ * @tests T32 (ядро маршрутизации), Browser Smoke P.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
