@@ -467,7 +467,6 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                       className="w-full h-[280px] touch-none"
                       role="img"
                       aria-label="Карта маршрута. Перетаскивайте маркеры контрольных точек."
-                      onPointerDown={handleCheckpointPointerDown}
                       onPointerMove={handleCheckpointPointerMove}
                       onPointerUp={handleCheckpointPointerUp}
                       onPointerCancel={handleCheckpointPointerUp}
