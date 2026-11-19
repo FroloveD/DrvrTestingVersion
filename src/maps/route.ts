@@ -741,18 +741,29 @@ export function findRoadNetworkPath(
     for (let i = 0; i < ids.length - 1; i++) {
       const u = ids[i], v = ids[i + 1];
       const a = nodes[u], b = nodes[v];
-      const minX = Math.floor((Math.min(a.x, b.x) - pad) / segmentCellSize);
-      const maxX = Math.floor((Math.max(a.x, b.x) + pad) / segmentCellSize);
-      const minZ = Math.floor((Math.min(a.z, b.z) - pad) / segmentCellSize);
-      const maxZ = Math.floor((Math.max(a.z, b.z) + pad) / segmentCellSize);
-      const ref = { road, u, v };
-      for (let cx = minX; cx <= maxX; cx++) {
-        for (let cz = minZ; cz <= maxZ; cz++) {
-          const key = `${cx}:${cz}`;
-          const bucket = segmentBuckets.get(key);
-          if (bucket) bucket.push(ref);
-          else segmentBuckets.set(key, [ref]);
+      const length = Math.hypot(b.x - a.x, b.z - a.z);
+      const parts = Math.max(1, Math.ceil(length / segmentCellSize));
+      const coveredCells = new Set<string>();
+      // Длинная геометрия делится только для индекса; точная проверка остаётся на исходном сегменте.
+      for (let part = 0; part < parts; part++) {
+        const t0 = part / parts, t1 = (part + 1) / parts;
+        const ax = a.x + (b.x - a.x) * t0;
+        const az = a.z + (b.z - a.z) * t0;
+        const bx = a.x + (b.x - a.x) * t1;
+        const bz = a.z + (b.z - a.z) * t1;
+        const minX = Math.floor((Math.min(ax, bx) - pad) / segmentCellSize);
+        const maxX = Math.floor((Math.max(ax, bx) + pad) / segmentCellSize);
+        const minZ = Math.floor((Math.min(az, bz) - pad) / segmentCellSize);
+        const maxZ = Math.floor((Math.max(az, bz) + pad) / segmentCellSize);
+        for (let cx = minX; cx <= maxX; cx++) {
+          for (let cz = minZ; cz <= maxZ; cz++) coveredCells.add(`${cx}:${cz}`);
         }
+      }
+      const ref = { road, u, v };
+      for (const key of coveredCells) {
+        const bucket = segmentBuckets.get(key);
+        if (bucket) bucket.push(ref);
+        else segmentBuckets.set(key, [ref]);
       }
     }
   }
