@@ -155,7 +155,7 @@ requestAnimationFrame(now)
 | `cdt.activeStudent.v1` | `App.tsx` | Имя активного ученика (синтетические демо пишутся на `«Демо (синтетика)»`) |
 | `cdt.instructorName.v1` | `App.tsx` | ФИО инструктора для журнала сверки |
 | `cdt.blindReview.v1` | `App.tsx` | `"1"` / `"0"` — слепой режим (скрывает вердикт симулятора до оценки инструктором) |
-| `cdt.strategy.v1` | `strategy/plan.ts` | Отмеченные чекбоксы следующих действий во вкладке стратегии |
+| `cdt.strategy.v4` | `strategy/plan.ts` | Отмеченные чекбоксы следующих действий во вкладке стратегии |
 | `cdt.licenseNote.v1` | `PrivacyLegalView.tsx` | Текст решения владельца по лицензии |
 | `cdt-checklist-v1` | `AuditView.tsx` | Чек-лист исторического аудита монолита v8 |
 | `cdt.attempts.journal.v1` | `storage/journalStore.ts` | *Устаревший:* автоматически мигрируется в IndexedDB и удаляется |
