@@ -1093,6 +1093,8 @@ export class SceneController {
 
   dispose(): void {
     this.syncPhysicalMirrorMaterials(false, false);
+    this.groundMesh.geometry.dispose();
+    (this.groundMesh.material as THREE.Material).dispose();
     this.disposeGroup(this.worldGroup);
     this.disposeGroup(this.playerRig.root);
     this.trajLineL.geometry.dispose();

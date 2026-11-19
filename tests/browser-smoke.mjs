@@ -704,6 +704,8 @@ try {
   check("L7 предел 42° применяется без сброса заезда или руля",Boolean(at42) && await page.getByRole('button',{name:'Быстрый старт'}).count()===0);
 
   // Управление мышью выключено по умолчанию; газ и руление включаются независимо.
+  // Открываем панель повторно: L7 закрыла её после проверки выворота.
+  await controls.click();
   const mouseSteerToggle = page.getByTestId("mouse-steer-toggle");
   const mouseGasToggle = page.getByTestId("mouse-gas-toggle");
   check("L8 настройки газа и руля мышью изначально выключены",
@@ -773,6 +775,7 @@ try {
   check("L8d включённое удержание ЛКМ >0,4 с включает газ, отпускание выключает его",
     !gasBeforeThreshold && gasAfterThreshold && !gasAfterRelease,
     `до порога=${gasBeforeThreshold}, после=${gasAfterThreshold}, после отпускания=${gasAfterRelease}`);
+  await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
 
   const press = async (button) => {const r=await button.boundingBox();await page.mouse.move(r.x+r.width/2, r.y+r.height/2);await page.mouse.down();};
   await press(gas); const drives=await until(async()=> (await speedOf(page))>=2); await page.mouse.up();
@@ -917,7 +920,11 @@ try {
   await page.mouse.up();
   await sleep(120);
   const movedLot = Number(await lotRect.getAttribute("data-center-x")) !== lotBefore.x || Number(await lotRect.getAttribute("data-center-z")) !== lotBefore.z;
+  // Повторный click гарантирует активное выделение площадки и показ угловых ручек после commit перетаскивания.
+  await lotRect.click();
+  await sleep(80);
   const resize = page.getByTestId("map-lot-resize-e-n");
+  await resize.waitFor({ state: "visible", timeout: 5000 });
   const resizeBox = await resize.boundingBox();
   await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + resizeBox.height / 2);
   await page.mouse.down();
