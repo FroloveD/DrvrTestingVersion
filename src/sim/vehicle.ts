@@ -33,6 +33,7 @@
  * - `predictTrajectoryArc` — прогнозная дуга габаритов (м) для подсказки в режиме инструктора.
  * - `getTrafficLightPhase` / `getPedestrianPose` — детерминированные функции `simTime` для светофоров и пешеходов.
  */
+import { getPlayerCar } from "./playerCar";
 import type {
   CrosswalkDef,
   Gear,
@@ -155,17 +156,60 @@ export function clamp(v: number, min: number, max: number): number {
  * delta — центральный угол (рад): > 0 поворот влево, < 0 поворот вправо.
  * При повороте влево (delta > 0) левое колесо (+1) внутреннее => |угол| больше.
  */
-export function ackermannAngle(side: 1 | -1, delta: number): number {
+export function ackermannAngle(side: 1 | -1, delta: number, geo: CarGeometry = BASE_GEOMETRY): number {
   if (Math.abs(delta) < 1e-6) return 0;
   const turnSign = Math.sign(delta); // +1 влево, -1 вправо
   const cotCenter = 1 / Math.tan(Math.abs(delta));
-  const halfTrackOverBase = CAR.track / (2 * CAR.wheelbase);
+  const halfTrackOverBase = geo.track / (2 * geo.wheelbase);
   // Если side === turnSign, колесо внутреннее (cot меньше -> угол больше)
   const cotWheel = side === turnSign ? cotCenter - halfTrackOverBase : cotCenter + halfTrackOverBase;
   return turnSign * Math.atan(1 / Math.max(0.15, cotWheel));
 }
 
 export const WHEEL_LOCK = { min: 33, max: 42, defaultDeg: CAR.maxInnerDeg, step: 0.5 } as const;
+
+/**
+ * Габариты конкретной машины для столкновений и кинематики. По умолчанию берутся из учебного `CAR`,
+ * поэтому все прежние вызовы (старые реплеи, дебриф, самотесты) остаются побитно совместимыми.
+ */
+export type CarGeometry = {
+  length: number;
+  width: number;
+  wheelbase: number;
+  frontOverhang: number;
+  rearOverhang: number;
+  wheelRadius: number;
+  track: number;
+};
+
+/** Габариты по паспорту машины игрока (см. `sim/playerCar.ts`); `undefined` — учебный Ceed. */
+export function carGeometry(carId?: string | null): CarGeometry {
+  const c = getPlayerCar(carId);
+  return {
+    length: c.length,
+    width: c.width,
+    wheelbase: c.wheelbase,
+    frontOverhang: c.frontOverhang,
+    rearOverhang: c.rearOverhang,
+    wheelRadius: c.wheelRadius,
+    track: c.track,
+  };
+}
+
+const BASE_GEOMETRY: CarGeometry = {
+  length: CAR.length,
+  width: CAR.width,
+  wheelbase: CAR.wheelbase,
+  frontOverhang: CAR.frontOverhang,
+  rearOverhang: CAR.rearOverhang,
+  wheelRadius: CAR.wheelRadius,
+  track: CAR.track,
+};
+
+/** Габариты для кадра рендера/дебриифа: по машине заезда либо эталонный Ceed. */
+export function carGeometryFor(carId?: string | null): CarGeometry {
+  return carId ? carGeometry(carId) : BASE_GEOMETRY;
+}
 
 /** В том числе для старых записей и повреждённых настроек из хранилища. */
 export function normalizeWheelLock(value: unknown): number {
@@ -456,16 +500,21 @@ export function computeEngineAccel(
 }
 
 /** Четыре угла кузова автомобиля в мировых координатах: [FL, FR, RR, RL]. */
-export function getCarCorners(x: number, z: number, h: number): [Vec2, Vec2, Vec2, Vec2] {
+export function getCarCorners(
+  x: number,
+  z: number,
+  h: number,
+  geo: CarGeometry = BASE_GEOMETRY
+): [Vec2, Vec2, Vec2, Vec2] {
   // x, z — середина колёсной базы. Смещение геометрического центра кузова вперёд:
-  const centerShiftZ = (CAR.frontOverhang - CAR.rearOverhang) / 2; // +0.05 м
+  const centerShiftZ = (geo.frontOverhang - geo.rearOverhang) / 2; // +0.05 м (Ceed)
   const fx = Math.sin(h);
   const fz = Math.cos(h);
   const lx = Math.cos(h);
   const lz = -Math.sin(h);
 
-  const halfL = CAR.length / 2;
-  const halfW = CAR.width / 2;
+  const halfL = geo.length / 2;
+  const halfW = geo.width / 2;
   const bodyX = x + fx * centerShiftZ;
   const bodyZ = z + fz * centerShiftZ;
 

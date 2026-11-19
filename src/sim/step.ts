@@ -19,6 +19,7 @@ import type {
 } from "./types";
 import {
   ackermannAngle,
+  carGeometry,
   AUTO_DOWN,
   AUTO_DOWN_KICK,
   AUTO_SHIFT_DURATION_S,
@@ -234,8 +235,8 @@ export function stepSimulation(
   s.swDeg = clamp(input.steerWheelDeg, -540, 540);
   s.maxInnerWheelDeg = normalizeWheelLock(calibration.maxInnerWheelDeg);
   s.steer = wheelDegToSteerRad(s.swDeg, s.maxInnerWheelDeg);
-  s.steerLeft = ackermannAngle(1, s.steer);
-  s.steerRight = ackermannAngle(-1, s.steer);
+  s.steerLeft = ackermannAngle(1, s.steer, carGeometry(s.carId));
+  s.steerRight = ackermannAngle(-1, s.steer, carGeometry(s.carId));
 
   // Если экзамен прекращён мгновенно в строгом режиме — машина остановлена
   if (s.finished && s.finishedReason === "immediate_fail") {
@@ -324,6 +325,8 @@ export function stepSimulation(
 
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
   const carPhysics = playerCarPhysics(s.carId);
+  // Габариты именно этой машины: клиренс в боксах, ширина коридора, свес до стоп-линии
+  const carGeo = carGeometry(s.carId);
   const isForwardGear = s.gear === "D" || isManualGear(s.gear);
   const activeForwardGear = isForwardGear ? s.autoSubGear : 0;
   const creepAccel = computeIdleCreepAccel(
@@ -423,14 +426,15 @@ export function stepSimulation(
 
     const nextX = clamp(s.x + Math.sin(s.h) * ds, world.bounds.minX, world.bounds.maxX);
     const nextZ = clamp(s.z + Math.cos(s.h) * ds, world.bounds.minZ, world.bounds.maxZ);
-    const nextH = s.h + (ds / CAR.wheelbase) * Math.tan(s.steer);
+    // База колёс из паспорта машины: длинный Sorento описывает тот же угол шире, чем Picanto
+    const nextH = s.h + (ds / carGeo.wheelbase) * Math.tan(s.steer);
     if (isValidBoundaryPolygon(world.boundaryPolygon)) {
       const polyPos = clampCarToWorldBoundary(
         nextX,
         nextZ,
         nextH,
-        CAR.width * 0.5,
-        CAR.length * 0.5,
+        carGeo.width * 0.5,
+        carGeo.length * 0.5,
         world.bounds,
         world.boundaryPolygon
       );
@@ -442,7 +446,7 @@ export function stepSimulation(
     }
     s.h = nextH;
 
-    const { hit, checked } = grid.queryCarHit(s.x, s.z, s.h);
+    const { hit, checked } = grid.queryCarHit(s.x, s.z, s.h, carGeo);
     gridChecks = Math.max(gridChecks, checked);
     if (hit) {
       hitThisStep = true;
@@ -468,7 +472,7 @@ export function stepSimulation(
   }
 
   // Колёса и крен/тангаж кузова
-  s.wheelSpin += (s.v * dt) / CAR.wheelRadius;
+  s.wheelSpin += (s.v * dt) / carGeo.wheelRadius;
   const aLong = dt > 0 ? clamp((s.v - s.prevV) / dt, -6, 6) : 0;
   s.prevV = s.v;
   if (aLong < -7.2 && s.brakePos > 0.85 && Math.abs(s.v) > 4.2 && s.speedingCooldown <= 0) {
@@ -515,7 +519,7 @@ export function stepSimulation(
   }
 
   // Детектор пересечения сплошной линии разметки парковочного бокса
-  const crossedBay = findBayLineCross(s.x, s.z, s.h, world.bays);
+  const crossedBay = findBayLineCross(s.x, s.z, s.h, world.bays, carGeo);
   if (crossedBay) {
     if (!s.inLineCross) {
       emit("line_cross", `Наезд габаритом на линию разметки (${crossedBay.label})`);
@@ -533,7 +537,7 @@ export function stepSimulation(
   }
 
   // Проверка светофоров и стоп-линий
-  const frontDist = CAR.wheelbase / 2 + CAR.frontOverhang;
+  const frontDist = carGeo.wheelbase / 2 + carGeo.frontOverhang;
   const noseX = s.x + Math.sin(s.h) * frontDist;
   const noseZ = s.z + Math.cos(s.h) * frontDist;
 
@@ -607,7 +611,7 @@ export function stepSimulation(
   }
 
   // Проверка парковочного бокса
-  const fullBay = findCompletedBay(s.x, s.z, s.h, world.bays);
+  const fullBay = findCompletedBay(s.x, s.z, s.h, world.bays, carGeo);
   const partialBay = fullBay ?? findBayUnderCarCenter(s.x, s.z, world.bays);
   s.activeBayId = partialBay ? partialBay.id : null;
 

@@ -97,7 +97,7 @@ import {
 } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
-import { SpatialGrid } from "./spatialGrid";
+import { isCarInsideBay, SpatialGrid } from "./spatialGrid";
 import { radioStationsFor } from "../audio/radioCatalog";
 import { cockpitFramingFor, cockpitWheelBand, projectCockpitPoint } from "../render/cockpitFraming";
 import { HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
@@ -107,6 +107,8 @@ import type { Gear, SimEvent } from "./types";
 import {
   ackermannAngle,
   CAR,
+  carGeometry,
+  getCarCorners,
   centralSteerLimit,
   clamp,
   ENGINE_IDLE_RPM,
@@ -2007,6 +2009,97 @@ export const extraCases: SelfTestCase[] = [
       }
 
       return `Ceed: обод ${(band.topV * 100).toFixed(0)}–${(band.bottomV * 100).toFixed(0)} % · ступица ${(band.hubV * 100).toFixed(0)} % · салонное зеркало ${(mirror.v * 100).toFixed(0)} % · FOV ${framing.fovDeg.toFixed(0)}°`;
+    },
+  },
+  {
+    id: "T40",
+    suite: "vehicle",
+    name: "Габариты машины в физике: клиренс в боксе, радиус разворота и углы Аккермана по паспорту",
+    fn: () => {
+      const ceed = carGeometry("ceed");
+      const pic = carGeometry("picanto");
+      const sor = carGeometry("sorento");
+      // Эталон: без carId геометрия побитно равна прежним константам Ceed
+      const base = carGeometry(undefined);
+      assert(
+        base.length === CAR.length && base.width === CAR.width && base.wheelbase === CAR.wheelbase,
+        "Без машины геометрия обязана совпадать с константами CAR (совместимость старых реплеев)"
+      );
+      assert(
+        Math.abs(ceed.length - CAR.length) < 1e-9 && Math.abs(ceed.width - CAR.width) < 1e-9,
+        "Ceed из парка обязан совпадать с CAR по габаритам"
+      );
+      assert(
+        pic.length < ceed.length && ceed.length < sor.length && pic.width < sor.width,
+        "Габариты растут от Picanto к Sorento"
+      );
+
+      // Углы кузова реально масштабируются: Sorento заметно крупнее Picanto по площади
+      const area = (g: ReturnType<typeof carGeometry>) => {
+        const c = getCarCorners(0, 0, 0, g);
+        let s = 0;
+        for (let i = 0; i < 4; i++) {
+          const a = c[i];
+          const b = c[(i + 1) % 4];
+          s += a.x * b.z - b.x * a.z;
+        }
+        return Math.abs(s) / 2;
+      };
+      assert(
+        Math.abs(area(ceed) - CAR.length * CAR.width) < 0.02,
+        "Площадь кузова Ceed из углов обязана равняться length × width"
+      );
+      // Паспортные площади: Ceed 4,31×1,80 = 7,76 м², Sorento 4,81×1,90 = 9,14 м² (+18 %)
+      assert(area(sor) > area(ceed) * 1.15, "Sorento обязан быть заметно крупнее Ceed по площади");
+
+      // Бокс 2,5×5,3 м: Picanto влезает, Sorento — нет (это и есть смысл реальных пропорций)
+      const bay = {
+        id: 1040,
+        label: "Тестовый бокс",
+        cx: 0,
+        cz: 0,
+        h: 0,
+        width: 2.5,
+        length: 5.3,
+        kind: "perpendicular" as const,
+        openSide: "front" as const,
+        occupied: false,
+      };
+      assert(isCarInsideBay(0, 0, 0, bay, 0.04, pic), "Picanto обязан влезать в стандартный бокс 2,5×5,3 м");
+      assert(isCarInsideBay(0, 0, 0, bay, 0.04, ceed), "Ceed обязан влезать в стандартный бокс 2,5×5,3 м");
+      assert(isCarInsideBay(0, 0, 0, bay, 0.04, sor), "Sorento обязан влезать в стандартный бокс 2,5×5,3 м");
+      // Узкий компактный карман 1,75×3,9 м: Picanto встаёт, Ceed и Sorento — нет (реальные пропорции работают)
+      const tightBay = { ...bay, id: 1041, width: 1.75, length: 3.9 };
+      assert(
+        isCarInsideBay(0, 0, 0, tightBay, 0.04, pic),
+        "Picanto 1,595×3,595 м обязан влезать в узкий карман 1,75×3,9 м"
+      );
+      assert(
+        !isCarInsideBay(0, 0, 0, tightBay, 0.04, ceed),
+        "Ceed шириной 1,80 м не должен влезать в узкий карман 1,75 м — это проверяет габариты, а не константы"
+      );
+      assert(
+        !isCarInsideBay(0, 0, 0, tightBay, 0.04, sor),
+        "Sorento не должен влезать в узкий карман — габариты обязаны влиять на зачёт упражнения"
+      );
+
+      // Аккерман: у Picanto (малая колея при короткой базе) внутреннее колесо повёрнуто сильнее, чем у Sorento
+      const delta = 0.35;
+      const picInner = Math.abs(ackermannAngle(1, delta, pic));
+      const sorInner = Math.abs(ackermannAngle(1, delta, sor));
+      assert(picInner > sorInner, "Узкая короткая машина требует большего угла внутреннего колеса");
+      // Без геометрии — ровно прежнее значение (нулевой регресс)
+      assert(
+        Math.abs(ackermannAngle(1, delta) - ackermannAngle(1, delta, carGeometry("ceed"))) < 1e-12,
+        "Аккерман для Ceed не должен измениться ни на йоту"
+      );
+
+      // Радиус разворота по базе: короткий Picanto разворачивается круче
+      const radius = (g: ReturnType<typeof carGeometry>) => g.wheelbase / Math.tan(delta) + g.width / 2;
+      // При 20° поворота: Picanto ≈ 7,4 м против Sorento ≈ 8,7 м — разница ровно из баз и колеи
+      assert(radius(pic) < radius(sor) * 0.9, "Picanto обязан разворачиваться заметно круче Sorento");
+
+      return `Ceed ${ceed.length.toFixed(2)}×${ceed.width.toFixed(2)} м · Picanto влезает в карман 1,75 м, Ceed/Sorento нет · Аккерман ${(picInner * 57.3).toFixed(1)}° против ${(sorInner * 57.3).toFixed(1)}°`;
     },
   },
 ];

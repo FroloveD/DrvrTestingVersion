@@ -7,6 +7,7 @@
  */
 import * as THREE from "three";
 import type { ParkedModelKey } from "../sim/types";
+import { getPlayerCar } from "../sim/playerCar";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
 
 export type DetailedCarRig = {
@@ -394,7 +395,14 @@ export function disposeSharedVehicleTextures(): void {
   headlightBeamTexCache = null;
 }
 
-/** Строит детализированный учебный Kia Ceed JD (`isPlayer = true`) или автомобиль припаркованного автопарка. */
+/**
+ * Строит детализированный автомобиль (`isPlayer = true` — машина игрока с полным салоном)
+ * или припаркованный автомобиль автопарка.
+ *
+ * Для машины игрока `model` — это её паспортный ключ парка (Picanto, Rio, Ceed, XCeed, Sorento):
+ * габариты кузова, база, колея, радиус колеса и предел выворота берутся из `sim/playerCar.ts`,
+ * поэтому риг совпадает с физикой (столкновения, клиренс в боксе, кадр из салона).
+ */
 export function buildDetailedCar(
   model: ParkedModelKey,
   bodyColor: number,
@@ -409,14 +417,25 @@ export function buildDetailedCar(
     rearOverlayTex: THREE.CanvasTexture;
   }
 ): DetailedCarRig {
-  const dim = VEHICLE_DIMS[model];
+  // Машина игрока строится по своему паспорту парка, припаркованная — по прежним размерам модели
+  const playerSpec = isPlayer ? getPlayerCar(model) : null;
+  const dim = playerSpec
+    ? {
+        length: playerSpec.length,
+        width: playerSpec.width,
+        height: playerSpec.height,
+        wheelbase: playerSpec.wheelbase,
+      }
+    : VEHICLE_DIMS[model];
   const L = dim.length;
   const W = dim.width;
   const H = dim.height;
   const wb = dim.wheelbase;
-  const wr = isPlayer ? CAR.wheelRadius : model === "sorento" ? 0.35 : 0.3;
-  const ww = isPlayer ? CAR.wheelWidth : 0.205;
-  const centerShiftZ = isPlayer ? (CAR.frontOverhang - CAR.rearOverhang) / 2 : 0;
+  const wr = isPlayer && playerSpec ? playerSpec.wheelRadius : model === "sorento" ? 0.35 : 0.3;
+  const ww = isPlayer && playerSpec ? playerSpec.wheelWidth : 0.205;
+  const frontOverhang = playerSpec ? playerSpec.frontOverhang : CAR.frontOverhang;
+  const rearOverhang = playerSpec ? playerSpec.rearOverhang : CAR.rearOverhang;
+  const centerShiftZ = isPlayer ? (frontOverhang - rearOverhang) / 2 : 0;
 
   const root = new THREE.Group();
   const chassis = new THREE.Group();

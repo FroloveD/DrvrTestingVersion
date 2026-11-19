@@ -45,6 +45,7 @@ import {
   type HeadUnitState,
 } from "../render/cockpitDisplays";
 import { detentLabel, type HeadDetentId } from "../render/headLook";
+import { getPlayerCar } from "../sim/playerCar";
 import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 import { buildScenarioWorld } from "../scenarios/catalog";
@@ -75,7 +76,7 @@ import type {
   WorldData,
 } from "../sim/types";
 import {
-  CAR,
+  carGeometry,
   clamp,
   ENGINE_REDLINE_RPM,
   FIXED_DT,
@@ -252,8 +253,8 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
     ctx.restore();
   }
 
-  // Автомобиль игрока
-  const corners = getCarCorners(s.x, s.z, s.h);
+  // Автомобиль игрока — по габаритам выбранной машины, а не по эталонному Ceed
+  const corners = getCarCorners(s.x, s.z, s.h, carGeometry(s.carId));
   ctx.fillStyle = "#f5b942";
   ctx.beginPath();
   corners.forEach((c, i) => (i === 0 ? ctx.moveTo(c.x, c.z) : ctx.lineTo(c.x, c.z)));
@@ -1056,10 +1057,11 @@ export function SimulatorView({
    * Без поля в сценарии — весь каталог, поэтому старые заезды ведут себя как раньше.
    */
   // Источник истины — мир текущего заезда (для сценариев он собирается из customDef, для встроенных — каталог)
-  // Смена машины в сценарии пересаживает камеру сразу, без перезагрузки мира
+  // Смена машины в сценарии пересаживает игрока сразу: пересобирается кузов по паспорту
+  // (габариты, база, колея, цвет) и пересчитывается кадр салона — без перезагрузки мира.
   useEffect(() => {
     const carId = scenarioId === "custom" ? customDef.playerCarId : undefined;
-    sceneCtrlRef.current?.setPlayerCarFraming(carId);
+    sceneCtrlRef.current?.setPlayerCarModel(carId);
   }, [scenarioId, customDef.playerCarId]);
 
   const radioStations = useMemo(
@@ -1334,8 +1336,8 @@ export function SimulatorView({
       ctrl = new SceneController(canvas);
       ctrl.applyQuality(optsRef.current.quality);
       ctrl.loadWorld(worldRef.current);
-      // Садим камеру водителя по паспорту машины сценария (кадрировка T39), а не в общий «Ceed-кадр»
-      ctrl.setPlayerCarFraming(worldRef.current.playerCarId);
+      // Кузов и кадр водителя — по паспорту машины сценария, а не в общий «Ceed-кадр»
+      ctrl.setPlayerCarModel(worldRef.current.playerCarId);
       ctrl.resize(box.clientWidth, box.clientHeight);
       sceneCtrlRef.current = ctrl;
       setWebglFallback(false);
@@ -4098,7 +4100,10 @@ export function SimulatorView({
           </button>
           {!footerCollapsed && (
             <>
-              <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°</Chip>
+              <Chip tone="neutral">
+                {getPlayerCar(hud.state.carId).name} · {getPlayerCar(hud.state.carId).length.toFixed(2)}×
+                {getPlayerCar(hud.state.carId).width.toFixed(2)} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°
+              </Chip>
               <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
                 Правила: {ruleSet.version} ({ruleSet.status === "instructor_signed" ? "подписано" : "демо"})
               </Chip>

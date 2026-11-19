@@ -56,11 +56,13 @@ import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
   CameraMode,
   ObstacleBox,
+  ParkedModelKey,
   ParkingBay,
   QualityPreset,
   SimState,
   WorldData,
 } from "../sim/types";
+import { getPlayerCar } from "../sim/playerCar";
 import {
   CAR,
   clamp,
@@ -160,7 +162,9 @@ export class SceneController {
   private readonly bayVisuals: BayVisual[] = [];
   private readonly cockpitDisplays: CockpitDisplayController;
   private readonly envMapRT: THREE.WebGLRenderTarget | null = null;
-  private readonly playerRig: CarRig;
+  private playerRig: CarRig;
+  /** Машина, под которую собран риг игрока (для пересборки при смене в сценарии). */
+  private playerRigCarId: ParkedModelKey = "ceed";
   private isLargeWorld = false;
   private totalBuildings = 0;
   private shadowDirty = true;
@@ -342,31 +346,9 @@ export class SceneController {
 
     this.scene.add(this.worldGroup);
 
-    // Детализированный учебный Kia Ceed JD (лак clearcoat, ДХО, живой салон Supervision, 7" ШГУ + R-камера, 3D-зеркала)
-    this.playerRig = buildDetailedCar(
-      "ceed",
-      0xd97706,
-      true,
-      shadowTex,
-      learnerTex,
-      playerPlateTex,
-      this.cockpitDisplays.clusterTex,
-      OWN_MIRROR_HARDWARE_LAYER,
-      {
-        headUnitTex: this.cockpitDisplays.headUnitTex,
-        rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
-      }
-    );
-    this.playerRig.root.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
-        obj.layers.set(PLAYER_EXTERIOR_LAYER);
-      }
-    });
-    // Основной вид сохраняет всю машину, включая зеркала, водителя и светотехнику;
-    // raycaster 3D-рычага АКПП также слушает слой кузова/салона PLAYER_EXTERIOR_LAYER.
-    this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
-    this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
-    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
+    // Детализированный автомобиль игрока (лак clearcoat, ДХО, живой салон Supervision, 7" ШГУ + R-камера, 3D-зеркала).
+    // Модель по умолчанию — учебный Ceed JD; сценарий может пересобрать риг под другую машину парка.
+    this.playerRig = this.buildPlayerRigWith("ceed");
     this.scene.add(this.playerRig.root);
 
     // Линии прогнозной траектории Аккермана
@@ -1578,6 +1560,55 @@ export class SceneController {
       dst[to + 3] = 255;
     }
     frame.ctx.putImageData(frame.image, 0, 0);
+  }
+
+  /**
+   * Собирает риг машины игрока по паспорту парка и выдаёт слои так же, как при первой сборке:
+   * внешние меши на `PLAYER_EXTERIOR_LAYER`, зеркальная оптика — на `OWN_MIRROR_HARDWARE_LAYER`.
+   */
+  private buildPlayerRigWith(carId: ParkedModelKey): CarRig {
+    const spec = getPlayerCar(carId);
+    const rig = buildDetailedCar(
+      carId,
+      spec.color,
+      true,
+      this.sharedTextures[1] as THREE.CanvasTexture,
+      this.sharedTextures[2] as THREE.CanvasTexture,
+      this.sharedTextures[4] as THREE.CanvasTexture,
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      {
+        headUnitTex: this.cockpitDisplays.headUnitTex,
+        rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
+      }
+    );
+    rig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
+        obj.layers.set(PLAYER_EXTERIOR_LAYER);
+      }
+    });
+    this.playerRigCarId = carId;
+    return rig;
+  }
+
+  /**
+   * Пересаживает игрока в другую машину сценария: освобождает старый риг и собирает новый
+   * по паспорту (габариты, база, колея, цвет). Камера салона пересчитывается тем же вызовом.
+   */
+  setPlayerCarModel(carId: string | null | undefined): void {
+    const next = (carId ?? "ceed") as ParkedModelKey;
+    if (next === this.playerRigCarId) {
+      this.setPlayerCarFraming(next);
+      return;
+    }
+    const old = this.playerRig;
+    this.scene.remove(old.root);
+    this.disposeGroup(old.root);
+    this.playerRig = this.buildPlayerRigWith(next);
+    this.scene.add(this.playerRig.root);
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.shadowDirty = true;
+    this.setPlayerCarFraming(next);
   }
 
   private updateCamera(s: SimState, mode: CameraMode): void {
