@@ -55,8 +55,7 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
           </div>
           <h2 className="text-2xl font-extrabold tracking-tight">Стратегия CityDrivingTraining</h2>
           <p className="text-[13px] text-[#9bafbc] mt-1 max-w-3xl">
-            Улучшенная стратегия по итогам этапов 0–3: что уже доказано кодом, что осталось и в каком порядке.
-            Главный сдвиг — от «строить симулятор» к «доказать доверие и выйти в школы».
+            Актуальный план ветки exam-routes: сначала надёжность крупных OSM-сцен и каталог маршрутов, затем калибровка и пилот.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -94,14 +93,14 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
           </div>
           <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2.5">
             {[
-              "Детерминированное ядро: 29/29 автотестов, реплей совпадает побитно",
+              "Детерминированное ядро: 31/31 автотестов, реплей совпадает побитно",
               "Офлайн-бандл без внешних запросов, холодный старт P и блокировки АКПП",
               "Правила как данные, golden-набор с checksum, сверка с инструкторами (ДИ Уилсона)",
-              "Город: OSM, светофоры, стоп-линии, пешеходы и маршруты по реальной улице",
-              "Конструктор «Свой сценарий» с валидацией и 2D-схемой",
+              "OSM: XML / Overpass JSON / GeoJSON, one-way, roundabout, multipolygon и обрезка по полигону",
+              "Редактор: произвольные границы, дороги по точкам, скругления, метрическая сетка и 2D/3D-сборка",
               "Журнал в IndexedDB (до 300 заездов), статистика учеников, USB-руль и выворот 33–42°",
               "Правовые блоки: атрибуция ODbL, дисклеймер, бэкап, удаление данных",
-              "Браузерный смоук A–N: заезд переживает вкладки, HANDOFF синхронен с UI",
+              "CI: Playwright A–O проходит по HTTP и file://; Core / Types / Docs / Offline gate зелёный",
             ].map((t, i) => (
               <div key={i} className="flex gap-2.5 text-[12px] leading-relaxed text-[#b9c9d3]">
                 <span className="text-[#52d6bd] mt-0.5">✓</span>
@@ -115,14 +114,11 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
             <Icon name="alert" size={16} /> Главный риск стратегии
           </div>
           <p className="text-[13px] leading-relaxed text-[#b9c9d3]">
-            Шкала оценки пока <strong className="text-white">не подтверждена инструктором</strong>: набор правил
-            имеет статус <span className="mono text-[#f5b942]">unvalidated</span>. Пока это не исправлено,
-            продукт остаётся учебным тренажёром, а не инструментом подготовки к экзамену. Поэтому калибровка —
-            пункт №1, а не «когда-нибудь».
+            Главная текущая инженерная задача — проверить корректность построения крупных OSM-сцен и завершить каталог экзаменационных маршрутов. Отдельный продуктовый риск остаётся: правила оценки имеют статус <span className="mono text-[#f5b942]">unvalidated</span> до сверки и подписи инструкторов. Поэтому пилот и заявления о соответствии экзамену отложены до калибровки.
           </p>
           <div className="mt-4 pt-3 border-t hairline flex items-center justify-between text-[11px] text-[#8fa2ae]">
             <span>Следующая фаза</span>
-            <span className="mono text-[#f5b942]">4 · Пилот и калибровка</span>
+            <span className="mono text-[#f5b942]">4 · Надёжность OSM и производительность</span>
           </div>
         </div>
       </div>
