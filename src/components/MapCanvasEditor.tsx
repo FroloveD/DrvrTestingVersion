@@ -64,6 +64,20 @@ type DragState =
       before: CustomScenarioDef;
     }
   | {
+      mode: "lot_move";
+      offsetX: number;
+      offsetZ: number;
+      moved: boolean;
+      before: CustomScenarioDef;
+    }
+  | {
+      mode: "lot_resize";
+      fixedX: number;
+      fixedZ: number;
+      moved: boolean;
+      before: CustomScenarioDef;
+    }
+  | {
       mode: "pan";
       startClientX: number;
       startClientY: number;
@@ -211,7 +225,7 @@ function SignGlyph({ sign, unit, selected }: { sign: RoadSignDef; unit: number; 
 }
 
 const TOOL_HINTS: Record<EditorTool, string> = {
-  select: "Клик — выбрать объект · перетаскивание — перенос · янтарный кружок — поворот · пустое место — панорама",
+  select: "Площадка: перетаскивание — перенос, угловые ручки — размер · объекты — перенос · пустое место — панорама",
   pan: "Зажмите кнопку мыши (или палец) и перетаскивайте карту · колесо — масштаб",
   start: "Кликните по карте, чтобы перенести стартовую позицию автомобиля",
   sign: "Кликните по карте, чтобы установить выбранный дорожный знак (затем можно сразу перетащить)",
@@ -242,6 +256,7 @@ export function MapCanvasEditor({
 
   const [vb, setVb] = useState<ViewBox>(() => computeFitViewBox(def.bounds));
   const [cursor, setCursor] = useState<{ x: number; z: number } | null>(null);
+  const [lotSelected, setLotSelected] = useState(false);
 
   useEffect(() => {
     setVb(computeFitViewBox(def.bounds));
@@ -325,8 +340,41 @@ export function MapCanvasEditor({
     }));
   }, [def, selection]);
 
+  const beginLotMove = (e: React.PointerEvent<SVGRectElement>) => {
+    if (e.button !== 0 || tool !== "select") return;
+    e.stopPropagation();
+    const pt = clientToWorld(e.clientX, e.clientY);
+    if (!pt) return;
+    setLotSelected(true);
+    onSelect(null);
+    svgRef.current?.setPointerCapture?.(e.pointerId);
+    dragRef.current = {
+      mode: "lot_move",
+      offsetX: (def.lotCenterX ?? 0) - pt.x,
+      offsetZ: (def.lotCenterZ ?? 0) - pt.z,
+      moved: false,
+      before: def,
+    };
+  };
+
+  const beginLotResize = (e: React.PointerEvent<SVGCircleElement>, cornerX: number, cornerZ: number) => {
+    if (e.button !== 0 || tool !== "select") return;
+    e.stopPropagation();
+    const cx = def.lotCenterX ?? 0;
+    const cz = def.lotCenterZ ?? 0;
+    svgRef.current?.setPointerCapture?.(e.pointerId);
+    dragRef.current = {
+      mode: "lot_resize",
+      fixedX: cx - cornerX * def.lotHalfX,
+      fixedZ: cz - cornerZ * def.lotHalfZ,
+      moved: false,
+      before: def,
+    };
+  };
+
   const beginObjectDrag = (e: React.PointerEvent, target: EditorSelection) => {
     if (e.button === 1 || tool === "pan") return;
+    setLotSelected(false);
     // В режиме добавления нового объекта клик по карте ставит новый объект, а в select — тянет существующий
     if (tool !== "select") return;
     e.stopPropagation();
@@ -381,6 +429,7 @@ export function MapCanvasEditor({
     if (e.button !== 0) return;
 
     if (tool === "select") {
+      setLotSelected(false);
       onSelect(null);
       svgRef.current?.setPointerCapture?.(e.pointerId);
       dragRef.current = {
@@ -441,6 +490,34 @@ export function MapCanvasEditor({
 
     if (!pt) return;
 
+    if (drag.mode === "lot_move") {
+      const next = {
+        ...defRef.current,
+        lotCenterX: snapCoord(pt.x + drag.offsetX, snapStep),
+        lotCenterZ: snapCoord(pt.z + drag.offsetZ, snapStep),
+      };
+      drag.moved = true;
+      onLiveChange(next);
+      return;
+    }
+
+    if (drag.mode === "lot_resize") {
+      const x = snapCoord(pt.x, snapStep);
+      const z = snapCoord(pt.z, snapStep);
+      const dx = x - drag.fixedX;
+      const dz = z - drag.fixedZ;
+      const next = {
+        ...defRef.current,
+        lotCenterX: Number(((x + drag.fixedX) / 2).toFixed(2)),
+        lotCenterZ: Number(((z + drag.fixedZ) / 2).toFixed(2)),
+        lotHalfX: Math.max(5, Number((Math.abs(dx) / 2).toFixed(2))),
+        lotHalfZ: Math.max(5, Number((Math.abs(dz) / 2).toFixed(2))),
+      };
+      drag.moved = true;
+      onLiveChange(next);
+      return;
+    }
+
     if (drag.mode === "move") {
       const next = moveSelected(
         defRef.current,
@@ -479,7 +556,7 @@ export function MapCanvasEditor({
     } catch {
       // указатель уже освобождён
     }
-    if (drag && (drag.mode === "move" || drag.mode === "rotate") && drag.moved) {
+    if (drag && (drag.mode === "move" || drag.mode === "rotate" || drag.mode === "lot_move" || drag.mode === "lot_resize") && drag.moved) {
       onCommitChange(defRef.current, drag.before);
     }
   };
@@ -660,16 +737,38 @@ export function MapCanvasEditor({
 
           {/* Базовая асфальтовая площадка автодрома */}
           {def.useLotSurface !== false && (
-            <rect
-              x={-def.lotHalfX}
-              y={-def.lotHalfZ}
-              width={def.lotHalfX * 2}
-              height={def.lotHalfZ * 2}
-              fill="#19232e"
-              stroke="#2a3948"
-              strokeWidth={thin}
-              style={{ pointerEvents: "none" }}
-            />
+            <g data-testid="map-lot-surface">
+              <rect
+                x={-(def.lotCenterX ?? 0) - def.lotHalfX}
+                y={-(def.lotCenterZ ?? 0) - def.lotHalfZ}
+                width={def.lotHalfX * 2}
+                height={def.lotHalfZ * 2}
+                fill={lotSelected ? "#31546a" : "#19232e"}
+                fillOpacity={lotSelected ? 0.88 : 1}
+                stroke={lotSelected ? "#f5b942" : "#2a3948"}
+                strokeWidth={lotSelected ? thin * 2 : thin}
+                data-center-x={def.lotCenterX ?? 0}
+                data-center-z={def.lotCenterZ ?? 0}
+                data-half-x={def.lotHalfX}
+                data-half-z={def.lotHalfZ}
+                className={tool === "select" ? "cursor-move" : undefined}
+                onPointerDown={beginLotMove}
+              />
+              {lotSelected && tool === "select" && ([-1, 1] as const).flatMap((cx) => ([-1, 1] as const).map((cz) => (
+                <circle
+                  key={`lot-resize-${cx}-${cz}`}
+                  data-testid={`map-lot-resize-${cx > 0 ? "e" : "w"}-${cz > 0 ? "n" : "s"}`}
+                  cx={-(def.lotCenterX ?? 0) - cx * def.lotHalfX}
+                  cy={-(def.lotCenterZ ?? 0) - cz * def.lotHalfZ}
+                  r={Math.max(0.85, signUnit * 0.72)}
+                  fill="#f5b942"
+                  stroke="#101820"
+                  strokeWidth={thin * 1.5}
+                  className="cursor-nwse-resize"
+                  onPointerDown={(e) => beginLotResize(e, cx, cz)}
+                />
+              )))}
+            </g>
           )}
 
           {/* Сегменты дорог (импорт OSM и собственные) */}
