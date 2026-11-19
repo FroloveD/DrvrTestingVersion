@@ -304,7 +304,7 @@ export default function App() {
 
   const navItems: Array<{ id: TabId; label: string; short: string; icon: string; badge?: string; badgeTone?: "ok" | "bad" }> = [
     { id: "sim", label: "3D-Тренажёр", short: "Тренажёр", icon: "car" },
-    { id: "custom", label: "Сценарии", short: "Сценарии", icon: "file" },
+    { id: "custom", label: "Свой сценарий", short: "Сценарии", icon: "file" },
     {
       id: "debrief",
       label: "Разбор и Реплей", short: "Разбор",
