@@ -31,12 +31,12 @@ export const STRATEGY_PHASES: StrategyPhase[] = [
     done: [
       "Монолит v8 разделён на модули sim / scoring / maps / scenarios / analytics / storage / strategy / render / input",
       "Фиксированный шаг 1/60 с и воспроизводимый RLE-реплей",
-      "31 автотест ядра T01–T31 и браузерный Playwright smoke A–O",
+      "33 автотеста ядра T01–T33 и браузерный Playwright smoke A–P",
       "Самодостаточный dist/index.html без runtime-запросов к внешним CDN",
       "GitHub Actions: TypeScript, core tests, документация, offline bundle и HTTP/file:// browser smoke",
     ],
     remaining: [],
-    metric: "31/31 тестов ядра, A–O, TypeScript, production build и offline gate проходят в CI",
+    metric: "33/33 тестов ядра, A–P, TypeScript, production build и offline gate проходят в CI",
   },
   {
     id: "ph1",
