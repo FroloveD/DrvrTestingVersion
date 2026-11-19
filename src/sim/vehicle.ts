@@ -320,7 +320,7 @@ export function computeEngineAccel(
     const revKmh = Math.max(0, -v * 3.6);
     if (revKmh >= MAX_REVERSE_KMH) return 0;
     const factor = clamp(1 - revKmh / (MAX_REVERSE_KMH + 1.2), 0.14, 1);
-    return -2.3 * th * factor;
+    return -2.45 * Math.pow(th, 0.65) * factor;
   }
   const activeGear = clamp(gear === "D" ? autoSubGear : Number(gear) || 1, 1, MAX_FORWARD_GEAR);
   const fwdKmh = Math.max(0, v * 3.6);

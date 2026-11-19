@@ -260,10 +260,10 @@ export function stepSimulation(
     s.reverseCount = 1;
   }
 
-  // Плавная электронная дроссельная заслонка (ETC) и пауза переключения 6-ст. КПП Shiftronic
+  // Плавная электронная дроссельная заслонка Kefico ETC (~0,1 с) и пауза переключения 6-ст. КПП
   const throttleCmd = s.engineOn ? clamp(input.throttle, 0, 1) : 0;
   const brake = clamp(input.brake, 0, 1);
-  const thRate = throttleCmd > s.throttlePos ? 4.0 : 6.2;
+  const thRate = throttleCmd > s.throttlePos ? 10.5 : 8.5;
   s.throttlePos = clamp(
     s.throttlePos + (throttleCmd - s.throttlePos) * Math.min(1, dt * thRate),
     0,

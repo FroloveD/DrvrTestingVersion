@@ -1971,6 +1971,14 @@ export function SimulatorView({
                       key={g}
                       type="button"
                       onClick={() => setGear(g)}
+                      onContextMenu={
+                        isDriveSlot
+                          ? (e) => {
+                              e.preventDefault();
+                              shiftGear(1);
+                            }
+                          : undefined
+                      }
                       title={
                         g === "P"
                           ? "P (Parking) — стоянка, тяги нет. Включается только на остановке"
@@ -1979,8 +1987,8 @@ export function SimulatorView({
                             : g === "N"
                               ? "Нейтраль (N)"
                               : manualMode
-                                ? `Ручной режим ${gearDisplay} (Shift ▲ / RShift·X ▼) — нажмите для возврата в Авто D (F)`
-                                : "Автомат D1–D6 (F); нажмите Shift для ручного переключения M1–M6"
+                                ? `Ручной режим ${gearDisplay} (Shift ▲ / RShift·X ▼) — ЛКМ: Авто D (F), ПКМ: +1`
+                                : "Автомат D1–D6 (F) · Shift — ручной режим M1–M6 (▲), RShift/X — вниз (▼)"
                       }
                       className={`mono h-8 min-w-[30px] px-2 rounded-lg text-xs font-bold border transition ${
                         active
@@ -1996,25 +2004,6 @@ export function SimulatorView({
                     </button>
                   );
                 })}
-                <button
-                  type="button"
-                  onClick={() => shiftGear(1)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    shiftGear(-1);
-                  }}
-                  title="Повысить передачу — левый Shift / ЛКМ · Понизить — правый Shift, X или ПКМ"
-                  aria-label="Переключить передачу вверх (Shift)"
-                  className={`mono h-8 min-w-[26px] px-1.5 rounded-lg text-[11px] font-bold border transition ${
-                    shiftUpCue
-                      ? "bg-[#f5b942] text-[#17130a] border-[#f5b942]"
-                      : manualMode
-                        ? "border-[#f5b942]/60 text-[#f5b942] hover:bg-[#f5b942]/15"
-                        : "border-[rgba(148,176,194,.2)] text-[#8fa2ae] hover:text-white"
-                  }`}
-                >
-                  ▲
-                </button>
               </div>
 
               {/* Индикаторы-кнопки I / РН / B / L */}
