@@ -98,13 +98,26 @@ function computeFitViewBox(bounds: CustomScenarioDef["bounds"]): ViewBox {
   };
 }
 
-function chooseGridStep(viewSpan: number): number {
-  if (viewSpan <= 26) return 1;
-  if (viewSpan <= 55) return 2;
-  if (viewSpan <= 130) return 5;
-  if (viewSpan <= 280) return 10;
-  if (viewSpan <= 600) return 25;
-  return 50;
+/**
+ * Вычисляет шаг визуальной сетки от пользовательского шага привязки:
+ * - snapStep <= 0 полностью скрывает сетку;
+ * - на обычном масштабе линии совпадают с шагом привязки;
+ * - на больших OSM-картах линии прореживаются кратно шагу, чтобы не перегружать SVG.
+ */
+function resolveVisualGridStep(snapStep: number, viewW: number, viewH: number): number | null {
+  if (!(snapStep > 0)) return null;
+  const maxSpan = Math.max(viewW, viewH);
+  const maxCells = 160;
+  if (maxSpan / snapStep <= maxCells) return snapStep;
+  for (const mult of [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]) {
+    const candidate = Number((snapStep * mult).toFixed(4));
+    if (maxSpan / candidate <= maxCells) return candidate;
+  }
+  return Number((snapStep * 5000).toFixed(4));
+}
+
+function formatMetersRu(value: number): string {
+  return Number(value.toFixed(2)).toString().replace(".", ",");
 }
 
 /** Отрисовка миниатюры дорожного знака в масштабе карты (`unit` — радиус знака в метрах SVG). */
@@ -471,19 +484,38 @@ export function MapCanvasEditor({
     }
   };
 
-  // Сетка с адаптивным шагом в метрах
-  const gridStep = useMemo(() => chooseGridStep(Math.max(vb.w, vb.h)), [vb.w, vb.h]);
+  // Визуальная сетка синхронизирована с выбранным шагом привязки.
+  const gridStep = useMemo(() => resolveVisualGridStep(snapStep, vb.w, vb.h), [snapStep, vb.w, vb.h]);
   const gridLines = useMemo(() => {
+    if (gridStep === null) {
+      return { xs: [] as number[], ys: [] as number[], majorEvery: 5, x0: vb.x, x1: vb.x + vb.w, y0: vb.y, y1: vb.y + vb.h };
+    }
+    // Запас по краям сохраняет равномерную сетку при широком SVG и letterbox.
+    const padX = Math.max(vb.w, vb.h) * 1.1;
+    const padY = Math.max(vb.w, vb.h) * 0.6;
+    const x0 = vb.x - padX;
+    const x1 = vb.x + vb.w + padX;
+    const y0 = vb.y - padY;
+    const y1 = vb.y + vb.h + padY;
     const xs: number[] = [];
     const ys: number[] = [];
-    const startX = Math.floor(vb.x / gridStep) * gridStep;
-    const endX = vb.x + vb.w;
-    const startY = Math.floor(vb.y / gridStep) * gridStep;
-    const endY = vb.y + vb.h;
-    for (let gx = startX; gx <= endX && xs.length < 120; gx += gridStep) xs.push(Number(gx.toFixed(2)));
-    for (let gy = startY; gy <= endY && ys.length < 120; gy += gridStep) ys.push(Number(gy.toFixed(2)));
-    return { xs, ys };
+    const firstI = Math.floor(x0 / gridStep);
+    const lastI = Math.ceil(x1 / gridStep);
+    for (let i = firstI; i <= lastI && xs.length < 480; i++) {
+      xs.push(Number((i * gridStep).toFixed(4)));
+    }
+    const firstJ = Math.floor(y0 / gridStep);
+    const lastJ = Math.ceil(y1 / gridStep);
+    for (let j = firstJ; j <= lastJ && ys.length < 360; j++) {
+      ys.push(Number((j * gridStep).toFixed(4)));
+    }
+    return { xs, ys, majorEvery: 5, x0, x1, y0, y1 };
   }, [vb, gridStep]);
+  const gridBadgeText = useMemo(() => {
+    if (gridStep === null) return "сетка выкл";
+    if (Math.abs(gridStep - snapStep) < 1e-6) return `сетка ${formatMetersRu(snapStep)} м`;
+    return `привязка ${formatMetersRu(snapStep)} м (линии ${formatMetersRu(gridStep)} м)`;
+  }, [gridStep, snapStep]);
 
   const primary = primarySelection(selection);
   const rotAnchor = getSelectionAnchor(def, primary);
@@ -518,7 +550,7 @@ export function MapCanvasEditor({
         <div className="flex items-center gap-2">
           <span className="text-xs font-extrabold">2D-карта редактора</span>
           <span className="mono text-[10px] text-[#7c909d]">
-            сетка {gridStep} м · ↑ север (+Z)
+            {gridBadgeText} · ↑ север (+Z)
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1">
@@ -577,31 +609,41 @@ export function MapCanvasEditor({
           role="img"
           aria-label="Интерактивная 2D-карта сценария"
         >
-          {/* Метрическая сетка */}
-          <g style={{ pointerEvents: "none" }}>
-            {gridLines.xs.map((gx) => (
-              <line
-                key={`gx-${gx}`}
-                x1={gx}
-                y1={vb.y}
-                x2={gx}
-                y2={vb.y + vb.h}
-                stroke={gx === 0 ? "rgba(82,214,189,0.22)" : "rgba(148,163,184,0.07)"}
-                strokeWidth={gx === 0 ? thin * 1.1 : thin * 0.65}
-              />
-            ))}
-            {gridLines.ys.map((gy) => (
-              <line
-                key={`gy-${gy}`}
-                x1={vb.x}
-                y1={gy}
-                x2={vb.x + vb.w}
-                y2={gy}
-                stroke={gy === 0 ? "rgba(82,214,184,0.22)" : "rgba(148,163,184,0.07)"}
-                strokeWidth={gy === 0 ? thin * 1.1 : thin * 0.65}
-              />
-            ))}
-          </g>
+          {/* Метрическая сетка и привязка (скрывается при «СЕТКА: Выкл») */}
+          {gridStep !== null && (
+            <g data-testid="map-grid" data-grid-step={gridStep} data-snap-step={snapStep} style={{ pointerEvents: "none" }}>
+              {gridLines.xs.map((gx) => {
+                const isAxis = Math.abs(gx) < 1e-6;
+                const isMajor = !isAxis && Math.abs(Math.round(gx / gridStep)) % gridLines.majorEvery === 0;
+                return (
+                  <line
+                    key={`gx-${gx}`}
+                    x1={gx}
+                    y1={gridLines.y0}
+                    x2={gx}
+                    y2={gridLines.y1}
+                    stroke={isAxis ? "rgba(82,214,189,0.32)" : isMajor ? "rgba(148,176,198,0.22)" : "rgba(148,176,198,0.1)"}
+                    strokeWidth={isAxis ? thin * 1.15 : isMajor ? thin * 0.85 : thin * 0.6}
+                  />
+                );
+              })}
+              {gridLines.ys.map((gy) => {
+                const isAxis = Math.abs(gy) < 1e-6;
+                const isMajor = !isAxis && Math.abs(Math.round(gy / gridStep)) % gridLines.majorEvery === 0;
+                return (
+                  <line
+                    key={`gy-${gy}`}
+                    x1={gridLines.x0}
+                    y1={gy}
+                    x2={gridLines.x1}
+                    y2={gy}
+                    stroke={isAxis ? "rgba(82,214,189,0.32)" : isMajor ? "rgba(148,176,198,0.22)" : "rgba(148,176,198,0.1)"}
+                    strokeWidth={isAxis ? thin * 1.15 : isMajor ? thin * 0.85 : thin * 0.6}
+                  />
+                );
+              })}
+            </g>
+          )}
 
           {/* Границы мира */}
           <rect
