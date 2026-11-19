@@ -103,7 +103,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |
 | `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |
 | `src/maps/boundary.ts` | геометрия произвольных границ мира: шаблоны форм, проверка полигона, проекция автомобиля внутрь и обрезка по контуру |
-| `src/maps/route.ts` | сшивка сегментов, кандидаты и граф маршрутов с учётом oneway/layer, стартовая поза и текущая улица |
+| `src/maps/route.ts` | сшивка сегментов, кандидаты и граф маршрутов с учётом oneway/layer, пространственная индексация и A* |
 | `src/maps/routeCatalog.ts` | построение и проверка записей каталога OSM: путь, КТ, fingerprint и снимок карты |
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
 | `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
