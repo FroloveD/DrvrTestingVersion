@@ -118,7 +118,7 @@ L.push("| `src/sim/step.ts` | единственный шаг физики, де
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 31 автотест ядра (T01–T31) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 31 автотестов ядра (T01–T31) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |");
 L.push("| `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |");
