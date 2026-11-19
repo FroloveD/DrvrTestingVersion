@@ -733,6 +733,7 @@ export function MapCanvasEditor({
         </div>
       </div>
 
+      {tool === "boundary" && <div className="flex items-center justify-between gap-2 rounded-lg border border-[#52d6bd]/30 bg-[#091017] px-3 py-2 text-[11px]"><span>Контур площадки: {draftBoundary.length} точек · кликните по карте, Enter или двойной клик — замкнуть</span><button type="button" className="btn btn-mini" onClick={onCancelBoundary}>Отмена</button></div>}
       {/* Интерактивный SVG-холст карты */}
       <div className="relative rounded-xl bg-[#070d13] border hairline overflow-hidden select-none">
         <svg
