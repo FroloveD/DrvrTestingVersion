@@ -166,11 +166,12 @@ const HIGHWAY_TYPES: Array<{ v: string; l: string }> = [
 
 const PARKED_MODELS: ParkedModelKey[] = ["picanto", "rio", "ceed", "xceed", "sorento"];
 const SPEED_PRESETS = [20, 30, 40, 50, 60, 70, 90] as const;
-const SNAP_OPTIONS: Array<{ v: number; l: string }> = [
-  { v: 0, l: "Выкл" },
-  { v: 0.5, l: "0,5 м" },
-  { v: 1, l: "1 м" },
-  { v: 2, l: "2 м" },
+const SNAP_OPTIONS: Array<{ v: number; l: string; hint: string }> = [
+  { v: 0, l: "Выкл", hint: "Скрыть сетку и отключить привязку — свободное перемещение объектов" },
+  { v: 0.5, l: "0,5 м", hint: "Мелкая сетка для точной расстановки конусов, стоек и дорожных знаков" },
+  { v: 1, l: "1 м", hint: "Сетка для выравнивания парковочных боксов, бордюров и стоп-линий" },
+  { v: 2, l: "2 м", hint: "Сетка для разметки полос, переходов и углов площадки" },
+  { v: 5, l: "5 м", hint: "Крупная сетка для улиц, зданий и контура карты" },
 ];
 
 const LAYER_LABELS: Array<{ k: keyof LayerVisibility; l: string }> = [
@@ -728,16 +729,23 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         {/* Привязка к сетке, видимость слоёв и готовые шаблоны */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t hairline text-[11px]">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mono text-[10px] text-[#7c909d]">СЕТКА:</span>
+            <span
+              className="mono text-[10px] text-[#7c909d] cursor-help"
+              title="Метрическая сетка на карте и шаг привязки координат/углов. «Выкл» скрывает сетку и включает свободное перемещение."
+            >
+              СЕТКА:
+            </span>
             {SNAP_OPTIONS.map((so) => (
               <button
                 key={so.v}
                 type="button"
+                data-testid={`editor-grid-${so.v}`}
+                title={so.hint}
                 onClick={() => setSnapStep(so.v)}
                 className={`px-2 py-0.5 rounded mono text-[10px] cursor-pointer border ${
                   snapStep === so.v
                     ? "bg-[#52d6bd]/15 border-[#52d6bd]/50 text-[#52d6bd]"
-                    : "bg-[#091017] border-white/10 text-[#8fa2ae]"
+                    : "bg-[#091017] border-white/10 text-[#8fa2ae] hover:text-white"
                 }`}
               >
                 {so.l}
