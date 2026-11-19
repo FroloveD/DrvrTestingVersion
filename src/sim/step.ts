@@ -128,10 +128,37 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
   };
 }
 
+function firstSpeedZoneIntersection(zone: WorldData["speedZones"][number], heading: number, maxLength: number, world: WorldData): number {
+  const rx = Math.sin(heading), rz = Math.cos(heading);
+  let nearest = maxLength;
+  for (const road of world.roads) {
+    for (let i = 1; i < road.points.length; i++) {
+      const a = road.points[i - 1], b = road.points[i];
+      const sx = b.x - a.x, sz = b.z - a.z;
+      const segmentLength = Math.hypot(sx, sz);
+      const denom = rx * sz - rz * sx;
+      if (segmentLength < 0.01 || Math.abs(denom) < segmentLength * 0.12) continue;
+      const qx = a.x - zone.x, qz = a.z - zone.z;
+      const along = (qx * sz - qz * sx) / denom;
+      const across = (qx * rz - qz * rx) / denom;
+      if (along > 2.5 && along < nearest && across >= -0.0001 && across <= 1.0001) nearest = along;
+    }
+  }
+  return nearest;
+}
+
+/** Скоростной отрезок действует только вперёд от знака и обрывается на первом поперечном пересечении дорог. */
 export function getActiveSpeedLimit(x: number, z: number, world: WorldData): number {
   let limit = world.defaultSpeedLimitKmh;
   for (const zone of world.speedZones) {
-    if (Math.hypot(x - zone.x, z - zone.z) <= zone.radius) {
+    const heading = zone.h ?? Math.atan2(zone.x - zone.signX, zone.z - zone.signZ);
+    const length = Math.max(0, zone.length ?? zone.radius ?? 0);
+    if (!(length > 0)) continue;
+    const dx = x - zone.x, dz = z - zone.z;
+    const along = dx * Math.sin(heading) + dz * Math.cos(heading);
+    const lateral = dx * Math.cos(heading) - dz * Math.sin(heading);
+    const end = firstSpeedZoneIntersection(zone, heading, length, world);
+    if (along >= -1 && along <= end && Math.abs(lateral) <= (zone.halfWidth ?? 4.5)) {
       limit = Math.min(limit, zone.limitKmh);
     }
   }
