@@ -18,7 +18,7 @@ import {
 } from "../input/gamepad";
 import { cropOsmPackToPolygon, parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
-import { roadGeometryPoints } from "../maps/route";
+import { findRoadNetworkPath, roadGeometryPoints } from "../maps/route";
 import { buildExamRouteRecord, fingerprintOsmScenario, isExamRouteRecord } from "../maps/routeCatalog";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
@@ -54,7 +54,7 @@ import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMet
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
-import type { SimEvent } from "./types";
+import type { RoadSegment, SimEvent } from "./types";
 import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, predictTrajectoryArc, STEER_WHEEL, wheelDegToSteerRad, writeTrajectoryArcPositions } from "./vehicle";
 
 export type SelfTestCase = { id: string; suite: string; name: string; fn: () => string };
@@ -959,6 +959,36 @@ export const extraCases: SelfTestCase[] = [
       assert(fingerprintOsmScenario(source) !== fingerprintOsmScenario(changed),
         "Изменение геометрии карты должно менять fingerprint");
       return `${(record.lengthM / 1000).toFixed(2)} км · ${record.roadNames.length} улицы · ${record.checkpoints.length} КТ · снимок OSM и fingerprint OK`;
+    },
+  },
+  {
+    id: "T33",
+    suite: "maps",
+    name: "Маршрутизатор OSM: граф больше 1600 узлов и поиск A*",
+    fn: () => {
+      const main: RoadSegment = {
+        id: "large-main",
+        points: Array.from({ length: 1702 }, (_, i) => ({ x: 0, z: i * 4 })),
+        width: 8,
+        lanes: 2,
+        highway: "secondary",
+        name: "Длинная улица",
+      };
+      const connector: RoadSegment = {
+        id: "large-connector",
+        points: [{ x: 0, z: 6804 }, { x: 80, z: 6804 }],
+        width: 8,
+        lanes: 2,
+        highway: "residential",
+        name: "Поперечный проезд",
+      };
+      const result = findRoadNetworkPath([main, connector], { x: 0, z: 0 }, { x: 80, z: 6804 }, 10);
+      assert(result.connected, "Граф больше 1600 узлов должен оставаться связным");
+      assert(result.path.length > 1600, `Ожидался путь через более 1600 узлов, получено ${result.path.length}`);
+      assert(result.roadNames.includes("Длинная улица") && result.roadNames.includes("Поперечный проезд"),
+        "A* должен сохранить названия обеих улиц");
+      assert(result.lengthM > 6800 && result.lengthM < 7000, `Неверная длина пути: ${result.lengthM}`);
+      return `${result.path.length} узлов · ${Math.round(result.lengthM)} м · A* и пространственные индексы OK`;
     },
   },
 ];
