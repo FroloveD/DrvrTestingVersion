@@ -686,48 +686,32 @@ export function MapCanvasEditor({
           {layers.signs &&
             layers.zones &&
             signs.map((sn) => {
-              if (!isSpeedSignKind(sn.kind) || !(sn.zoneRadius && sn.zoneRadius > 0)) return null;
-              const zx = sn.zoneX ?? sn.x;
-              const zz = sn.zoneZ ?? sn.z;
+              const length = sn.zoneLength ?? sn.zoneRadius ?? 250;
+              if (!isSpeedSignKind(sn.kind) || !(length > 0)) return null;
+              const h = sn.h;
+              const startX = sn.x + Math.cos(h) * 3.2;
+              const startZ = sn.z - Math.sin(h) * 3.2;
+              const endX = startX + Math.sin(h) * length;
+              const endZ = startZ + Math.cos(h) * length;
               const sel = isSelected("sign", sn.id);
               return (
                 <g key={`zone-${sn.id}`}>
-                  <circle
-                    cx={-zx}
-                    cy={-zz}
-                    r={sn.zoneRadius}
-                    fill={sel ? "rgba(239,68,68,0.10)" : "rgba(239,68,68,0.045)"}
+                  <line
+                    x1={-startX} y1={-startZ} x2={-endX} y2={-endZ}
                     stroke={sel ? "rgba(248,113,113,0.65)" : "rgba(248,113,113,0.28)"}
                     strokeDasharray={`${scale * 0.8} ${scale * 0.6}`}
-                    strokeWidth={thin * 1.1}
+                    strokeWidth={Math.max(thin * 2, 0.12)}
                     style={{ pointerEvents: "none" }}
                   />
-                  {sel && (
-                    <>
-                      <line
-                        x1={-sn.x}
-                        y1={-sn.z}
-                        x2={-zx}
-                        y2={-zz}
-                        stroke="rgba(248,113,113,0.6)"
-                        strokeDasharray={`${scale * 0.45} ${scale * 0.45}`}
-                        strokeWidth={thin}
-                        style={{ pointerEvents: "none" }}
-                      />
-                      <circle
-                        cx={-zx}
-                        cy={-zz}
-                        r={Math.max(0.5, signUnit * 0.48)}
-                        fill="#ef4444"
-                        stroke="#ffffff"
-                        strokeWidth={thin * 1.2}
-                        className="cursor-move"
-                        onPointerDown={(e) => beginObjectDrag(e, { kind: "sign_zone", id: sn.id })}
-                      />
-                    </>
-                  )}
+                  {sel && <circle
+                    cx={-endX} cy={-endZ}
+                    r={Math.max(0.5, signUnit * 0.48)}
+                    fill="#ef4444" stroke="#ffffff" strokeWidth={thin * 1.2}
+                    className="cursor-move"
+                    onPointerDown={(e) => beginObjectDrag(e, { kind: "sign_zone", id: sn.id })}
+                  />}
                 </g>
-              );
+              );}
             })}
 
           {/* Пешеходные переходы «зебра» */}
