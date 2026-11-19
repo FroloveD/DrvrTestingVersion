@@ -17,10 +17,10 @@ import {
   type GamepadSnapshot,
 } from "../input/gamepad";
 import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
+import { roadGeometryPoints } from "../maps/route";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
-  roadGeometryPoints,
   defaultCustomScenario,
   customFromOsmPack,
   customFromWorld,
