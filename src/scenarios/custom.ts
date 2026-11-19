@@ -405,37 +405,6 @@ export function importEditorFileText(
   );
 }
 
-/**
- * Возвращает осевую линию дороги с квадратичными дугами в узлах.
- * Исходные точки сценария не меняются; радиус ограничивается половиной длины соседних сегментов.
- */
-export function roundRoadPolyline(points: readonly { x: number; z: number }[], radiusM = 0, steps = 6): { x: number; z: number }[] {
-  if (!(radiusM > 0) || points.length < 3) return points.map((p) => ({ ...p }));
-  const out: { x: number; z: number }[] = [{ ...points[0] }];
-  for (let i = 1; i < points.length - 1; i++) {
-    const prev = points[i - 1], corner = points[i], next = points[i + 1];
-    const inLen = Math.hypot(corner.x - prev.x, corner.z - prev.z);
-    const outLen = Math.hypot(next.x - corner.x, next.z - corner.z);
-    if (inLen < 0.01 || outLen < 0.01) continue;
-    const radius = Math.min(radiusM, inLen * 0.45, outLen * 0.45);
-    const a = { x: corner.x + (prev.x - corner.x) / inLen * radius, z: corner.z + (prev.z - corner.z) / inLen * radius };
-    const b = { x: corner.x + (next.x - corner.x) / outLen * radius, z: corner.z + (next.z - corner.z) / outLen * radius };
-    const last = out[out.length - 1];
-    if (Math.hypot(last.x - a.x, last.z - a.z) > 0.01) out.push(a);
-    const count = Math.max(2, steps);
-    for (let j = 1; j <= count; j++) {
-      const t = j / count, u = 1 - t;
-      out.push({
-        x: Number((u * u * a.x + 2 * u * t * corner.x + t * t * b.x).toFixed(3)),
-        z: Number((u * u * a.z + 2 * u * t * corner.z + t * t * b.z).toFixed(3)),
-      });
-    }
-  }
-  const last = points[points.length - 1];
-  if (Math.hypot(out[out.length - 1].x - last.x, out[out.length - 1].z - last.z) > 0.01) out.push({ ...last });
-  return out;
-}
-
 /** Строит WorldData из пользовательского определения карты (полностью детерминированно). */
 export function buildCustomWorld(def: CustomScenarioDef): WorldData {
   const obstacles: ObstacleBox[] = def.obstacles
@@ -478,7 +447,7 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
   }
   for (const r of def.roads ?? []) {
     if (Array.isArray(r.points) && r.points.length >= 2) {
-      roads.push({ ...r, points: roundRoadPolyline(r.points, r.cornerRadiusM ?? 0) });
+      roads.push({ ...r, points: r.points.map((p) => ({ ...p })) });
     }
   }
 
