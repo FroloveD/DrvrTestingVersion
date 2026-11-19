@@ -303,7 +303,20 @@ export function SimulatorView({
   const keysRef = useRef<Record<string, boolean>>({});
   const touchPedalRef = useRef<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
   const pedalOwner = useRef<{ gas: number | null; brake: number | null }>({ gas: null, brake: null });
+  const canvasGasHoldTimerRef = useRef<number | null>(null);
+  const canvasGasOwnerRef = useRef<number | null>(null);
+  const holdingSteerRef = useRef(false);
+  const pointerDragRef = useRef<{ id: number; btn: number; lastX: number; lastY: number } | null>(null);
+  const mouseSteerXRef = useRef<number | null>(null);
   const releasePedals = useCallback(() => {
+    if (canvasGasHoldTimerRef.current !== null) {
+      window.clearTimeout(canvasGasHoldTimerRef.current);
+      canvasGasHoldTimerRef.current = null;
+    }
+    canvasGasOwnerRef.current = null;
+    pointerDragRef.current = null;
+    mouseSteerXRef.current = null;
+    holdingSteerRef.current = false;
     pedalOwner.current = { gas: null, brake: null };
     touchPedalRef.current = { gas: false, brake: false };
     setPedalVisual({ gas: false, brake: false });
@@ -311,7 +324,6 @@ export function SimulatorView({
   useEffect(() => {
     if (!active || uiHidden) releasePedals();
   }, [active, uiHidden, releasePedals]);
-  const holdingSteerRef = useRef(false);
   const latestViolationRef = useRef<HudSnapshot["latestViolation"]>(null);
   const optsRef = useRef({
     cameraMode,
@@ -766,7 +778,7 @@ export function SimulatorView({
     const onBlur = () => {
       keysRef.current = {};
       releasePedals();
-      holdingSteerRef.current = false;
+      releasePedals();
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -780,44 +792,99 @@ export function SimulatorView({
   }, [resetAttempt, releasePedals, setTurnSignal, setGear, toggleEngine, onNotify]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
-  // Инвариант #12: ЛКМ — руль (вправо уменьшает swDeg), ПКМ — орбита, колесо — зум.
-  const pointerDragRef = useRef<{ id: number; btn: number; lastX: number; lastY: number } | null>(null);
+  // Горизонтальное движение мыши над сценой управляет рулём; ЛКМ >400 мс включает газ.
+  // ПКМ вращает камеру, колесо масштабирует её.
+  const pressPedal = (which: "gas" | "brake", owner: number) => {
+    if (pedalOwner.current[which] !== null) return;
+    pedalOwner.current[which] = owner;
+    touchPedalRef.current[which] = true;
+    setPedalVisual({ ...touchPedalRef.current });
+  };
+  const releasePedal = (which: "gas" | "brake", owner: number) => {
+    if (pedalOwner.current[which] !== owner) return;
+    pedalOwner.current[which] = null;
+    touchPedalRef.current[which] = false;
+    setPedalVisual({ ...touchPedalRef.current });
+  };
+
+  const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType !== "mouse") return;
+    mouseSteerXRef.current = e.clientX;
+    holdingSteerRef.current = true;
+  };
+
+  const handleCanvasPointerLeave = () => {
+    if (pointerDragRef.current?.btn === 0) return;
+    mouseSteerXRef.current = null;
+    holdingSteerRef.current = false;
+  };
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button === 1) {
-      e.preventDefault(); // средняя кнопка не включает педали и не запускает автоскролл
+      e.preventDefault();
       return;
     }
     if (e.button !== 0 && e.button !== 2) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     pointerDragRef.current = { id: e.pointerId, btn: e.button, lastX: e.clientX, lastY: e.clientY };
-    if (e.button === 0) holdingSteerRef.current = true;
+    if (e.button === 0 && e.pointerType === "mouse") {
+      holdingSteerRef.current = true;
+      mouseSteerXRef.current = e.clientX;
+      if (canvasGasHoldTimerRef.current !== null) window.clearTimeout(canvasGasHoldTimerRef.current);
+      const owner = e.pointerId;
+      canvasGasHoldTimerRef.current = window.setTimeout(() => {
+        const drag = pointerDragRef.current;
+        if (drag?.id === owner && drag.btn === 0 && pedalOwner.current.gas === null) {
+          canvasGasOwnerRef.current = owner;
+          pressPedal("gas", owner);
+        }
+        canvasGasHoldTimerRef.current = null;
+      }, 400);
+    }
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === "mouse") {
+      const prevX = mouseSteerXRef.current;
+      if (prevX !== null) {
+        const steerDx = e.clientX - prevX;
+        if (steerDx !== 0) {
+          // Движение мыши вправо уменьшает swDeg (поворот вправо), без удержания ЛКМ.
+          inputRef.current.steerWheelDeg = clamp(
+            inputRef.current.steerWheelDeg - steerDx * 2.1,
+            -STEER_WHEEL.maxDeg,
+            STEER_WHEEL.maxDeg
+          );
+        }
+      }
+      mouseSteerXRef.current = e.clientX;
+    }
+
     const drag = pointerDragRef.current;
-    if (!drag || drag.id !== e.pointerId) return;
+    if (!drag || drag.id !== e.pointerId || drag.btn !== 2) return;
     const dx = e.clientX - drag.lastX;
     const dy = e.clientY - drag.lastY;
     drag.lastX = e.clientX;
     drag.lastY = e.clientY;
-    if (drag.btn === 0) {
-      // Инвариант №6: движение мыши вправо уменьшает swDeg (поворот вправо)
-      inputRef.current.steerWheelDeg = clamp(
-        inputRef.current.steerWheelDeg - dx * 2.1,
-        -STEER_WHEEL.maxDeg,
-        STEER_WHEEL.maxDeg
-      );
-    } else if (drag.btn === 2) {
-      sceneCtrlRef.current?.adjustOrbit(dx, dy);
-    }
+    sceneCtrlRef.current?.adjustOrbit(dx, dy);
   };
 
   const handleCanvasPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (pointerDragRef.current?.id === e.pointerId) {
-      if (pointerDragRef.current.btn === 0) holdingSteerRef.current = false;
-      pointerDragRef.current = null;
+    const drag = pointerDragRef.current;
+    if (drag?.id !== e.pointerId) return;
+    if (canvasGasHoldTimerRef.current !== null) {
+      window.clearTimeout(canvasGasHoldTimerRef.current);
+      canvasGasHoldTimerRef.current = null;
     }
+    if (canvasGasOwnerRef.current === e.pointerId) {
+      releasePedal("gas", e.pointerId);
+      canvasGasOwnerRef.current = null;
+    }
+    pointerDragRef.current = null;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+    if (!inside) mouseSteerXRef.current = null;
+    holdingSteerRef.current = mouseSteerXRef.current !== null;
   };
 
   // Экранный SVG-руль (±540°, круговое вращение)
@@ -854,20 +921,6 @@ export function SimulatorView({
     holdingSteerRef.current = false;
   };
 
-  // Захват рабочей поверхности и захват ручки переноса принадлежат разным DOM-элементам.
-  // Отпускание второго пальца не сбрасывает педаль, удерживаемую первым.
-  const pressPedal = (which: "gas" | "brake", owner: number) => {
-    if (pedalOwner.current[which] !== null) return;
-    pedalOwner.current[which] = owner;
-    touchPedalRef.current[which] = true;
-    setPedalVisual({ ...touchPedalRef.current });
-  };
-  const releasePedal = (which: "gas" | "brake", owner: number) => {
-    if (pedalOwner.current[which] !== owner) return;
-    pedalOwner.current[which] = null;
-    touchPedalRef.current[which] = false;
-    setPedalVisual({ ...touchPedalRef.current });
-  };
   const bindPedal = (which: "gas" | "brake") => ({
     onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
       if (e.button !== 0 || pedalOwner.current[which] !== null) return;
@@ -914,7 +967,7 @@ export function SimulatorView({
       },
     }));
     onNotify(
-      `Холодный старт завершён: КПП переведена из P в ${targetGear}. Удерживайте W (или ГАЗ), руль — A/D или мышью.`
+      `Холодный старт завершён: КПП переведена из P в ${targetGear}. Газ — W, ГАЗ или ЛКМ дольше 0,4 с; руль — движение мыши или A/D.`
     );
   };
 
@@ -1063,10 +1116,14 @@ export function SimulatorView({
       >
         <canvas
           ref={canvasRef}
+          data-testid="sim-canvas"
+          onPointerEnter={handleCanvasPointerEnter}
+          onPointerLeave={handleCanvasPointerLeave}
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handleCanvasPointerMove}
           onPointerUp={handleCanvasPointerEnd}
           onPointerCancel={handleCanvasPointerEnd}
+          onLostPointerCapture={handleCanvasPointerEnd}
           onWheel={(e) => {
             e.preventDefault();
             sceneCtrlRef.current?.adjustZoom(e.deltaY);
@@ -1414,7 +1471,7 @@ export function SimulatorView({
                 ["W / ↑", "Газ в выбранной передаче"],
                 ["S / ↓", "Тормоз (в D не даёт реверс)"],
                 ["A / D", "Руль влево (+X) / вправо (−X)"],
-                ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
+                ["Мышь", "Движение по сцене — руль; ЛКМ >0,4 с — газ"],
                 ["ПКМ + колесо", "Вращение и зум камеры"],
                 ["P / R / N / F", "Паркинг / Задний / Нейтраль / Drive"],
                 ["I (в P/N)", "Запуск ДВС только из P или N"],
