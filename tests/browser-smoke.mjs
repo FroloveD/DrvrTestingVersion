@@ -757,6 +757,9 @@ try {
   await page.mouse.up();
   check("L8c выключенный газ мышью не реагирует на удержание ЛКМ", !gasStillOff);
   await mouseGasToggle.check();
+  await sleep(60);
+  const modeAfterGasToggle = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.controls.v1") || "{}").mouseSteerMode);
+  check("L8c1 включение мышиного газа не меняет режим руления", modeAfterGasToggle === "free", String(modeAfterGasToggle));
   await page.mouse.move(sceneX, sceneY);
   await page.mouse.down();
   await sleep(300);
@@ -787,7 +790,8 @@ try {
     `max x${boostMax.toFixed(3)}`);
   check("L10 заезд с изменением настройки воспроизводится точно",(await low(page)).includes("детерминизм подтверждён") && a.calibration.maxInnerWheelDeg===42 && a.inputStream.some(f=>f.maxInnerWheelDeg===33) && a.inputStream.some(f=>f.maxInnerWheelDeg===42));
   await page.reload();await controls.click();check("L11 предел сохранён после перезагрузки",await slider.inputValue()==="42");
-  check("L12 настройки мыши сохраняются после перезагрузки",await mouseSteerToggle.isChecked() && await mouseGasToggle.isChecked());
+  check("L12 настройки мыши и режим руления сохраняются после перезагрузки",
+    await mouseSteerToggle.isChecked() && await mouseGasToggle.isChecked() && await mouseSteerMode.inputValue() === "free");
   await page.getByRole("button",{name:"Базовый · 35°"}).click();check("L13 сброс настройки возвращает 35°",await slider.inputValue()==="35");
   check("L14 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
   await ctx.close();
