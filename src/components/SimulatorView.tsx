@@ -1871,6 +1871,7 @@ export function SimulatorView({
           <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
             Правила: {ruleSet.version} ({ruleSet.status === "instructor_signed" ? "подписано" : "демо"})
           </Chip>
+          <span className="font-bold text-[#b9c9d3]">{world.title}</span>
           <span>{world.subtitle}</span>
           {street && (
             <span className="mono text-[#52d6bd] flex items-center gap-1.5">
