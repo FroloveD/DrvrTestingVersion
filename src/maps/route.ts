@@ -604,7 +604,7 @@ export function nearestRoadPoint(
 }
 
 /**
- * Ищет кратчайший путь по графу дорог OSM между двумя точками `(from → to)` (алгоритм Дейкстры).
+ * Ищет кратчайший путь по графу дорог OSM между двумя точками `(from → to)` (A* с евклидовой эвристикой).
  * Соединяет перекрёстки с общими и близкими узлами (до 4 м) и точки пересечения сегментов дорог.
  */
 export function findRoadNetworkPath(
@@ -866,7 +866,7 @@ export function findRoadNetworkPath(
     const current = popHeap()!;
     const u = current.id;
     if (closed[u] || current.g !== dist[u]) continue;
-    if (current.g > maxPathCost) break;
+    if (current.g > maxPathCost) continue;
     closed[u] = 1;
     if (u === dst) break;
     for (const edge of adj[u]) {
