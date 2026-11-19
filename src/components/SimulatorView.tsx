@@ -77,22 +77,26 @@ const DEFAULT_STEER_KEY_RATE = 340;
 /** Старт и сброс попытки всегда «холодные»: ДВС заглушен, КПП P. */
 const COLD_START = false;
 
-function loadControls(): { steerKeyRate: number; mouseSteerEnabled: boolean; mouseGasEnabled: boolean } {
+type MouseSteerMode = "free" | "hold";
+
+function loadControls(): { steerKeyRate: number; mouseSteerEnabled: boolean; mouseSteerMode: MouseSteerMode; mouseGasEnabled: boolean } {
   try {
     const raw = localStorage.getItem(CONTROLS_KEY);
-    const parsed = raw ? (JSON.parse(raw) as { steerKeyRate?: number; mouseSteerEnabled?: boolean; mouseGasEnabled?: boolean }) : {};
+    const parsed = raw ? (JSON.parse(raw) as { steerKeyRate?: number; mouseSteerEnabled?: boolean; mouseSteerMode?: MouseSteerMode; mouseGasEnabled?: boolean }) : {};
     const rate = Number(parsed.steerKeyRate);
     return {
       steerKeyRate: Number.isFinite(rate) ? clamp(rate, 60, 900) : DEFAULT_STEER_KEY_RATE,
       mouseSteerEnabled: parsed.mouseSteerEnabled === true,
+      // Старые настройки продолжают работать в прежнем свободном режиме.
+      mouseSteerMode: parsed.mouseSteerMode === "hold" ? "hold" : "free",
       mouseGasEnabled: parsed.mouseGasEnabled === true,
     };
   } catch {
-    return { steerKeyRate: DEFAULT_STEER_KEY_RATE, mouseSteerEnabled: false, mouseGasEnabled: false };
+    return { steerKeyRate: DEFAULT_STEER_KEY_RATE, mouseSteerEnabled: false, mouseSteerMode: "free", mouseGasEnabled: false };
   }
 }
 
-function saveControls(c: { steerKeyRate: number; mouseSteerEnabled: boolean; mouseGasEnabled: boolean }): void {
+function saveControls(c: { steerKeyRate: number; mouseSteerEnabled: boolean; mouseSteerMode: MouseSteerMode; mouseGasEnabled: boolean }): void {
   try {
     localStorage.setItem(CONTROLS_KEY, JSON.stringify(c));
   } catch {
@@ -214,6 +218,7 @@ export function SimulatorView({
   // Настраиваемая скорость руления клавишами A/D (°/с руля) и раскладка плавающих окон
   const [steerKeyRate, setSteerKeyRate] = useState<number>(() => loadControls().steerKeyRate);
   const [mouseSteerEnabled, setMouseSteerEnabled] = useState<boolean>(() => loadControls().mouseSteerEnabled);
+  const [mouseSteerMode, setMouseSteerMode] = useState<MouseSteerMode>(() => loadControls().mouseSteerMode);
   const [mouseGasEnabled, setMouseGasEnabled] = useState<boolean>(() => loadControls().mouseGasEnabled);
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
@@ -238,8 +243,8 @@ export function SimulatorView({
 
   useEffect(() => {
     steerRateRef.current = steerKeyRate;
-    saveControls({ steerKeyRate, mouseSteerEnabled, mouseGasEnabled });
-  }, [steerKeyRate, mouseSteerEnabled, mouseGasEnabled]);
+    saveControls({ steerKeyRate, mouseSteerEnabled, mouseSteerMode, mouseGasEnabled });
+  }, [steerKeyRate, mouseSteerEnabled, mouseSteerMode, mouseGasEnabled]);
 
   useEffect(() => {
     saveLayout(layout);
@@ -820,7 +825,7 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType !== "mouse" || !mouseSteerEnabled) return;
+    if (e.pointerType !== "mouse" || !mouseSteerEnabled || mouseSteerMode !== "free") return;
     mouseSteerXRef.current = e.clientX;
     holdingSteerRef.current = true;
   };
@@ -840,8 +845,11 @@ export function SimulatorView({
     e.currentTarget.setPointerCapture(e.pointerId);
     pointerDragRef.current = { id: e.pointerId, btn: e.button, lastX: e.clientX, lastY: e.clientY };
     if (e.button === 0 && e.pointerType === "mouse") {
-      if (mouseSteerEnabled) {
+      if (mouseSteerEnabled && mouseSteerMode === "hold") {
         holdingSteerRef.current = true;
+        mouseSteerXRef.current = e.clientX;
+      } else if (mouseSteerMode === "free") {
+        // Не допускаем скачка руля при клике в свободном режиме.
         mouseSteerXRef.current = e.clientX;
       }
       if (mouseGasEnabled) {
@@ -864,7 +872,8 @@ export function SimulatorView({
       const prevX = mouseSteerXRef.current;
       const activeDrag = pointerDragRef.current;
       const orbiting = activeDrag?.id === e.pointerId && activeDrag.btn === 2;
-      if (!orbiting && prevX !== null) {
+      const steeringActive = mouseSteerMode === "free" || (activeDrag?.id === e.pointerId && activeDrag.btn === 0);
+      if (steeringActive && !orbiting && prevX !== null) {
         const steerDx = e.clientX - prevX;
         if (steerDx !== 0) {
           // Движение мыши вправо уменьшает swDeg (поворот вправо), без удержания ЛКМ.
@@ -875,7 +884,7 @@ export function SimulatorView({
           );
         }
       }
-      mouseSteerXRef.current = e.clientX;
+      if (steeringActive) mouseSteerXRef.current = e.clientX;
     }
 
     const drag = pointerDragRef.current;
@@ -901,8 +910,8 @@ export function SimulatorView({
     pointerDragRef.current = null;
     const rect = e.currentTarget.getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-    if (!inside || !mouseSteerEnabled) mouseSteerXRef.current = null;
-    holdingSteerRef.current = mouseSteerEnabled && mouseSteerXRef.current !== null;
+    if (mouseSteerMode === "hold" || !inside || !mouseSteerEnabled) mouseSteerXRef.current = null;
+    holdingSteerRef.current = mouseSteerEnabled && mouseSteerMode === "free" && mouseSteerXRef.current !== null;
   };
 
   // Экранный SVG-руль (±540°, круговое вращение)
@@ -1413,11 +1422,24 @@ export function SimulatorView({
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7] mb-2">
-                <span>Руление движением мыши</span>
+                <span>Руление мышью</span>
                 <input data-testid="mouse-steer-toggle" type="checkbox" checked={mouseSteerEnabled} onChange={(e) => {
                   const enabled = e.target.checked; setMouseSteerEnabled(enabled);
-                  if (!enabled) { mouseSteerXRef.current = null; holdingSteerRef.current = false; }
+                  mouseSteerXRef.current = null;
+                  holdingSteerRef.current = false;
                 }} className="accent-[#f5b942]" />
+              </label>
+              <label className="block text-[11px] text-[#d3e0e7] mb-2">
+                <span className="block mb-1">Режим руления</span>
+                <select data-testid="mouse-steer-mode" value={mouseSteerMode} onChange={(e) => {
+                  const mode = e.target.value === "hold" ? "hold" : "free";
+                  setMouseSteerMode(mode);
+                  mouseSteerXRef.current = null;
+                  holdingSteerRef.current = false;
+                }} disabled={!mouseSteerEnabled} className="w-full rounded-lg border hairline bg-[#0b131b] px-2 py-1.5 text-[11px] text-[#d3e0e7] disabled:opacity-50">
+                  <option value="free">Свободно, без ЛКМ</option>
+                  <option value="hold">Только с зажатой ЛКМ</option>
+                </select>
               </label>
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7]">
                 <span>Газ удержанием ЛКМ (&gt;0,4 с)</span>
@@ -1431,7 +1453,7 @@ export function SimulatorView({
                   }
                 }} className="accent-[#f5b942]" />
               </label>
-              <p className="text-[10px] text-[#7c909d] mt-2">Shift + газ — плавное увеличение тяги до x2; после отпускания Shift множитель плавно возвращается к x1.</p>
+              <p className="text-[10px] text-[#7c909d] mt-2">В режиме с ЛКМ руль реагирует только на перетаскивание. Газ по долгому нажатию ЛКМ остаётся отдельной настройкой. Shift + газ — плавное увеличение тяги до x2.</p>
             </div>
             <label className="block text-[11px] text-[#d3e0e7] mb-1.5" htmlFor="key-steer-rate">
               Скорость руления клавишами A / D:{" "}
