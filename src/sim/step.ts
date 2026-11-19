@@ -137,17 +137,17 @@ function firstSpeedZoneIntersection(zone: WorldData["speedZones"][number], headi
       const sx = b.x - a.x, sz = b.z - a.z;
       const segmentLength = Math.hypot(sx, sz);
       const denom = rx * sz - rz * sx;
-      if (segmentLength < 0.01 || Math.abs(denom) < segmentLength * 0.12) continue;
+      if (segmentLength < 0.01 || Math.abs(denom) < segmentLength * 1e-9) continue;
       const qx = a.x - zone.x, qz = a.z - zone.z;
       const along = (qx * sz - qz * sx) / denom;
       const across = (qx * rz - qz * rx) / denom;
-      if (along > 2.5 && along < nearest && across >= -0.0001 && across <= 1.0001) nearest = along;
+      if (along > 0.05 && along < nearest && across >= -1e-6 && across <= 1 + 1e-6) nearest = along;
     }
   }
   return nearest;
 }
 
-/** Скоростной отрезок действует только вперёд от знака и обрывается на первом поперечном пересечении дорог. */
+/** Скоростной отрезок действует только вперёд от знака и обрывается на первом геометрическом пересечении с другой дорогой, включая примыкание в конце сегмента. */
 export function getActiveSpeedLimit(x: number, z: number, world: WorldData): number {
   let limit = world.defaultSpeedLimitKmh;
   for (const zone of world.speedZones) {

@@ -620,6 +620,29 @@ export const extraCases: SelfTestCase[] = [
       assert(getActiveSpeedLimit(0, 14, world) === 60, "Перекрёсток должен отменять ограничение скорости");
       assert(getActiveSpeedLimit(0, 25, world) === 20, "Знак 5.21 должен задавать новый участок ограничения");
       assert(getActiveSpeedLimit(-20, -20, world) === 60, "Вне зон должен действовать базовый лимит 60 км/ч");
+      assert(getActiveSpeedLimit(0, 35, world) === 60, "Ограничение 5.21 должно завершаться по заданной длине 8 м");
+
+      // Любое геометрическое примыкание/пересечение дороги обрывает отрезок,
+      // даже если угол очень острый и поперечная дорога заканчивается на оси основной.
+      const shallowJunctionWorld = buildCustomWorld({
+        ...def,
+        roads: [
+          { id: "road-main", points: [{ x: 0, z: -20 }, { x: 0, z: 80 }], width: 8, lanes: 2, highway: "primary" },
+          { id: "road-shallow", points: [{ x: -20, z: 12 }, { x: 0.2, z: 12.875 }], width: 8, lanes: 1, highway: "service" },
+        ],
+      });
+      assert(getActiveSpeedLimit(0, 10, shallowJunctionWorld) === 30, "До острого T-примыкания должен действовать лимит 30 км/ч");
+      assert(getActiveSpeedLimit(0, 15, shallowJunctionWorld) === 60, "Острое T-примыкание должно сбрасывать ограничение");
+
+      // Параллельная соседняя дорога сама по себе не является перекрёстком.
+      const parallelRoadWorld = buildCustomWorld({
+        ...def,
+        roads: [
+          { id: "road-main", points: [{ x: 0, z: -20 }, { x: 0, z: 80 }], width: 8, lanes: 2, highway: "primary" },
+          { id: "road-parallel", points: [{ x: 2, z: -20 }, { x: 2, z: 80 }], width: 8, lanes: 1, highway: "service" },
+        ],
+      });
+      assert(getActiveSpeedLimit(0, 15, parallelRoadWorld) === 30, "Параллельная дорога не должна сбрасывать ограничение");
 
       const grid = new SpatialGrid(world.obstacles, 10);
       assert(grid.queryCarHit(-8, 0, 0).hit?.kind === "fence", "Ограждение fence должно участвовать в коллизиях");
