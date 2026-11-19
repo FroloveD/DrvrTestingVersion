@@ -421,6 +421,7 @@ export function SimulatorView({
       const initState = createInitialState(targetWorld, useReady, calRef.current.maxInnerWheelDeg);
       stateRef.current = initState;
       inputRef.current = useReady ? createReadyInput(defGear) : createInitialInput();
+      throttleBoostRef.current = 1;
       gridRef.current = new SpatialGrid(targetWorld.obstacles, 10);
       recorderRef.current = new AttemptRecorder(initState, useReady);
       latestViolationRef.current = null;
@@ -1417,6 +1418,7 @@ export function SimulatorView({
                   }
                 }} className="accent-[#f5b942]" />
               </label>
+              <p className="text-[10px] text-[#7c909d] mt-2">Shift + газ — плавное увеличение тяги до x2; после отпускания Shift множитель плавно возвращается к x1.</p>
             </div>
             <label className="block text-[11px] text-[#d3e0e7] mb-1.5" htmlFor="key-steer-rate">
               Скорость руления клавишами A / D:{" "}
