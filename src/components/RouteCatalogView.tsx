@@ -235,7 +235,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const currentMapMismatch = (route: ExamRouteRecord) => Boolean(fingerprint && route.mapFingerprint !== fingerprint);
   const routeMapOptions = useMemo(
     () => [...new Set(routes.map((route) => route.mapTitle.trim()).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b, "ru"))),
+      .sort((a, b) => a.localeCompare(b, "ru")),
     [routes]
   );
   const filteredRoutes = useMemo(() => {
