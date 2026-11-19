@@ -819,6 +819,26 @@ try {
   check("O1 импорт .osm XML показывает источник и атрибуцию ODbL 1.0",
     odblText.includes("OpenStreetMap") && odblText.includes("ODbL 1.0"), odblText.slice(0, 120));
 
+  // Сетка должна переключаться вместе с привязкой, а на крупном масштабе — прореживаться.
+  const mapCanvas = page.getByTestId("map-editor-canvas");
+  await mapCanvas.scrollIntoViewIfNeeded();
+  await page.getByTestId("editor-grid-0").click();
+  await sleep(100);
+  const gridOff = (await page.getByTestId("map-grid").count()) === 0;
+  await page.getByTestId("editor-grid-2").click();
+  await sleep(100);
+  const grid2 = page.getByTestId("map-grid");
+  const step2 = await grid2.getAttribute("data-grid-step");
+  const lines2 = await grid2.locator("line").count();
+  await page.getByTestId("editor-grid-0.5").click();
+  await sleep(100);
+  const grid05 = page.getByTestId("map-grid");
+  const step05 = await grid05.getAttribute("data-grid-step");
+  const lines05 = await grid05.locator("line").count();
+  check("O1b сетка скрывается по «Выкл» и отображается по выбранному шагу",
+    gridOff && step2 !== null && step05 !== null && lines05 > lines2 * 1.5,
+    `off=${gridOff}, линии 2 м=${step2}/${lines2}, 0,5 м=${step05}/${lines05}`);
+
   // 2. Выбираем инструмент «Дорожный знак» -> «Уступите дорогу» и ставим кликом по 2D-карте
   const signsBefore = await page.locator('[data-testid^="map-sign-"]').count();
   await page.getByTestId("editor-tool-sign").click();
