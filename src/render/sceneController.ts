@@ -1047,29 +1047,27 @@ export class SceneController {
     const fz = Math.cos(s.h);
 
     if (mode === "cockpit") {
-      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами)
-      const pose = this.playerRig.chassis.matrixWorld;
-      const localEyeX = CAR.width * 0.225;
-      const localEyeY = 1.195;
-      const localEyeZ = -0.06;
-      const headYaw = clamp(this.orbitYaw * 0.72, -1.55, 1.55);
-      const headPitch = clamp(-0.02 - (this.orbitPitch - 0.36) * 0.45, -0.42, 0.34);
-      const cosP = Math.cos(headPitch);
+      // Камера рассчитывается в мировой системе координат автомобиля.
+      // Это исключает влияние локальной ориентации/смещения 3D-модели кузова.
+      const lx = Math.cos(s.h);
+      const lz = -Math.sin(s.h);
+      const eyeX = s.x + lx * (CAR.width * 0.23) - fx * 0.02;
+      const eyeY = 1.19;
+      const eyeZ = s.z + lz * (CAR.width * 0.23) - fz * 0.02;
+      const lookYaw = s.h + this.orbitYaw * 0.65;
+      const lookPitch = clamp(-0.12 - (this.orbitPitch - 0.36) * 6, -0.8, 0.55);
+
       if (this.camera.fov !== this.cockpitFov) {
         this.camera.fov = this.cockpitFov;
         this.camera.updateProjectionMatrix();
       }
-      this.cockpitEyeWorld.set(localEyeX, localEyeY, localEyeZ).applyMatrix4(pose);
-      this.cockpitLookWorld
-        .set(
-          localEyeX + Math.sin(headYaw) * cosP * 18,
-          localEyeY + Math.sin(headPitch) * 18,
-          localEyeZ + Math.cos(headYaw) * cosP * 18
-        )
-        .applyMatrix4(pose);
-      this.camera.position.copy(this.cockpitEyeWorld);
-      this.camera.up.set(0, 1, 0).transformDirection(pose);
-      this.camera.lookAt(this.cockpitLookWorld);
+      this.camera.position.set(eyeX, eyeY, eyeZ);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(
+        eyeX + Math.sin(lookYaw) * 18,
+        eyeY + lookPitch,
+        eyeZ + Math.cos(lookYaw) * 18
+      );
       return;
     }
 
