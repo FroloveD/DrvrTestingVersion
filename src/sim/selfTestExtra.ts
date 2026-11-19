@@ -16,7 +16,7 @@ import {
   updateAxisArming,
   type GamepadSnapshot,
 } from "../input/gamepad";
-import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
+import { cropOsmPackToPolygon, parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import { roadGeometryPoints } from "../maps/route";
 import { buildScenarioWorld } from "../scenarios/catalog";
@@ -820,6 +820,55 @@ export const extraCases: SelfTestCase[] = [
       const cleared = clearBoundaryPolygon(applied.def);
       assert(!cleared.boundaryPolygon && cleared.bounds.minX < cleared.bounds.maxX, "Сброс контура должен вернуть прямоугольные границы");
       return "Ручной полигон · асфальт по форме · принадлежность области · Г-образный шаблон · сброс контура OK";
+    },
+  },
+  {
+    id: "T31",
+    suite: "maps",
+    name: "Расширенный OSM: oneway=-1, roundabout, service, полосы, multipolygon и обрезка",
+    fn: () => {
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7480" minlon="37.6080" maxlat="55.7540" maxlon="37.6160"/>
+  <node id="1" lat="55.7500" lon="37.6100"/><node id="2" lat="55.7510" lon="37.6100"/>
+  <node id="3" lat="55.7510" lon="37.6110"/><node id="4" lat="55.7500" lon="37.6110"/>
+  <node id="5" lat="55.7505" lon="37.6105"/>
+  <node id="6" lat="55.7507" lon="37.6105"/><node id="7" lat="55.7507" lon="37.6107"/>
+  <node id="8" lat="55.7505" lon="37.6107"/>
+  <node id="9" lat="55.7520" lon="37.6120"/><node id="10" lat="55.7525" lon="37.6120"/>
+  <node id="11" lat="55.7525" lon="37.6125"/><node id="12" lat="55.7520" lon="37.6125"/>
+  <node id="13" lat="55.7521" lon="37.6121"/><node id="14" lat="55.7524" lon="37.6121"/>
+  <node id="15" lat="55.7524" lon="37.6124"/><node id="16" lat="55.7521" lon="37.6124"/>
+  <way id="100"><nd ref="1"/><nd ref="2"/><tag k="highway" v="secondary"/><tag k="name" v="Обратная улица"/><tag k="oneway" v="-1"/><tag k="lanes" v="3"/><tag k="width" v="9.5"/></way>
+  <way id="101"><nd ref="5"/><nd ref="6"/><nd ref="7"/><nd ref="8"/><nd ref="5"/><tag k="highway" v="residential"/><tag k="junction" v="roundabout"/></way>
+  <way id="102"><nd ref="9"/><nd ref="10"/><tag k="highway" v="service"/><tag k="service" v="parking_aisle"/><tag k="lanes" v="1"/><tag k="width" v="4.2"/></way>
+  <way id="200"><nd ref="9"/><nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="9"/></way>
+  <way id="201"><nd ref="13"/><nd ref="14"/><nd ref="15"/><nd ref="16"/><nd ref="13"/></way>
+  <relation id="300"><member type="way" ref="200" role="outer"/><member type="way" ref="201" role="inner"/><tag k="type" v="multipolygon"/><tag k="building" v="apartments"/></relation>
+</osm>`;
+      const pack = parseOsmXml(xml, "OSM advanced test");
+      const reverse = pack.roads.find((r) => r.id === "way-100");
+      const roundabout = pack.roads.find((r) => r.id === "way-101");
+      const service = pack.roads.find((r) => r.id === "way-102");
+      assert(Boolean(reverse?.oneway) && reverse!.points[0].z > reverse!.points[reverse!.points.length - 1].z,
+        "oneway=-1 должен развернуть направление осевой линии");
+      assert(reverse!.lanes === 3 && Math.abs(reverse!.width - 9.5) < 0.01, "Не применились lanes=3 и width=9.5");
+      assert(Boolean(roundabout?.roundabout) && Boolean(roundabout?.oneway), "Кольцо должно распознаваться как roundabout/oneway");
+      assert(service?.service === "parking_aisle" && service.lanes === 1 && Math.abs(service.width - 4.2) < 0.01,
+        "Не распознаны service=parking_aisle, lanes и ширина");
+      assert(pack.buildings.length >= 2, "Мультиполигон здания с внутренним двором должен разбиваться на корпуса");
+      assert(Boolean(pack.meta.origin) && pack.bounds.maxX - pack.bounds.minX > 300,
+        "Не сохранены WGS84 origin или реальные размеры bounds");
+      const p = reverse!.points;
+      const cropped = cropOsmPackToPolygon(pack, [
+        { x: Math.min(...p.map((v) => v.x)) - 8, z: Math.min(...p.map((v) => v.z)) - 8 },
+        { x: Math.max(...p.map((v) => v.x)) + 8, z: Math.min(...p.map((v) => v.z)) - 8 },
+        { x: Math.max(...p.map((v) => v.x)) + 8, z: Math.max(...p.map((v) => v.z)) + 8 },
+        { x: Math.min(...p.map((v) => v.x)) - 8, z: Math.max(...p.map((v) => v.z)) + 8 },
+      ]);
+      assert(Boolean(cropped.boundaryPolygon) && cropped.roads.length >= 1,
+        "Обрезка OSM-пакета по полигону должна сохранять границу и дорогу");
+      return `oneway=-1 · roundabout · service/lanes/width · courtyard=${pack.buildings.length} корп. · crop OK`;
     },
   },
 ];

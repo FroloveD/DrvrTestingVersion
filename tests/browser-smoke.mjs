@@ -794,7 +794,20 @@ try {
   check("L12 настройки мыши и режим руления сохраняются после перезагрузки",
     await mouseSteerToggle.isChecked() && await mouseGasToggle.isChecked() && await mouseSteerMode.inputValue() === "free");
   await page.getByRole("button",{name:"Базовый · 35°"}).click();check("L13 сброс настройки возвращает 35°",await slider.inputValue()==="35");
-  check("L14 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
+  await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
+  const cockpitButton = page.getByRole("button", {name:"2 Салон", exact:true});
+  await cockpitButton.click();
+  await page.mouse.move(sceneX, sceneY);
+  await sleep(260);
+  const cockpitFrame = await scene.screenshot();
+  await page.mouse.wheel(0, -320);
+  await sleep(220);
+  const cockpitZoomFrame = await scene.screenshot();
+  check("L14 режим салона включает физические зеркала, колесо меняет FOV",
+    !cockpitFrame.equals(cockpitZoomFrame), "кадр кабины должен измениться после регулировки FOV");
+  await page.getByRole("button", {name:"1 Сзади", exact:true}).click();
+  await sleep(100);
+  check("L15 возврат из кабины не вызывает ошибок рендера", errors.length===0, errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch(e) {
   check("L сценарий выполнен без исключений",false,String(e.message).slice(-460));
