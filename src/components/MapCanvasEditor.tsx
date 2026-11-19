@@ -233,6 +233,7 @@ function SignGlyph({ sign, unit, selected }: { sign: RoadSignDef; unit: number; 
 
 const TOOL_HINTS: Record<EditorTool, string> = {
   select: "Площадка: перетаскивание — перенос, угловые ручки — размер · объекты — перенос · пустое место — панорама",
+  boundary: "Кликайте, чтобы построить контур площадки; Enter или двойной клик — завершить, Esc — отменить",
   pan: "Зажмите кнопку мыши (или палец) и перетаскивайте карту · колесо — масштаб",
   start: "Кликните по карте, чтобы перенести стартовую позицию автомобиля",
   sign: "Кликните по карте, чтобы установить выбранный дорожный знак (затем можно сразу перетащить)",
@@ -255,6 +256,7 @@ export function MapCanvasEditor({
   onSelect,
   onLiveChange,
   onCommitChange,
+  draftBoundary, onDraftBoundaryChange, onFinishBoundary, onCancelBoundary,
 }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -451,6 +453,11 @@ export function MapCanvasEditor({
       if (last && Math.hypot(last.x - next.x, last.z - next.z) < 0.5) return prev;
       return [...prev, next];
     });
+  };
+
+  const handleCanvasDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (tool === "boundary" && draftBoundary.length >= 3) { e.preventDefault(); onFinishBoundary(draftBoundary); }
+    else finishRoadDraft();
   };
 
   const handleCanvasPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
