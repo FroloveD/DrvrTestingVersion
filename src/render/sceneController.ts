@@ -188,7 +188,14 @@ export class SceneController {
   private orbitYaw = 0;
   private orbitPitch = 0.36;
   private orbitDist = 9.2;
+  private readonly cameraDesiredPos = new THREE.Vector3();
+  private readonly cameraDesiredLook = new THREE.Vector3();
   private camLookTarget = new THREE.Vector3();
+
+  // Кэш пространственного отсечения зданий: статичный список не пересчитывается каждый кадр.
+  private lastBuildingCullX = Number.NaN;
+  private lastBuildingCullZ = Number.NaN;
+  private lastBuildingCullRadius = Number.NaN;
 
   // Общие текстуры (освобождаются при dispose)
   private readonly sharedTextures: THREE.Texture[] = [];
@@ -358,6 +365,9 @@ export class SceneController {
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
+    this.lastBuildingCullX = Number.NaN;
+    this.lastBuildingCullZ = Number.NaN;
+    this.lastBuildingCullRadius = Number.NaN;
     this.disposeGroup(this.worldGroup);
     this.buildingMeshes.length = 0;
     this.signalVisuals.length = 0;
@@ -726,17 +736,26 @@ export class SceneController {
     this.sun.position.set(state.x + 26, 44, state.z - 20);
     this.sun.target.position.set(state.x, 0, state.z);
 
-    // 2. Отсечение дальних зданий по радиусу (оптимизация под школьные ПК)
-    const r2 = opts.drawRadius * opts.drawRadius;
-    let vis = 0;
-    for (const bm of this.buildingMeshes) {
-      const dx = bm.position.x - state.x;
-      const dz = bm.position.z - state.z;
-      const show = dx * dx + dz * dz <= r2;
-      bm.visible = show;
-      if (show) vis++;
+    // 2. Отсечение дальних зданий: список статичен, поэтому обновляем его при смещении на 1 м
+    // или изменении радиуса. Это убирает полный проход по тысячам зданий из каждого кадра.
+    const cullDx = state.x - this.lastBuildingCullX;
+    const cullDz = state.z - this.lastBuildingCullZ;
+    const cullMoved = !Number.isFinite(this.lastBuildingCullX) || cullDx * cullDx + cullDz * cullDz >= 1;
+    if (cullMoved || opts.drawRadius !== this.lastBuildingCullRadius) {
+      const r2 = opts.drawRadius * opts.drawRadius;
+      let vis = 0;
+      for (const bm of this.buildingMeshes) {
+        const dx = bm.position.x - state.x;
+        const dz = bm.position.z - state.z;
+        const show = dx * dx + dz * dz <= r2;
+        bm.visible = show;
+        if (show) vis++;
+      }
+      this.visibleBuildings = vis;
+      this.lastBuildingCullX = state.x;
+      this.lastBuildingCullZ = state.z;
+      this.lastBuildingCullRadius = opts.drawRadius;
     }
-    this.visibleBuildings = vis;
 
     // 3. Подсветка линий свободных боксов
     for (const bv of this.bayVisuals) {
@@ -1037,14 +1056,15 @@ export class SceneController {
     const dist = this.orbitDist;
     const pitch = this.orbitPitch;
     const horiz = Math.cos(pitch) * dist;
-    const desiredPos = new THREE.Vector3(
+    this.cameraDesiredPos.set(
       s.x - Math.sin(angle) * horiz,
       Math.max(1.1, Math.sin(pitch) * dist + 0.8),
       s.z - Math.cos(angle) * horiz
     );
     const lerpK = mode === "orbit" ? 0.35 : 0.16;
-    this.camera.position.lerp(desiredPos, lerpK);
-    this.camLookTarget.lerp(new THREE.Vector3(s.x + fx * 1.1, 0.95, s.z + fz * 1.1), 0.22);
+    this.camera.position.lerp(this.cameraDesiredPos, lerpK);
+    this.cameraDesiredLook.set(s.x + fx * 1.1, 0.95, s.z + fz * 1.1);
+    this.camLookTarget.lerp(this.cameraDesiredLook, 0.22);
     this.camera.lookAt(this.camLookTarget);
   }
 
