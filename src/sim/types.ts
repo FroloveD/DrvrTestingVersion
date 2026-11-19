@@ -317,4 +317,8 @@ export type WorldData = {
    */
   embedInAttempt?: boolean;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Произвольный контур границы рабочей области мира (необязательно). */
+  boundaryPolygon?: Vec2[];
+  /** Контур асфальтовой площадки автодрома (необязательно). */
+  lotPolygon?: Vec2[];
 };
