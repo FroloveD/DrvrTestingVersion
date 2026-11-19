@@ -845,7 +845,9 @@ export function SimulatorView({
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === "mouse") {
       const prevX = mouseSteerXRef.current;
-      if (prevX !== null) {
+      const activeDrag = pointerDragRef.current;
+      const orbiting = activeDrag?.id === e.pointerId && activeDrag.btn === 2;
+      if (!orbiting && prevX !== null) {
         const steerDx = e.clientX - prevX;
         if (steerDx !== 0) {
           // Движение мыши вправо уменьшает swDeg (поворот вправо), без удержания ЛКМ.
