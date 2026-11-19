@@ -1155,7 +1155,7 @@ try {
         await page.getByRole("button", { name: /Открыть/ }).first().click();
         await sleep(600);
         check("P5 сохранённый маршрут открывается в 3D-тренажёре",
-          (await low(page)).includes("маршрут p"));
+          (await low(page)).includes("osm ·") && (await low(page)).includes("odbl"));
         await tab(page, "Каталог маршрутов");
         await page.reload();
         await sleep(500);
