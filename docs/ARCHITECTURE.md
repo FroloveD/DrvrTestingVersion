@@ -28,10 +28,10 @@
 │  src/sim/*        types · vehicle · controls · spatialGrid · step       │
 │                   recorder · journal · golden · selfTest · selfTestExtra│
 │  src/scoring/*    rules (RuleSet, evaluateAttempt, DEFAULT_CALIBRATION) │
-│  src/maps/*       osmLoader · osmXml · route · boundary (произвольные полигоны мира)                                     │
+│  src/maps/*       osmLoader · osmXml · route · routeCatalog · boundary                                     │
 │  src/scenarios/*  catalog · custom                                      │
 │  src/analytics/*  summary · calibration (ДИ Уилсона)                    │
-│  src/storage/*    journalStore (IndexedDB с fallback в память)          │
+│  src/storage/*    journalStore · routeCatalogStore (две локальные IndexedDB)          │
 │  src/strategy/*   plan (фазы, принципы, приоритеты, решения)            │
 │  src/handoff.ts   генератор HANDOFF.md и блока передачи контекста       │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -132,7 +132,15 @@ requestAnimationFrame(now)
 - **Вытеснение при переполнении (>300):** сначала удаляются самые старые попытки **без** оценки инструктора (`reviews`), чтобы не терять эталонную выборку сверки (`T19`).
 - **Деградация:** если IndexedDB заблокирован (приватное окно, `file://`, политика браузера), хранилище переключается в режим `"memory"` и явно сообщает об этом в UI, не роняя тренажёр.
 
-### 5.2. Ключи `localStorage`
+### 5.2. Каталог маршрутов OSM (`cdt-route-catalog`)
+
+- Отдельная IndexedDB, не смешанная с журналом попыток: object store `routes`, ключ `id`.
+- Каждая запись `cdt.route.v1` содержит путь, длину, последовательность контрольных точек, ODbL-метаданные, fingerprint геометрии и полный `CustomScenarioDef` снимок карты.
+- Fingerprint — FNV-1a 32-bit по канонизированным данным карты; это маркер смены содержимого, не криптографическая подпись.
+- При недоступности IndexedDB используется временный fallback в памяти с предупреждением; синхронизации с сервером нет.
+- Экспорт каталога: `cdt.routes.v1.json`; отдельный маршрут: `cdt.route.v1`.
+
+### 5.3. Ключи `localStorage`
 
 Все обращения обёрнуты в `try/catch`.
 
@@ -153,7 +161,7 @@ requestAnimationFrame(now)
 | `cdt.attempts.journal.v1` | `storage/journalStore.ts` | *Устаревший:* автоматически мигрируется в IndexedDB и удаляется |
 | `cdt.gamepad.mapping.v1` | `input/browserGamepads.ts` | *Устаревший:* принудительно удаляется при загрузке профиля |
 
-### 5.3. Выгружаемые файлы
+### 5.4. Выгружаемые файлы
 
 - **`cdt.golden.v1` (`.json`)** — эталонный набор попыток с FNV-1a checksum, паспортом авто, версией правил и ревью инструкторов (`src/sim/golden.ts`).
 - **`cdt.backup.v1` (`.json`)** — полная резервная копия всех попыток, правил, калибровки, своего сценария и заметки о лицензии (`src/components/PrivacyLegalView.tsx`).
@@ -232,8 +240,9 @@ requestAnimationFrame(now)
 | `T29` | `scenarios` | Чистые операции 2D-редактора (`src/scenarios/editorOps.ts`): привязка к сетке, перенос, поворот, узлы дорог, стоп-линия, дубль, удаление и Undo/Redo |
 | `T30` | `scenarios` | Произвольная форма площадки и полигональные границы мира; физическое удержание автомобиля внутри контура |
 | `T31` | `maps` | Расширенный OSM: `oneway=-1`, roundabout, service, lanes/width, multipolygon с двором, WGS84 bounds и обрезка по полигону |
+| `T32` | `maps` | Каталог экзаменационных маршрутов OSM: связность улиц, контрольные точки, остановка на финише, снимок карты и fingerprint |
 
-### 7.2. Браузерный смоук (`tests/browser-smoke.mjs`, сценарии `A–O`)
+### 7.2. Браузерный смоук (`tests/browser-smoke.mjs`, сценарии `A–P`)
 
 - **A:** холодный старт, блокировки `P`/стартера, заезд, открытие всех вкладок, прогон тестов в UI, работа по `http://` и `file://`, 0 внешних запросов.
 - **B:** автоперенос устаревшего `cdt.attempts.journal.v1` из `localStorage` в IndexedDB `cdt-journal`.
@@ -274,5 +283,7 @@ requestAnimationFrame(now)
 - `src/maps/osmDeconflict.ts` содержит геометрию дорожных коридоров и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости.
 - `src/maps/osmLoader.ts` нормализует OSM XML, Overpass JSON и GeoJSON: `oneway=-1`, roundabout, service, lanes/width, мосты/тоннели по `layer`, multipolygon-дома с дворами и WGS84 origin.
 - `src/maps/route.ts` строит кандидаты и граф дорожной сети с учётом направления и уровня дороги; `cropOsmPackToPolygon()` ограничивает импорт произвольным полигоном.
+- `src/maps/routeCatalog.ts` строит сохраняемую запись между двумя точками, валидирует связность и границы, создаёт КТ и snapshot исходной карты.
+- `src/storage/routeCatalogStore.ts` хранит записи каталога в отдельной IndexedDB `cdt-route-catalog`; интерфейс находится в `src/components/RouteCatalogView.tsx`.
 
 Новые поля схемы необязательны. `RoadSegment.cornerRadiusM` остаётся в активной модели; геометрия пользовательских дорог продолжает строиться через `roadGeometryPoints()`. OSM-импорт остаётся офлайн.
