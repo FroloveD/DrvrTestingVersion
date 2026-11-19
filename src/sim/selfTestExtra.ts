@@ -20,7 +20,7 @@ import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
-  roundRoadPolyline,
+  roadGeometryPoints,
   defaultCustomScenario,
   customFromOsmPack,
   customFromWorld,
@@ -587,11 +587,11 @@ export const extraCases: SelfTestCase[] = [
         "Отключение асфальта не должно удалять боксы и препятствия");
 
       const sharp = [{ x: 0, z: 0 }, { x: 0, z: 20 }, { x: 20, z: 20 }];
-      const rounded = roundRoadPolyline(sharp, 5);
+      const rounded = roadGeometryPoints(sharp, 5);
       assert(rounded.length > sharp.length, "Скругление должно добавлять промежуточные точки дуги");
       assert(rounded[0].x === 0 && rounded[0].z === 0 && rounded[rounded.length - 1].x === 20 && rounded[rounded.length - 1].z === 20,
         "Скругление должно сохранять начало и конец дороги");
-      assert(roundRoadPolyline(sharp, 0).length === sharp.length, "Нулевой радиус должен сохранять острые углы");
+      assert(roadGeometryPoints(sharp, 0).length === sharp.length, "Нулевой радиус должен сохранять острые углы");
       const curvedDef = { ...emptyCustomScenario(), roads: [{ id: "rounded", points: sharp, width: 1.5, lanes: 1, highway: "service", cornerRadiusM: 5 }] };
       const curvedWorld = buildCustomWorld(curvedDef);
       assert(curvedWorld.roads.find((road) => road.id === "rounded")?.points.length === rounded.length,
