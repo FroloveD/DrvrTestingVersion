@@ -26,7 +26,7 @@ const STATUS_META: Record<PhaseStatus, { label: string; tone: "mint" | "amber" |
 };
 
 export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) {
-  const [phaseId, setPhaseId] = useState("ph4");
+  const [phaseId, setPhaseId] = useState("ph5");
   const [done, setDone] = useState<string[]>(loadStrategyProgress);
   const [showMarkdown, setShowMarkdown] = useState(false);
 
