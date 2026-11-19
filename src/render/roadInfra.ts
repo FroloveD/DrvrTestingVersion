@@ -201,18 +201,19 @@ export function buildWorldRoadsAndSidewalks(
   // Пространственный индекс сегментов для проверки перекрёстков. Длинные OSM-сегменты
   // дробятся только для индексации: объединение частей геометрически совпадает с исходным сегментом.
   const junctionCellSize = 32;
+  const junctionMaxPad = 4;
   type JunctionSegment = {
     roadId: string;
     ax: number;
     az: number;
     bx: number;
     bz: number;
-    limitSq: number;
+    halfWidth: number;
   };
   const junctionSegmentsByCell = new Map<string, JunctionSegment[]>();
   const junctionCellKey = (x: number, z: number) => `${x},${z}`;
   const addJunctionSegment = (segment: JunctionSegment) => {
-    const margin = Math.sqrt(segment.limitSq);
+    const margin = segment.halfWidth + junctionMaxPad;
     const minCellX = Math.floor((Math.min(segment.ax, segment.bx) - margin) / junctionCellSize);
     const maxCellX = Math.floor((Math.max(segment.ax, segment.bx) + margin) / junctionCellSize);
     const minCellZ = Math.floor((Math.min(segment.az, segment.bz) - margin) / junctionCellSize);
@@ -229,8 +230,7 @@ export function buildWorldRoadsAndSidewalks(
 
   for (const road of surfaceStreets) {
     const points = roadPointsById.get(road.id) ?? road.points;
-    const margin = road.width * 0.5 + 2.3;
-    const limitSq = margin * margin;
+    const halfWidth = road.width * 0.5;
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i];
       const b = points[i + 1];
@@ -247,13 +247,13 @@ export function buildWorldRoadsAndSidewalks(
           az: a.z + dz * t0,
           bx: a.x + dx * t1,
           bz: a.z + dz * t1,
-          limitSq,
+          halfWidth,
         });
       }
     }
   }
 
-  const inJunction = (px: number, pz: number, ownId: string): boolean => {
+  const inJunction = (px: number, pz: number, ownId: string, pad = 1.5): boolean => {
     const cellX = Math.floor(px / junctionCellSize);
     const cellZ = Math.floor(pz / junctionCellSize);
     const candidates = junctionSegmentsByCell.get(junctionCellKey(cellX, cellZ));
@@ -268,7 +268,8 @@ export function buildWorldRoadsAndSidewalks(
         : 0;
       const cx = segment.ax + abx * t;
       const cz = segment.az + abz * t;
-      if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= segment.limitSq) return true;
+      const limit = segment.halfWidth + pad;
+      if ((px - cx) * (px - cx) + (pz - cz) * (pz - cz) <= limit * limit) return true;
     }
     return false;
   };
@@ -420,7 +421,7 @@ export function buildWorldRoadsAndSidewalks(
             const sx = p0.x + fx * d + lx * curbOff;
             const sz = p0.z + fz * d + lz * curbOff;
             return (
-              (layerVal === 0 && inJunction(sx, sz, road.id)) ||
+              (layerVal === 0 && inJunction(sx, sz, road.id, 2.3)) ||
               inCrosswalk(sx, sz, 1.1) ||
               inBayOpening(sx, sz)
             );
