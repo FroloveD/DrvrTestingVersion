@@ -328,7 +328,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                   <button type="button" className="btn btn-mini btn-primary" onClick={() => onOpenRoute(route.scenarioSnapshot)}><Icon name="play" size={13} /> Открыть</button>
                   <button type="button" className="btn btn-mini" data-testid="route-edit-button" onClick={() => setEditing({
                     id: route.id, title: route.title, checkpoints: route.checkpoints.map((point) => ({ ...point })),
-                  })}><Icon name="edit" size={13} /> Редактировать</button>
+                  })}><Icon name="clipboard" size={13} /> Редактировать</button>
                   <button type="button" className="btn btn-mini" onClick={() => downloadJson(`${route.id}.json`, route, onNotify)} title="Экспорт маршрута"><Icon name="download" size={13} /></button>
                   <button type="button" className="btn btn-mini btn-danger" onClick={() => void handleDelete(route)} title="Удалить маршрут"><Icon name="trash" size={13} /></button>
                 </div>
