@@ -7,6 +7,9 @@
  */
 import * as THREE from "three";
 import type { Gear, SimState, WorldData } from "../sim/types";
+import type { RadioStation } from "../audio/radioCatalog";
+import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
+import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import { clamp, formatGearLabel, isManualGear, MAX_FORWARD_GEAR, SHIFT_HINT_RPM } from "../sim/vehicle";
 
 /** Режим экрана 7" ШГУ Kia Ceed JD (`assist` — ассистент манёвра, `radio` — FM-радио, `clip` — видеоклип/медиа, `off` — отключён). */
@@ -19,50 +22,11 @@ export const HEAD_UNIT_MODES: readonly { id: HeadUnitMode; short: string; label:
   { id: "off", short: "ВЫКЛ", label: "Ассистент выкл." },
 ];
 
-/** Станция встроенного офлайн FM-тюнера ШГУ (частота, RDS-название и нотный паттерн для Web Audio). */
-export type RadioStationDef = {
-  freq: string;
-  name: string;
-  track: string;
-  bpm: number;
-  notes: readonly number[];
-  accent: string;
-};
-
-export const RADIO_STATIONS: readonly RadioStationDef[] = [
-  {
-    freq: "101.2",
-    name: "АВТО ДРАЙВ",
-    track: "Ночной проспект · Synth Drive",
-    bpm: 114,
-    notes: [220, 261.63, 329.63, 392, 329.63, 293.66, 349.23, 440],
-    accent: "#52d6bd",
-  },
-  {
-    freq: "104.7",
-    name: "ДОРОЖНОЕ FM",
-    track: "Огни большого города · Soft Pop",
-    bpm: 96,
-    notes: [261.63, 329.63, 392, 493.88, 440, 392, 329.63, 293.66],
-    accent: "#f5b942",
-  },
-  {
-    freq: "106.2",
-    name: "РЕТРО ВОЛНА",
-    track: "Тёплый асфальт 88 · Retro FM",
-    bpm: 120,
-    notes: [246.94, 293.66, 369.99, 440, 493.88, 440, 369.99, 329.63],
-    accent: "#38bdf8",
-  },
-  {
-    freq: "95.6",
-    name: "КЛАССИКА FM",
-    track: "Утренний этюд · Lounge",
-    bpm: 78,
-    notes: [196, 246.94, 293.66, 392, 369.99, 329.63, 293.66, 246.94],
-    accent: "#a78bfa",
-  },
-];
+/**
+ * Реальные интернет-радиостанции тюнера ШГУ (прямые MP3/AAC-потоки) с параметрами офлайн-синтеза.
+ * Каталог живёт в чистом ядре `src/audio/radioCatalog.ts` (T36), рендер только читает его.
+ */
+export const RADIO_STATIONS: readonly RadioStation[] = INTERNET_RADIO_STATIONS;
 
 /** Плейлист процедурных офлайн-видеоклипов на экране 7" ШГУ. */
 export const HEAD_UNIT_CLIPS: readonly { title: string; subtitle: string; theme: "night_city" | "coast" }[] = [
@@ -84,15 +48,33 @@ export type HeadUnitState = {
   stationIndex: number;
   radioPlaying: boolean;
   clipIndex: number;
+  /** Громкость 0..1 (шайба VOL). */
+  volume: number;
+  /** Источник звука: реальный интернет-поток станции или сохранённый (закэшированный) трек. */
+  source: HeadUnitSource;
+  /** Ключ сохранённого трека в кэше `cdt-audio` при `source = "saved"`. */
+  savedTrackKey: string | null;
+  /** Состояние интернет-потока: подключение, живой эфир или недоступность. */
+  streamStatus: "idle" | "connecting" | "live" | "error";
+  /** Число сохранённых (закэшированных) треков для индикатора на экране ШГУ. */
+  savedCount: number;
   /** Опциональный промо-блок (по умолчанию `null` — задел под будущую рекламу). */
   promoSlot?: HeadUnitPromoSlot | null;
 };
+
+/** Источник звука ШГУ: живой интернет-эфир станции, кэшированный трек или офлайн-синтез. */
+export type HeadUnitSource = "stream" | "saved" | "synth";
 
 export const DEFAULT_HEAD_UNIT_STATE: HeadUnitState = {
   mode: "assist",
   stationIndex: 0,
   radioPlaying: false,
   clipIndex: 0,
+  volume: 0.7,
+  source: "stream",
+  savedTrackKey: null,
+  streamStatus: "idle",
+  savedCount: 0,
   promoSlot: null,
 };
 
@@ -126,6 +108,8 @@ export type ClusterSnapshot = {
   finished: boolean;
   steerNorm: number; // -1..+1 (+ влево)
   brakeHeld: boolean;
+  /** Индикация Shift Lock / BTSI: заблокирован ли селектор и нужна ли педаль тормоза. */
+  shiftLocked: boolean;
   simTimeSec: number;
   headUnit: HeadUnitState;
   mediaPhase: number;
@@ -204,6 +188,7 @@ export class CockpitDisplayController {
       handbrake: true,
       belt: false,
       lights: false,
+      shiftLocked: true,
       inLineCross: false,
       inContact: false,
       distKm: 0,
@@ -261,7 +246,7 @@ export class CockpitDisplayController {
     const brakeHeld = isBraking || (state.brakePos ?? 0) > 0.12;
     const mediaPhase = Math.floor(wallTimeSec * 4) % 96;
 
-    const clusterKey = `${state.engineOn ? 1 : 0}|${speedQ}|${rpmQ}|${gearLabel}|${limit}|${leftLit ? 1 : 0}|${rightLit ? 1 : 0}|${state.handbrake ? 1 : 0}|${state.belt ? 1 : 0}|${state.lights ? 1 : 0}|${brakeHeld ? 1 : 0}|${distQ.toFixed(2)}`;
+    const clusterKey = `${state.engineOn ? 1 : 0}|${speedQ}|${rpmQ}|${gearLabel}|${limit}|${leftLit ? 1 : 0}|${rightLit ? 1 : 0}|${state.handbrake ? 1 : 0}|${state.belt ? 1 : 0}|${state.lights ? 1 : 0}|${brakeHeld ? 1 : 0}|${distQ.toFixed(2)}|${state.engineOn && state.gear === "P" && (state.brakePos ?? 0) < SHIFT_LOCK_MIN_BRAKE ? 1 : 0}`;
     const inReverseCam = state.engineOn && state.gear === "R";
 
     let snap: ClusterSnapshot | undefined;
@@ -296,6 +281,7 @@ export class CockpitDisplayController {
         finished: state.finished,
         steerNorm,
         brakeHeld,
+        shiftLocked: !state.engineOn || ((state.brakePos ?? 0) < SHIFT_LOCK_MIN_BRAKE && state.gear === "P"),
         simTimeSec: state.time,
         headUnit,
         mediaPhase,
@@ -524,6 +510,16 @@ export class CockpitDisplayController {
     g.textBaseline = "middle";
     g.fillText("!", 256, 22.5);
 
+    // Индикатор SHIFT LOCK: запертый селектор при заглушенном ДВС или ненажатом тормозе в P
+    if (s.shiftLocked) {
+      g.fillStyle = "#f5b942";
+      g.font = "900 9px system-ui, sans-serif";
+      g.fillText("SHIFT LOCK", 256, 140);
+      g.fillStyle = "#94a3b8";
+      g.font = "700 8px system-ui, sans-serif";
+      g.fillText(s.engineOn ? "НАЖМИТЕ ТОРМОЗ S" : "ЗАПУСТИТЕ ДВС (I)", 256, 152);
+    }
+
     // Центральный цветной TFT-дисплей борткомпьютера Supervision
     const bx = 192;
     const by = 40;
@@ -660,6 +656,18 @@ export class CockpitDisplayController {
     if (mode === "radio") {
       const station = RADIO_STATIONS[clamp(s.headUnit.stationIndex, 0, RADIO_STATIONS.length - 1)];
       const playing = s.headUnit.radioPlaying;
+      const live = playing && s.headUnit.source === "stream" && s.headUnit.streamStatus === "live";
+      const sourceLabel = !playing
+        ? "ПАУЗА"
+        : s.headUnit.source === "saved"
+          ? "СОХРАНЁННЫЙ ТРЕК"
+          : s.headUnit.streamStatus === "connecting"
+            ? "ПОДКЛЮЧЕНИЕ К ЭФИРУ…"
+            : s.headUnit.streamStatus === "error"
+              ? "ЭФИР НЕДОСТУПЕН · ОФЛАЙН-СИНТЕЗ"
+              : live
+                ? "ЖИВОЙ ЭФИР · ИНТЕРНЕТ"
+                : "ОФЛАЙН-СИНТЕЗ ЭФИРА";
       const grad = g.createLinearGradient(0, tabH, 0, contentH);
       grad.addColorStop(0, "#101827");
       grad.addColorStop(1, "#070d16");
@@ -674,7 +682,7 @@ export class CockpitDisplayController {
       g.fillText(station.name, w * 0.5, 112);
       g.fillStyle = "#94a3b8";
       g.font = "600 13px system-ui, sans-serif";
-      g.fillText(station.track, w * 0.5, 134);
+      g.fillText(`${station.name} · ${station.genre}`, w * 0.5, 134);
       // Эквалайзер: анимированная фаза только в режимах радио/клипа, в покое — статичная картинка
       const bars = 18;
       for (let i = 0; i < bars; i++) {
@@ -684,8 +692,11 @@ export class CockpitDisplayController {
         g.fillRect(52 + i * 16, 166 - bh, 9, bh);
       }
       g.fillStyle = playing ? "#52d6bd" : "#64748b";
-      g.font = "800 12px system-ui, sans-serif";
-      g.fillText(playing ? "▶ ВОСПРОИЗВЕДЕНИЕ · ОФЛАЙН FM" : "❚❚ ПАУЗА · ОФЛАЙН FM", w * 0.5, 184);
+      g.font = "800 11px system-ui, sans-serif";
+      g.fillText(`${playing ? "▶" : "❚❚"} ${sourceLabel}${s.headUnit.savedCount > 0 ? ` · КЭШ ${s.headUnit.savedCount}` : ""}`, w * 0.5, 182);
+      g.fillStyle = "#64748b";
+      g.font = "700 10px system-ui, sans-serif";
+      g.fillText(`VOL ${Math.round((s.headUnit.volume ?? 0.7) * 100)}%  ·  В ЭФИРЕ ${station.bpm} BPM`, w * 0.5, 197);
       this.drawHeadUnitTabs(g, w, tabH, contentH, mode);
       return;
     }

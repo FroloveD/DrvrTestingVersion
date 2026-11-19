@@ -1,9 +1,19 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), КПП/Shift/динамика (T25, T34), Markdown (T26), OSM/границы/маршруты/редактор (T27–T33).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), КПП/Shift/динамика (T25, T34–T35), радио/кэш треков и Shift Lock (T36), Markdown (T26), OSM/границы/маршруты/редактор (T27–T33).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
+import {
+  clampVolume,
+  describeStation,
+  formatTrackDuration,
+  INTERNET_RADIO_STATIONS,
+  nextStationIndex,
+  renderTrackWav,
+  trackCacheKey,
+  TRACK_SAMPLE_RATE,
+} from "../audio/radioCatalog";
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
 import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
@@ -78,6 +88,7 @@ import {
   applyShifterTarget,
   checkEngineToggle,
   checkGearChange,
+  shiftLockState,
   PARK_LOCK_MAX_SPEED_MS,
   SHIFT_LOCK_MIN_BRAKE,
   stepGearSequential,
@@ -1636,6 +1647,65 @@ export const extraCases: SelfTestCase[] = [
       );
 
       return `D1 creep=${creepKmh.toFixed(1)} км/ч @ ${Math.round(creepS.rpm)} об/мин · 100–0=${stopDist100.toFixed(1)} м · M2<N · BTSI P OK`;
+    },
+  },
+  {
+    id: "T36",
+    suite: "audio",
+    name: "Радио ШГУ: реальные интернет-станции, громкость, кэш-ключи и офлайн-рендер трека в WAV",
+    fn: () => {
+      // 1. Каталог реальных интернет-станций: уникальные id/частоты, только https-потоки
+      assert(INTERNET_RADIO_STATIONS.length >= 4, `В каталоге должно быть ≥ 4 станции, есть ${INTERNET_RADIO_STATIONS.length}`);
+      const ids = new Set(INTERNET_RADIO_STATIONS.map((st) => st.id));
+      assert(ids.size === INTERNET_RADIO_STATIONS.length, "id станций должны быть уникальны");
+      for (const st of INTERNET_RADIO_STATIONS) {
+        assert(/^https:\/\//.test(st.streamUrl), `Поток станции ${st.id} должен быть по https`);
+        assert(st.bpm >= 40 && st.notes.length >= 4, `Станция ${st.id}: нужны bpm и аккордовая сетка`);
+        assert(describeStation(st).includes(st.freq) && describeStation(st).includes(st.name), "Описание станции должно содержать частоту и название");
+      }
+
+      // 2. Листание станций по кругу и громкость 0..100 %
+      assert(nextStationIndex(0, -1) === INTERNET_RADIO_STATIONS.length - 1, "Листание станции влево должно зацикливаться");
+      assert(nextStationIndex(INTERNET_RADIO_STATIONS.length - 1, 1) === 0, "Листание станции вправо должно зацикливаться");
+      assert(nextStationIndex(2, 1) === 3, "Следующая станция +1");
+      assert(clampVolume(1.4) === 1 && clampVolume(-0.3) === 0 && clampVolume(Number.NaN) === 0.7, "Громкость ограничивается 0..1");
+      assert(clampVolume(0.456) === 0.46, "Громкость округляется до 1 %");
+
+      // 3. Ключи кэша треков и форматирование длительности
+      assert(trackCacheKey("record", 32) === "radio:record:32s", "Ключ кэша трека");
+      assert(trackCacheKey("record", 32) === trackCacheKey("record", 31.6), "Ключ кэша округляет длительность");
+      assert(formatTrackDuration(32) === "00:32" && formatTrackDuration(125) === "02:05", "Формат длительности мм:сс");
+
+      // 4. Офлайн-рендер трека в WAV: корректный RIFF/WAVE-заголовок, PCM 16 бит моно, ненулевой сигнал
+      const station = INTERNET_RADIO_STATIONS[0];
+      const wav = renderTrackWav(station, 2);
+      const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+      const ascii = (off: number, len: number) => String.fromCharCode(...wav.slice(off, off + len));
+      assert(ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE" && ascii(36, 4) === "data", "WAV: заголовок RIFF/WAVE/data");
+      assert(view.getUint16(20, true) === 1, "WAV: PCM");
+      assert(view.getUint16(22, true) === 1, "WAV: моно");
+      assert(view.getUint32(24, true) === TRACK_SAMPLE_RATE, "WAV: частота дискретизации");
+      assert(view.getUint16(34, true) === 16, "WAV: 16 бит на сэмпл");
+      const frames = view.getUint32(40, true) / 2;
+      assert(frames === TRACK_SAMPLE_RATE * 2, `WAV: 2 с должно быть ${TRACK_SAMPLE_RATE * 2} кадров, есть ${frames}`);
+      let peak = 0;
+      for (let i = 44; i < wav.length; i += 2) peak = Math.max(peak, Math.abs(view.getInt16(i, true)));
+      assert(peak > 3000, `WAV: сигнал не должен быть тишиной (пик ${peak})`);
+      assert(renderTrackWav(station, 1).length !== renderTrackWav(station, 2).length, "Длина WAV зависит от запрошенных секунд");
+
+      // 5. Блокировка селектора «как в реальном автомобиле»: Shift Lock / BTSI
+      const deadEngine = shiftLockState({ gear: "P", engineOn: false, brake: 1 }, 0);
+      assert(deadEngine.locked && deadEngine.reason === "engine_off", "Заглушенный ДВС должен запирать селектор");
+      const noBrake = shiftLockState({ gear: "P", engineOn: true, brake: 0 }, 0, "D");
+      assert(noBrake.locked && noBrake.reason === "brake" && noBrake.brakeRequired, "BTSI: выход из P без тормоза заперт");
+      const withBrake = shiftLockState({ gear: "P", engineOn: true, brake: SHIFT_LOCK_MIN_BRAKE }, 0, "D");
+      assert(!withBrake.locked && withBrake.reason === null, "BTSI: с нажатым тормозом селектор свободен");
+      const moving = shiftLockState({ gear: "D", engineOn: true, brake: 1 }, 8, "P");
+      assert(moving.locked && moving.reason === "speed", "P на ходу должен быть заперт");
+      const driving = shiftLockState({ gear: "D", engineOn: true, brake: 0 }, 15, "D");
+      assert(!driving.locked, "В движении в D селектор не заперт");
+
+      return `станций=${INTERNET_RADIO_STATIONS.length} · WAV ${(wav.length / 1024).toFixed(0)} КБ/2 с · пик ${peak} · Shift Lock OK`;
     },
   },
 ];

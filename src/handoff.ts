@@ -48,7 +48,7 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 35 автотестов ядра (T01–T35), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Тесты ядра | 36 автотестов ядра (T01–T36), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
 L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
@@ -127,6 +127,9 @@ L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `ba
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |");
 L.push("| `src/render/sceneController.ts`, `src/render/staticBatcher.ts`, `src/render/cockpitDisplays.ts`, `src/render/roadInfra.ts`, `src/render/roadTextures.ts`, `src/render/roadSignTextures.ts`, `src/render/cityBuildings.ts`, `src/render/vehiclesAndPeds.ts` | весь Three.js: чанковый батчинг статики, живые 3D-приборы Supervision и ШГУ/R-камера, 360°-небо + PBR IBL, ГОСТ-дороги/тротуары/разметка/светофоры/знаки, здания и деревья РФ/СНГ, Kia Ceed JD, 3D-зеркала, dispose (`[SEC:...]`) |");
+L.push("| `src/audio/radioCatalog.ts` | каталог реальных интернет-радиостанций (MP3/AAC-потоки), громкость, ключи кэша и детерминированный офлайн-рендер трека в WAV |");
+L.push("| `src/audio/trackStore.ts` | кэш сохранённых треков в IndexedDB `cdt-audio` с деградацией в память |");
+L.push("| `src/audio/engineSound.ts` | процедурный звук ДВС 1.6 MPI и шин на Web Audio (без внешних файлов) |");
 L.push("| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |");
 L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |");
 L.push("| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |");

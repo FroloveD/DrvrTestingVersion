@@ -41,6 +41,68 @@ function matchManualGearForSpeed(speedMs: number): Gear {
   return manualGearOf(MAX_FORWARD_GEAR);
 }
 
+/** Причина блокировки селектора АКПП для индикации Shift Lock в салоне и на приборке. */
+export type ShiftLockReason = "engine_off" | "brake" | "speed";
+
+/** Состояние соленоида Shift Lock / BTSI для текущего ввода и скорости автомобиля. */
+export type ShiftLockState = {
+  /** Селектор заблокирован — переключение сейчас невозможно. */
+  locked: boolean;
+  /** Причина блокировки (`engine_off` — ДВС заглушен, `brake` — не нажат тормоз, `speed` — автомобиль движется). */
+  reason: ShiftLockReason | null;
+  /** Нужно ли нажать педаль тормоза, чтобы снять блокировку (BTSI). */
+  brakeRequired: boolean;
+  /** Подсказка водителю для HUD/приборки. */
+  hint: string;
+};
+
+/**
+ * Вычисляет состояние блокировки селектора АКПП «как в реальном автомобиле» с кнопкой запуска Kia Ceed JD.
+ *
+ * - ДВС заглушен → селектор заперт электромагнитом (переключение недоступно без зажигания).
+ * - ДВС запущен, но педаль тормоза не нажата → срабатывает BTSI (`SHIFT_LOCK_MIN_BRAKE`).
+ * - Автомобиль движется → нельзя включить `P` и нельзя менять направление (`R ↔ D`).
+ * - В остальных случаях селектор свободен.
+ *
+ * @param inp Передача, состояние ДВС и усилие на педали тормоза.
+ * @param speedMs Продольная скорость автомобиля, м/с.
+ * @param next Целевой режим КПП (по умолчанию — следующий по кулисе из текущего).
+ * @returns Состояние блокировки с причиной и подсказкой.
+ */
+export function shiftLockState(
+  inp: GearCheckInput,
+  speedMs: number,
+  next?: Gear
+): ShiftLockState {
+  const target = next ?? inp.gear;
+  const moving = Math.abs(speedMs) > PARK_LOCK_MAX_SPEED_MS;
+  if (!inp.engineOn) {
+    return {
+      locked: true,
+      reason: "engine_off",
+      brakeRequired: false,
+      hint: "ДВС заглушен — селектор заперт, запустите двигатель (I) в P или N",
+    };
+  }
+  if (target === "P" && moving) {
+    return {
+      locked: true,
+      reason: "speed",
+      brakeRequired: true,
+      hint: "Включить P можно только после полной остановки (тормоз S)",
+    };
+  }
+  if (inp.gear === "P" && target !== "P" && (inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
+    return {
+      locked: true,
+      reason: "brake",
+      brakeRequired: true,
+      hint: "SHIFT LOCK: нажмите педаль тормоза (S), чтобы выйти из P",
+    };
+  }
+  return { locked: false, reason: null, brakeRequired: false, hint: "" };
+}
+
 /**
  * Проверяет допустимость переключения селектора КПП в режим `next`.
  *

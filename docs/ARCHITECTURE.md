@@ -31,6 +31,7 @@
 │  src/maps/*       osmLoader · route                                     │
 │  src/scenarios/*  catalog · custom                                      │
 │  src/analytics/*  summary · calibration (ДИ Уилсона)                    │
+│  src/audio/*      radioCatalog (станции, громкость, WAV-рендер трека)    │
 │  src/storage/*    journalStore (IndexedDB с fallback в память)          │
 │  src/strategy/*   plan (фазы, принципы, приоритеты, решения)            │
 │  src/handoff.ts   генератор HANDOFF.md и блока передачи контекста       │
@@ -131,6 +132,15 @@ requestAnimationFrame(now)
 - **Вытеснение при переполнении (>300):** сначала удаляются самые старые попытки **без** оценки инструктора (`reviews`), чтобы не терять эталонную выборку сверки (`T19`).
 - **Деградация:** если IndexedDB заблокирован (приватное окно, `file://`, политика браузера), хранилище переключается в режим `"memory"` и явно сообщает об этом в UI, не роняя тренажёр.
 
+### 5.1.1. IndexedDB `cdt-audio` (`src/audio/trackStore.ts`) — кэш сохранённых треков ШГУ
+
+| Object Store | Ключ | Содержимое | Когда читается |
+|---|---|---|---|
+| `tracks` | `key` (`radio:<станция>:<сек>s`) | `SavedTrack`: станция, частота, длительность, дата и `blob` — WAV-трек, отрендеренный `renderTrackWav` | Список — при открытии панели «Управление»; сам трек — при выборе «Слушать кэш» |
+
+- **Живой эфир:** реальные интернет-станции (`INTERNET_RADIO_STATIONS`) играют через `<audio>` по https-потоку; при недоступности сети ШГУ честно показывает «ЭФИР НЕДОСТУПЕН», а сохранённые треки продолжают играть офлайн.
+- **Сохранение во время поездки:** кнопка «⤓ Сохранить трек в поездке» детерминированно рендерит 32-секундный эфирный трек в WAV (`renderTrackWav`) и кладёт его в IndexedDB, поэтому на него не влияет ни загрузка ЦП, ни реплей.
+
 ### 5.2. Ключи `localStorage`
 
 Все обращения обёрнуты в `try/catch`.
@@ -148,6 +158,8 @@ requestAnimationFrame(now)
 | `cdt.instructorName.v1` | `App.tsx` | ФИО инструктора для журнала сверки |
 | `cdt.blindReview.v1` | `App.tsx` | `"1"` / `"0"` — слепой режим (скрывает вердикт симулятора до оценки инструктором) |
 | `cdt.strategy.v1` | `strategy/plan.ts` | Отмеченные чекбоксы следующих действий во вкладке стратегии |
+| `cdt.headunit.v1` | `SimulatorView.tsx` | Режим 7" ШГУ, станция, клип, громкость и источник (эфир/кэш) |
+| `cdt.sound.v1` | `SimulatorView.tsx` | `"1"` / `"0"` — процедурный звук ДВС, шин и ШГУ включён |
 | `cdt.licenseNote.v1` | `PrivacyLegalView.tsx` | Текст решения владельца по лицензии |
 | `cdt-checklist-v1` | `AuditView.tsx` | Чек-лист исторического аудита монолита v8 |
 | `cdt.attempts.journal.v1` | `storage/journalStore.ts` | *Устаревший:* автоматически мигрируется в IndexedDB и удаляется |
@@ -233,6 +245,7 @@ requestAnimationFrame(now)
 | `T32` | `route` | Проверка маршрута (`src/maps/routeCheck.ts`): связность по графу дорог (Дейкстра), выбор/реверс улицы, `autoFixScenarioRoute` и финиш `isFinalPark` без боксов |
 | `T33` | `osm` | Бесконфликтный двухпроходный импорт (`src/maps/osmDeconflict.ts` + `osmLoader.ts`): мультиполигоны/дворы, навесы `building=roof`, проемы в заборах, `oneway`/`layer`, единицы `RU:*`/`mph`/`ft` и WGS84-слияние |
 | `T34` | `vehicle` | 6-ст. КПП Shiftronic (`stepGearSequential` на `Shift`), плавная инерция оборотов ДВС (800–6450 об/мин, перегазовка в `P`/`N`), паспортный разгон `0–100 км/ч ≈ 10,8 с`, потолок `Vmax = 180 км/ч` и 1:1 RLE-реплей |
+| `T36` | `audio` | Радио ШГУ (`src/audio/radioCatalog.ts`): реальные интернет-станции с https-потоками, листание по кругу, громкость 0–100 %, ключи кэша, офлайн-рендер трека в WAV (RIFF/PCM 16 бит) и чистая индикация Shift Lock/BTSI (`shiftLockState`) |
 | `T35` | `vehicle` | Гидравлический тормоз `computeServiceBrakeDecel` (прогрессивный, без реверса, `60–0`/`100–0`), выбег на `N`/`R`/`D` с DFCO-торможением двигателем, самоход `D1`/`M1` на ХХ `computeIdleCreepAccel` (`≈ 6,5 км/ч`, удержание тормозом) и BTSI-блокировка `P` (`SHIFT_LOCK_MIN_BRAKE`) |
 
 ### 7.2. Браузерный смоук (`tests/browser-smoke.mjs`, сценарии `A–P`)

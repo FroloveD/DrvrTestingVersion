@@ -49,6 +49,7 @@ import {
   type DetailedPedestrianVisual,
   type ShifterHitId,
 } from "./vehiclesAndPeds";
+import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
   CameraMode,
   ObstacleBox,
@@ -1091,6 +1092,19 @@ export class SceneController {
     }
     if (rig.startBtnMat) {
       rig.startBtnMat.color.setHex(state.engineOn ? 0x22c55e : 0xd97706);
+    }
+    if (rig.gearGateRimMat && !this.shifterDragging && this.shifterHover === null) {
+      // Shift Lock «как в жизни»: рамка кулисы и набалдашник предупреждают, что селектор заперт без тормоза
+      const lockedInP = state.engineOn && state.gear === "P" && (state.brakePos ?? 0) < SHIFT_LOCK_MIN_BRAKE;
+      const deadSelector = !state.engineOn;
+      if (lockedInP || deadSelector) {
+        rig.gearGateRimMat.emissive.setHex(0xf5b942);
+        rig.gearGateRimMat.emissiveIntensity = 0.22;
+        if (rig.gearKnobCapMat) {
+          rig.gearKnobCapMat.emissive.setHex(0xf5b942);
+          rig.gearKnobCapMat.emissiveIntensity = 0.16;
+        }
+      }
     }
     if (rig.brakePedalPivot) {
       rig.brakePedalPivot.rotation.x = isBraking ? -0.22 : 0;

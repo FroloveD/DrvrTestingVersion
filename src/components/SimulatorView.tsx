@@ -24,6 +24,17 @@ import { buildRouteCorridorPolygon } from "../maps/boundary";
 import { cropOsmPackToPolygon, parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
 import { buildRouteFromRoads, listRouteCandidates, streetNameAt } from "../maps/route";
 import { checkScenarioRoute } from "../maps/routeCheck";
+import { EngineSound } from "../audio/engineSound";
+import {
+  clampVolume,
+  nextStationIndex,
+  renderTrackWav,
+  trackCacheKey,
+  VOLUME_STEP,
+  type RadioStation,
+} from "../audio/radioCatalog";
+import * as trackStore from "../audio/trackStore";
+import { type SavedTrack } from "../audio/trackStore";
 import {
   DEFAULT_HEAD_UNIT_STATE,
   HEAD_UNIT_CLIPS,
@@ -42,6 +53,7 @@ import {
   applyShifterTarget,
   checkEngineToggle,
   checkGearChange,
+  shiftLockState,
   stepGearSequential,
   stepShifterGate,
   type ShifterTarget,
@@ -150,11 +162,20 @@ function loadHeadUnit(): HeadUnitState {
       parsed.mode && HEAD_UNIT_MODES.some((m) => m.id === parsed.mode) ? parsed.mode : DEFAULT_HEAD_UNIT_STATE.mode;
     const stationIndex = clamp(Math.round(Number(parsed.stationIndex) || 0), 0, RADIO_STATIONS.length - 1);
     const clipIndex = clamp(Math.round(Number(parsed.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1);
+    const source =
+      parsed.source === "saved" || parsed.source === "synth" || parsed.source === "stream"
+        ? parsed.source
+        : DEFAULT_HEAD_UNIT_STATE.source;
     return {
       mode,
       stationIndex,
       clipIndex,
       radioPlaying: Boolean(parsed.radioPlaying),
+      volume: clampVolume(Number(parsed.volume ?? DEFAULT_HEAD_UNIT_STATE.volume)),
+      source,
+      savedTrackKey: typeof parsed.savedTrackKey === "string" ? parsed.savedTrackKey : null,
+      streamStatus: "idle",
+      savedCount: 0,
       promoSlot: DEFAULT_HEAD_UNIT_STATE.promoSlot ?? null,
     };
   } catch {
@@ -753,7 +774,7 @@ export function SimulatorView({
     }));
   }, [onNotify]);
 
-  // === [SEC:sim-media] 7" ШГУ: режимы экрана, FM-тюнер, клипы и офлайн Web Audio синтез ===
+  // === [SEC:sim-media] 7" ШГУ: реальные интернет-радиостанции, сохранённые (кэшированные) треки, VOL/TUNE ===
   /** Переключает режим экрана 7" ШГУ по кругу: ассистент → радио → клип → выкл. */
   const cycleHeadUnitMode = useCallback(() => {
     setHeadUnit((prev) => {
@@ -763,7 +784,7 @@ export function SimulatorView({
       return {
         ...prev,
         mode: next.id,
-        radioPlaying: next.id === "radio" ? prev.radioPlaying : next.id === "clip" ? true : false,
+        radioPlaying: next.id === "radio" ? true : next.id === "clip" ? true : false,
       };
     });
   }, [onNotify]);
@@ -774,35 +795,53 @@ export function SimulatorView({
       setHeadUnit((prev) => ({
         ...prev,
         mode,
-        radioPlaying: mode === "radio" ? prev.radioPlaying : mode === "clip" ? true : false,
+        radioPlaying: mode === "radio" ? true : mode === "clip" ? true : false,
       }));
       onNotify(`Экран 7" ШГУ: ${HEAD_UNIT_MODES.find((m) => m.id === mode)?.label ?? mode}`);
     },
     [onNotify]
   );
 
-  /** Листает станции встроенного FM-тюнера (`dir = +1` вправо по шкале, `−1` влево). */
+  /** Листает реальные интернет-станции (`dir = +1` вправо по шкале, `−1` влево) и запускает эфир. */
   const stepRadioStation = useCallback(
     (dir: 1 | -1) => {
       setHeadUnit((prev) => {
-        const total = RADIO_STATIONS.length;
-        const stationIndex = (prev.stationIndex + dir + total) % total;
+        const stationIndex = nextStationIndex(prev.stationIndex, dir);
         const st = RADIO_STATIONS[stationIndex];
-        onNotify(`FM ${st.freq} · ${st.name}`);
-        return { ...prev, stationIndex, mode: "radio", radioPlaying: true };
+        onNotify(`FM ${st.freq} · ${st.name} — ${st.genre}`);
+        return {
+          ...prev,
+          stationIndex,
+          mode: "radio",
+          radioPlaying: true,
+          source: "stream",
+          savedTrackKey: null,
+        };
       });
     },
     [onNotify]
   );
 
-  /** Пауза/воспроизведение радиоприёмника (шайба VOL в 3D-салоне и кнопка в панели). */
+  /** Пауза/воспроизведение радио (шайба VOL в 3D-салоне и кнопка в панели). */
   const toggleRadioPlay = useCallback(() => {
     setHeadUnit((prev) => {
       const radioPlaying = !prev.radioPlaying;
-      onNotify(radioPlaying ? "Радио включено" : "Радио выключено (пауза)");
+      onNotify(radioPlaying ? "Эфир включён" : "Эфир на паузе");
       return { ...prev, mode: "radio", radioPlaying };
     });
   }, [onNotify]);
+
+  /** Громкость шайбой VOL (шаг 10 %, диапазон 0..100 %). */
+  const changeVolume = useCallback(
+    (delta: number) => {
+      setHeadUnit((prev) => {
+        const volume = clampVolume((prev.volume ?? 0.7) + delta);
+        onNotify(`Громкость ШГУ: ${Math.round(volume * 100)}%`);
+        return { ...prev, volume };
+      });
+    },
+    [onNotify]
+  );
 
   /** Переключает видеоклип на экране ШГУ. */
   const stepHeadUnitClip = useCallback(() => {
@@ -813,58 +852,245 @@ export function SimulatorView({
     });
   }, [onNotify]);
 
-  // Офлайн-синтез радио Web Audio: короткие ноты станции, пока включён режим «Радио»
-  const audioCtxRef = useRef<AudioContext | null>(null);
+  /**
+   * Активное хранилище треков: по умолчанию IndexedDB `cdt-audio`, но смоук может подменить его
+   * на in-memory реализацию через `window.__cdtAudioStore` (в закрытом CI IndexedDB ограничена).
+   */
+  const store = () =>
+    (typeof window !== "undefined" &&
+      (window as unknown as { __cdtAudioStore?: typeof trackStore }).__cdtAudioStore) ||
+    trackStore;
+
+  // Список сохранённых (закэшированных) треков для панели ШГУ
+  const [savedTracks, setSavedTracks] = useState<Array<Omit<SavedTrack, "blob">>>([]);
+  const refreshSavedTracks = useCallback(async () => {
+    const list = await store().listTracks();
+    setSavedTracks(list);
+    setHeadUnit((prev) =>
+      prev.savedCount === list.length ? prev : { ...prev, savedCount: list.length }
+    );
+    return list;
+  }, []);
   useEffect(() => {
-    const ctor =
-      typeof window !== "undefined"
-        ? window.AudioContext ??
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-        : undefined;
-    if (!ctor) return;
-    const playing = headUnit.mode === "radio" && headUnit.radioPlaying;
-    if (!playing) {
-      audioCtxRef.current?.suspend().catch(() => undefined);
-      return;
-    }
-    const station = RADIO_STATIONS[headUnit.stationIndex];
-    const intervalMs = Math.round((60_000 / station.bpm) * 2);
-    let step = 0;
-    let stopped = false;
-    let ctx: AudioContext;
-    try {
-      ctx = (audioCtxRef.current ??= new ctor());
-      void ctx.resume().catch(() => undefined);
-    } catch {
-      // Аудио запрещено политикой браузера или недоступно — экран ШГУ продолжает работать без звука
-      return;
-    }
-    const tick = () => {
-      if (stopped) return;
-      try {
-        const note = station.notes[step % station.notes.length];
-        step += 1;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "triangle";
-        osc.frequency.value = note;
-        gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (intervalMs / 1000) * 0.9);
-        osc.connect(gain).connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + intervalMs / 1000);
-      } catch {
-        stopped = true;
+    void refreshSavedTracks();
+  }, [refreshSavedTracks]);
+
+  // Живой звук: реальный интернет-поток станции либо кэшированный трек
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
+
+  /** Останавливает живой звук (поток или кэш-трек). */
+  const stopAudio = useCallback(() => {
+    const el = audioElRef.current;
+    if (!el) return;
+    el.pause();
+    el.removeAttribute("src");
+    el.load();
+  }, []);
+
+  /**
+   * Включает звук: живой интернет-эфир выбранной станции.
+   * При ошибке сети/потока ШГУ честно сообщает «эфир недоступен» и остаётся тихим — без фальшивого синтеза.
+   */
+  const playStationStream = useCallback(
+    (station: RadioStation) => {
+      const el = audioElRef.current;
+      if (!el) return;
+      stopAudio();
+      setAudioError(null);
+      if (
+        typeof el.canPlayType === "function" &&
+        el.canPlayType("audio/mpeg") === "" &&
+        el.canPlayType('audio/mp4; codecs="mp4a.40.2"') === ""
+      ) {
+        setAudioError("Браузер не поддерживает MP3/AAC-потоки");
+        return;
       }
+      // CORS не запрашиваем: обычное воспроизведение работает с любым потоком, а анализ спектра не нужен
+      el.src = station.streamUrl;
+      el.volume = clampVolume(headUnitRef.current.volume);
+      el.load();
+      const started = el.play();
+      if (started && typeof started.catch === "function") started.catch(() => undefined);
+    },
+    [stopAudio]
+  );
+
+  /** Включает сохранённый (закэшированный) трек из IndexedDB. */
+  const playSavedTrack = useCallback(async (key: string) => {
+    const el = audioElRef.current;
+    if (!el) return;
+    const track = await store().loadTrack(key);
+    if (!track) {
+      setAudioError("Трек не найден в кэше");
+      return;
+    }
+    stopAudio();
+    el.src = URL.createObjectURL(track.blob);
+    el.volume = clampVolume(headUnitRef.current.volume);
+    const started = el.play();
+    if (started && typeof started.catch === "function") started.catch(() => undefined);
+  }, [stopAudio]);
+
+  /**
+   * Сохраняет текущий эфир станции в кэш треков (`cdt-audio`) прямо во время поездки:
+   * процедурный офлайн-рендер эфира в WAV → IndexedDB, сразу доступен для прослушивания без сети.
+   */
+  const saveCurrentTrack = useCallback(async () => {
+    const st = RADIO_STATIONS[headUnitRef.current.stationIndex];
+    const seconds = 32;
+    const key = trackCacheKey(st.id, seconds);
+    const wav = renderTrackWav(st, seconds);
+    const stored = await store().saveTrack({
+      key,
+      stationId: st.id,
+      stationName: st.name,
+      freq: st.freq,
+      seconds,
+      blob: new Blob([wav], { type: "audio/wav" }),
+    });
+    await refreshSavedTracks();
+    onNotify(
+      `Трек сохранён в кэш: FM ${st.freq} · ${st.name} · 32 с${stored ? "" : " (память вкладки)"}`
+    );
+    return key;
+  }, [onNotify, refreshSavedTracks]);
+
+  /** Удаляет трек из кэша ШГУ. */
+  const removeSavedTrack = useCallback(
+    async (key: string) => {
+      await store().deleteTrack(key);
+      await refreshSavedTracks();
+      onNotify("Трек удалён из кэша ШГУ");
+    },
+    [onNotify, refreshSavedTracks]
+  );
+
+  // Слушатель событий аудиоэлемента: живой эфир/кэш-трек/ошибка сети
+  useEffect(() => {
+    const ctorAudio = typeof Audio !== "undefined" ? Audio : null;
+    if (!ctorAudio) return;
+    const el = new ctorAudio();
+    el.preload = "none";
+    audioElRef.current = el;
+    const onPlaying = () => {
+      setAudioError(null);
+      setHeadUnit((prev) =>
+        prev.streamStatus === "live" ? prev : { ...prev, streamStatus: "live" }
+      );
     };
-    tick();
-    const timer = window.setInterval(tick, intervalMs);
+    const onWaiting = () => {
+      setHeadUnit((prev) =>
+        prev.streamStatus === "connecting" ? prev : { ...prev, streamStatus: "connecting" }
+      );
+    };
+    const onError = () => {
+      // Ошибка «пустого» элемента после stopAudio() — не сетевая проблема, статус не меняем
+      if (!el.getAttribute("src")) return;
+      setHeadUnit((prev) => ({ ...prev, streamStatus: "error" }));
+      setAudioError("Интернет-эфир недоступен — проверьте сеть или сохраните трек из кэша");
+    };
+    el.addEventListener("playing", onPlaying);
+    el.addEventListener("waiting", onWaiting);
+    el.addEventListener("error", onError);
     return () => {
-      stopped = true;
-      window.clearInterval(timer);
+      el.removeEventListener("playing", onPlaying);
+      el.removeEventListener("waiting", onWaiting);
+      el.removeEventListener("error", onError);
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+      audioElRef.current = null;
     };
-  }, [headUnit.mode, headUnit.radioPlaying, headUnit.stationIndex]);
+  }, []);
+
+  // Запуск/остановка звука при изменении режима, станции, источника и громкости
+  useEffect(() => {
+    const el = audioElRef.current;
+    if (!el) return;
+    const wantsSound = headUnit.mode === "radio" && headUnit.radioPlaying && headUnit.source !== "synth";
+    if (!wantsSound) {
+      stopAudio();
+      return;
+    }
+    el.volume = clampVolume(headUnit.volume);
+    if (headUnit.source === "saved" && headUnit.savedTrackKey) {
+      void playSavedTrack(headUnit.savedTrackKey);
+    } else if (headUnit.mode === "radio") {
+      setHeadUnit((prev) =>
+        prev.streamStatus === "connecting" ? prev : { ...prev, streamStatus: "connecting" }
+      );
+      playStationStream(RADIO_STATIONS[headUnit.stationIndex]);
+    }
+    // playStationStream/playSavedTrack читают актуальные refs и не должны перезапускать звук
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headUnit.mode, headUnit.radioPlaying, headUnit.stationIndex, headUnit.source, headUnit.savedTrackKey]);
+
+  // Громкость применяется мгновенно, без перезапуска потока
+  useEffect(() => {
+    const el = audioElRef.current;
+    if (el) el.volume = clampVolume(headUnit.volume);
+  }, [headUnit.volume]);
+
+  // === [SEC:sim-audio] Процедурный звук ДВС/шин и звук ШГУ: старт по жесту, громкость и пауза ===
+  const engineSoundRef = useRef<EngineSound | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("cdt.sound.v1") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const soundEnabledRef = useRef(soundEnabled);
+
+  // Аудиограф создаётся по первому пользовательскому жесту: до него браузер всё равно не даст звук
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+    try {
+      localStorage.setItem("cdt.sound.v1", soundEnabled ? "1" : "0");
+    } catch {
+      // storage blocked
+    }
+    engineSoundRef.current?.setEnabled(soundEnabled);
+    const kick = () => {
+      if (soundEnabledRef.current) engineSoundRef.current?.ensureStarted();
+    };
+    window.addEventListener("pointerdown", kick, { once: true });
+    window.addEventListener("keydown", kick, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", kick);
+      window.removeEventListener("keydown", kick);
+    };
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    return () => {
+      engineSoundRef.current?.dispose();
+      engineSoundRef.current = null;
+    };
+  }, []);
+
+  // Тон ДВС и шум шин обновляются каждым кадром из живого состояния ядра (0 работы без звука)
+  const lastEngineSoundAtRef = useRef(0);
+  const pushEngineSound = useCallback((s: SimState, throttle: number) => {
+    if (!soundEnabledRef.current) return;
+    const nowMs = performance.now();
+    if (nowMs - lastEngineSoundAtRef.current < 55) return;
+    lastEngineSoundAtRef.current = nowMs;
+    let engine = engineSoundRef.current;
+    if (!engine) {
+      engine = new EngineSound();
+      engine.setVolume(0.5);
+      engine.setEnabled(true);
+      engineSoundRef.current = engine;
+    }
+    engine.update({
+      engineOn: s.engineOn,
+      rpm: s.rpm,
+      throttle,
+      speedKmh: Math.abs(s.v) * 3.6,
+    });
+  }, []);
 
   // Сохранение настроек ШГУ и передача состояния в 3D-сцену (экран, шайбы, подсветка)
   useEffect(() => {
@@ -930,6 +1156,18 @@ export function SimulatorView({
       gear: () => inputRef.current.gear,
       engineOn: () => inputRef.current.engineOn,
       signal: () => inputRef.current.signal,
+      audio: () => ({
+        enabled: soundEnabledRef.current,
+        engineCreated: Boolean(engineSoundRef.current),
+        context: (() => {
+          try {
+            const audio = audioElRef.current;
+            return audio ? { src: audio.src ? audio.src.slice(0, 120) : "", paused: audio.paused, volume: audio.volume } : null;
+          } catch {
+            return null;
+          }
+        })(),
+      }),
       vehicle: () => ({
         gear: inputRef.current.gear,
         engineOn: inputRef.current.engineOn,
@@ -1157,6 +1395,9 @@ export function SimulatorView({
       if (wheelGroupRef.current) {
         wheelGroupRef.current.setAttribute("transform", `rotate(${-stateRef.current.swDeg} 50 50)`);
       }
+
+      // Процедурный звук ДВС и шин из живого состояния (не чаще ~18 Гц, без работы при выключенном звуке)
+      pushEngineSound(stateRef.current, inp.throttle);
 
       // Отрисовка 3D или 2D-фолбэка
       const isBraking = inp.brake > 0.05;
@@ -2670,36 +2911,147 @@ export function SimulatorView({
                   </button>
                 ))}
               </div>
-              <div className="mt-2 flex items-center justify-between gap-1.5 rounded-lg bg-[#0c1520] border hairline px-2 py-1.5">
-                <span className="mono text-[10px] text-[#9bafbc]">
-                  FM {RADIO_STATIONS[headUnit.stationIndex].freq}
-                </span>
-                <span className="truncate text-[10px] text-[#d3e0e7]">{RADIO_STATIONS[headUnit.stationIndex].name}</span>
+
+              {/* Реальная интернет-станция: прямое подключение к живому эфиру */}
+              <div className="mt-2 rounded-lg bg-[#0c1520] border hairline px-2 py-1.5">
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="mono text-[10px] text-[#52d6bd]">
+                    FM {RADIO_STATIONS[headUnit.stationIndex].freq}
+                  </span>
+                  <span className="truncate text-[10px] text-[#d3e0e7]">
+                    {RADIO_STATIONS[headUnit.stationIndex].name}
+                  </span>
+                </div>
+                <div className="mono text-[9.5px] text-[#7c909d] mt-0.5">
+                  {RADIO_STATIONS[headUnit.stationIndex].genre} ·{" "}
+                  {headUnit.source === "saved"
+                    ? "КЭШИРОВАННЫЙ ТРЕК"
+                    : headUnit.streamStatus === "live"
+                      ? "ЖИВОЙ ЭФИР"
+                      : headUnit.streamStatus === "connecting"
+                        ? "ПОДКЛЮЧЕНИЕ…"
+                        : headUnit.streamStatus === "error"
+                          ? "ЭФИР НЕДОСТУПЕН"
+                          : "ИНТЕРНЕТ-РАДИО"}
+                </div>
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 <button type="button" className="btn btn-mini" onClick={() => stepRadioStation(-1)} aria-label="Предыдущая станция">
-                  ◀ станция
+                  ◀
                 </button>
                 <button type="button" className="btn btn-mini" onClick={() => stepRadioStation(1)} aria-label="Следующая станция">
-                  станция ▶
+                  ▶
                 </button>
                 <button
                   type="button"
+                  data-testid="headunit-play"
                   className={`btn btn-mini ${headUnit.radioPlaying ? "border-[#52d6bd]/60 text-[#52d6bd]" : ""}`}
                   onClick={toggleRadioPlay}
                   aria-pressed={headUnit.radioPlaying}
                 >
-                  {headUnit.radioPlaying ? "Пауза" : "Играть"}
+                  {headUnit.radioPlaying ? "Пауза" : "Эфир"}
+                </button>
+                <button type="button" className="btn btn-mini" onClick={() => changeVolume(-VOLUME_STEP)} aria-label="Тише">
+                  VOL −
+                </button>
+                <button type="button" className="btn btn-mini" onClick={() => changeVolume(VOLUME_STEP)} aria-label="Громче">
+                  VOL +
                 </button>
                 <button type="button" className="btn btn-mini" onClick={stepHeadUnitClip}>
                   Клип ↻
                 </button>
               </div>
-              <div className="mono text-[10px] text-[#7c909d] mt-2 leading-relaxed">
-                {HEAD_UNIT_CLIPS[headUnit.clipIndex].title} · {HEAD_UNIT_CLIPS[headUnit.clipIndex].subtitle}
+              <div className="mono text-[9.5px] text-[#7c909d] mt-1">
+                Громкость: {Math.round(headUnit.volume * 100)}% · {HEAD_UNIT_CLIPS[headUnit.clipIndex].title}
               </div>
-              <div className="text-[10px] text-[#93a6b0] mt-1">
-                Экран озвучен офлайн-синтезом Web Audio, выбранный режим сохраняется между запусками.
+
+              {/* Сохранение трека во время поездки: офлайн-рендер эфира в WAV → кэш IndexedDB `cdt-audio` */}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="sound-toggle"
+                  aria-pressed={soundEnabled}
+                  onClick={() => {
+                    setSoundEnabled((v) => {
+                      onNotify(v ? "Звук тренажёра выключен" : "Звук тренажёра включён: ДВС, шины и ШГУ");
+                      return !v;
+                    });
+                  }}
+                  className={`btn btn-mini ${soundEnabled ? "border-[#52d6bd]/60 text-[#52d6bd] bg-[#52d6bd]/10" : ""}`}
+                >
+                  {soundEnabled ? "Звук ВКЛ" : "Звук ВЫКЛ"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="headunit-save-track"
+                  className="btn btn-mini border-[#f5b942]/60 text-[#f5b942]"
+                  onClick={() => void saveCurrentTrack()}
+                  title="Сохранить 32-секундный трек текущей станции в кэш браузера — играет без интернета"
+                >
+                  ⤓ Сохранить трек в поездке
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  onClick={() =>
+                    headUnit.source === "saved"
+                      ? setHeadUnit((prev) => ({ ...prev, source: "stream", savedTrackKey: null, radioPlaying: true }))
+                      : savedTracks[0] &&
+                        setHeadUnit((prev) => ({
+                          ...prev,
+                          mode: "radio",
+                          source: "saved",
+                          savedTrackKey: savedTracks[0].key,
+                          radioPlaying: true,
+                        }))
+                  }
+                  disabled={savedTracks.length === 0}
+                >
+                  {headUnit.source === "saved" ? "Вернуть эфир" : "Слушать кэш"}
+                </button>
+              </div>
+              {audioError && (
+                <div className="text-[10px] text-[#f5b942] mt-1" data-testid="headunit-audio-error">
+                  {audioError}
+                </div>
+              )}
+
+              <div className="mt-2 mono text-[9.5px] text-[#7c909d]">
+                КЭШ ТРЕКОВ · {savedTracks.length} · {trackStore.trackBackend() === "indexeddb" ? "IndexedDB" : "память"}
+              </div>
+              <div className="mt-1 max-h-[104px] overflow-y-auto scroll-thin space-y-1" data-testid="headunit-tracklist">
+                {savedTracks.length === 0 && (
+                  <div className="text-[10px] text-[#6e8492]">
+                    Пока пусто: нажмите «Сохранить трек в поездке».
+                  </div>
+                )}
+                {savedTracks.map((t) => (
+                  <div key={t.key} className="flex items-center gap-1.5 rounded border hairline px-1.5 py-1">
+                    <button
+                      type="button"
+                      className={`flex-1 text-left text-[10px] ${headUnit.savedTrackKey === t.key ? "text-[#52d6bd]" : "text-[#c5d4de]"}`}
+                      onClick={() =>
+                        setHeadUnit((prev) => ({
+                          ...prev,
+                          mode: "radio",
+                          source: "saved",
+                          savedTrackKey: t.key,
+                          radioPlaying: true,
+                        }))
+                      }
+                    >
+                      FM {t.freq} · {t.stationName} · {Math.round(t.seconds)} с
+                    </button>
+                    <button
+                      type="button"
+                      className="mono text-[10px] text-[#8fa2ae] hover:text-[#ff8585]"
+                      aria-label={`Удалить трек ${t.stationName}`}
+                      onClick={() => void removeSavedTrack(t.key)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -3070,6 +3422,26 @@ export function SimulatorView({
                 <Icon name="alert" size={14} />
               </button>
 
+              {/* Индикатор Shift Lock / BTSI: селектор заперт без тормоза или при заглушенном ДВС */}
+              {(() => {
+                const lock = shiftLockState(
+                  { ...inputRef.current, brake: s.brakePos ?? 0 },
+                  s.v
+                );
+                if (!lock.locked) return null;
+                return (
+                  <div
+                    data-testid="hud-shift-lock"
+                    data-reason={lock.reason ?? ""}
+                    title={lock.hint}
+                    className="mono flex items-center gap-1 rounded-lg border border-[#f5b942]/60 bg-[#f5b942]/10 px-1.5 py-1 text-[10px] font-extrabold text-[#f5b942]"
+                  >
+                    <span aria-hidden="true">🔒</span>
+                    <span>{lock.brakeRequired ? "ТОРМОЗ" : "LOCK"}</span>
+                  </div>
+                );
+              })()}
+
               {/* Селектор 6-ст. КПП Shiftronic: P / R / N / D (D1–D6) + ручной Shift (M1–M6) с подсказкой при наведении */}
               <div
                 data-testid="hud-gear-selector"
@@ -3273,6 +3645,11 @@ export function SimulatorView({
                 <span className="text-[#52d6bd]">(F или клик D возвращает D из M)</span>
               </div>
               <div>
+                <span className="mono font-bold text-[#f5b942]">Shift Lock (BTSI)</span> — выход из P и запуск{" "}
+                <span className="text-white">только с нажатой педалью тормоза</span>{" "}
+                <span className="text-[#52d6bd]">(S / ↓ / экранная педаль)</span>
+              </div>
+              <div>
                 <span className="mono font-bold text-[#f5b942]">Shift ▲ / RShift·X ▼</span> — ручной паз{" "}
                 <span className="text-white">M1–M6</span> (защита от перекрута и заглохания)
               </div>
@@ -3453,8 +3830,16 @@ export function SimulatorView({
                   <span className="mono text-[#f5b942]">Shift / RShift·X</span> ·{" "}
                   <span className="mono text-[#9bafbc]">G</span> — дорога
                 </div>
-                {!s.engineOn && (
-                  <div className="text-[#f5b942] pt-0.5">ДВС заглушен — нажмите I, чтобы вывести рычаг из P.</div>
+                {!s.engineOn ? (
+                  <div className="text-[#f5b942] pt-0.5">ДВС заглушен — селектор заперт, нажмите I (в P/N).</div>
+                ) : (
+                  s.gear === "P" && (
+                    <div className={`pt-0.5 ${(s.brakePos ?? 0) < 0.1 ? "text-[#f5b942]" : "text-[#52d6bd]"}`}>
+                      {(s.brakePos ?? 0) < 0.1
+                        ? "SHIFT LOCK: зажмите тормоз S, чтобы снять рычаг с P."
+                        : "Тормоз нажат — рычаг можно вывести из P."}
+                    </div>
+                  )
                 )}
               </div>
             </div>
