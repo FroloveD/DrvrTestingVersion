@@ -225,9 +225,9 @@ function collectEditableSigns(signs: readonly RoadSignDef[] | undefined, speedZo
       kind: "speed_limit",
       x: sz.signX,
       z: sz.signZ,
-      h: 0,
+      h: sz.h ?? Math.atan2(sz.x - sz.signX, sz.z - sz.signZ),
       limitKmh: sz.limitKmh,
-      zoneRadius: sz.radius,
+      zoneLength: sz.length ?? sz.radius ?? 250,
       zoneX: sz.x,
       zoneZ: sz.z,
       label: sz.label,
@@ -568,8 +568,11 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
     if (sn.limitKmh !== undefined && !(sn.limitKmh >= 5 && sn.limitKmh <= 130)) {
       errors.push(`Знак «${sn.label || sn.id}»: ограничение скорости должно быть 5–130 км/ч.`);
     }
-    if (sn.zoneRadius !== undefined && !(sn.zoneRadius >= 0 && sn.zoneRadius <= 250)) {
-      errors.push(`Знак «${sn.label || sn.id}»: радиус зоны действия должен быть 0–250 м.`);
+    if (sn.zoneLength !== undefined && !(sn.zoneLength >= 0 && sn.zoneLength <= 2000)) {
+      errors.push(`Знак «${sn.label || sn.id}»: длина участка должна быть 0–2000 м.`);
+    }
+    if (sn.zoneRadius !== undefined && !(sn.zoneRadius >= 0 && sn.zoneRadius <= 2000)) {
+      errors.push(`Знак «${sn.label || sn.id}»: устаревшая длина участка должна быть 0–2000 м.`);
     }
   }
 
