@@ -746,6 +746,7 @@ try {
     `без ЛКМ=${wheelWithoutHold}; с ЛКМ=${wheelWithHold}`);
   await mouseSteerMode.selectOption("free");
   await page.mouse.move(sceneX, sceneY);
+  await sleep(60);
   const savedSteerMode = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.controls.v1") || "{}").mouseSteerMode);
   check("L8b2 выбранный режим руления сохраняется в настройках", savedSteerMode === "free", String(savedSteerMode));
 
