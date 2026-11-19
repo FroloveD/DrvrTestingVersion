@@ -6,10 +6,10 @@
  * @tests Смоук A, K, M (`tests/browser-smoke.mjs`)
  *
  * Оглавление секций (быстрый поиск по `grep -n "SEC:render-"`):
- * - `[SEC:render-textures]` — процедурные Canvas-текстуры (небо, асфальт, тень, фасады, знак «У», знак 3.24, номера боксов).
- * - `[SEC:render-car]`      — `createWheelMesh` и `buildProceduralCar` (кузов, полый салон, оптика, слой зеркал).
+ * - `[SEC:render-textures]` — процедурные PBR-текстуры неба, асфальта, плитки, разметки и знаков.
+ * - `[SEC:render-car]`      — детализированные модели Kia Ceed, припаркованного автопарка и пешеходов.
  * - `[SEC:render-init]`     — класс `SceneController`, свет, render targets зеркал, орбита и пресеты качества.
- * - `[SEC:render-world]`    — `loadWorld`, `addObstacleMesh`, `addTrafficSignal` (дороги, боксы, здания, светофоры, переходы).
+ * - `[SEC:render-world]`    — `loadWorld`, дороги/тротуары ГОСТ, здания, деревья, светофоры, знаки и уличная инфраструктура.
  * - `[SEC:render-frame]`    — `render`, `renderInto`, `updateCamera` (поза, колёса Аккермана, троттлинг зеркал `TD-06`, камеры).
  * - `[SEC:render-dispose]`  — `getPerfMetrics`, `disposeGroup`, `dispose` (корректная очистка геометрий/материалов/текстур).
  */
@@ -57,7 +57,6 @@ import {
   getTrafficLightPhase,
   getTurnSignalFlash,
   predictTrajectoryArc,
-  VEHICLE_DIMS,
 } from "../sim/vehicle";
 
 // Слои относятся только к геометрии машины игрока. Мир и припаркованные авто — слой 0.
@@ -129,7 +128,7 @@ function makeLearnerSignTexture(): THREE.CanvasTexture {
 }
 
 
-// === [SEC:render-car] Колёса и процедурная 3D-модель автомобиля Kia Ceed JD / автопарка ===
+// === [SEC:render-car] Колёса и процедурная 3D-модель Kia Ceed JD / автопарка (см. src/render/vehiclesAndPeds.ts) ===
 function createWheelMesh(radius: number, width: number): THREE.Group {
   const g = new THREE.Group();
   const tireGeo = new THREE.CylinderGeometry(radius, radius, width, 18);
