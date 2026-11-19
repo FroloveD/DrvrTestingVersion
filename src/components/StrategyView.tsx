@@ -93,14 +93,14 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
           </div>
           <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2.5">
             {[
-              "Детерминированное ядро: 31/31 автотестов, реплей совпадает побитно",
+              "Детерминированное ядро: 33/33 автотестов, реплей совпадает побитно",
               "Офлайн-бандл без внешних запросов, холодный старт P и блокировки АКПП",
               "Правила как данные, golden-набор с checksum, сверка с инструкторами (ДИ Уилсона)",
               "OSM: XML / Overpass JSON / GeoJSON, one-way, roundabout, multipolygon и обрезка по полигону",
               "Редактор: произвольные границы, дороги по точкам, скругления, метрическая сетка и 2D/3D-сборка",
               "Журнал в IndexedDB (до 300 заездов), статистика учеников, USB-руль и выворот 33–42°",
               "Правовые блоки: атрибуция ODbL, дисклеймер, бэкап, удаление данных",
-              "CI: Playwright A–O проходит по HTTP и file://; Core / Types / Docs / Offline gate зелёный",
+              "CI: Playwright A–P проходит по HTTP и file://; Core / Types / Docs / Offline gate зелёный",
             ].map((t, i) => (
               <div key={i} className="flex gap-2.5 text-[12px] leading-relaxed text-[#b9c9d3]">
                 <span className="text-[#52d6bd] mt-0.5">✓</span>
