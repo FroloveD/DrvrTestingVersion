@@ -718,6 +718,36 @@ export const extraCases: SelfTestCase[] = [
     },
   },
   {
+    id: "T30",
+    suite: "simulation",
+    name: "Плавное усиление тяги до x2 и детерминированный реплей множителя",
+    fn: () => {
+      const world = buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+      const grid = new SpatialGrid(world.obstacles, 10);
+      let normal = createInitialState(world, true);
+      let boosted = createInitialState(world, true);
+      const rec = new AttemptRecorder(boosted, true);
+      for (let t = 0; t < 90; t++) {
+        const ramp = 1 + Math.min(1, (t + 1) / 45);
+        const normalInput = { ...createReadyInput("D"), throttle: 0.7 };
+        const boostedInput = { ...normalInput, throttleMultiplier: ramp };
+        const a = stepSimulation(normal, normalInput, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        const b = stepSimulation(boosted, boostedInput, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+        normal = a.state;
+        boosted = b.state;
+        rec.recordTick(boostedInput, boosted, b.newEvents);
+      }
+      assert(boosted.v > normal.v, "Множитель тяги должен увеличивать разгон");
+      assert(boosted.v < normal.v * 2.1, "Множитель x2 не должен удваивать итоговую скорость");
+      const snap = rec.snapshot(boosted, world, DEFAULT_CALIBRATION, DEFAULT_RULESET);
+      assert(snap.inputStream.some((f) => (f.input.throttleMultiplier ?? 1) > 1.8), "RLE должен сохранять плавный рост множителя до x2");
+      const replay = replayInputStream(snap.inputStream, world, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
+      assert(replay.finalState.x === boosted.x && replay.finalState.z === boosted.z && replay.finalState.v === boosted.v,
+        "Реплей с множителем тяги должен совпадать с исходным заездом");
+      return "Тяга усиливается плавно до x2 · RLE сохраняет множитель · реплей совпадает";
+    },
+  },
+  {
     id: "T29",
     suite: "scenarios",
     name: "Операции 2D-редактора: добавление, перенос по сетке, поворот, узлы дорог, дубль, удаление и Undo/Redo",
