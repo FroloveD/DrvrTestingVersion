@@ -1086,6 +1086,89 @@ try {
   check("O сценарий выполнен без исключений", false, String(e.message).slice(-460));
 }
 
+
+/* P · Каталог маршрутов OSM: импорт карты, построение по графу, сохранение и повторное открытие. */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  try {
+    await tab(page, "Свой сценарий");
+    const routeOsm = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <bounds minlat="55.7480" minlon="37.6080" maxlat="55.7540" maxlon="37.6160"/>
+  <node id="1" lat="55.7500" lon="37.6100"/>
+  <node id="2" lat="55.7510" lon="37.6100"/>
+  <node id="3" lat="55.7520" lon="37.6100"/>
+  <node id="4" lat="55.7510" lon="37.6110"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><tag k="highway" v="secondary"/><tag k="name" v="Улица Каталожная"/></way>
+  <way id="11"><nd ref="2"/><nd ref="4"/><tag k="highway" v="residential"/><tag k="name" v="Переулок Маршрутный"/></way>
+</osm>`;
+    await page.getByTestId("editor-import-input").setInputFiles({
+      name: "route-catalog.osm",
+      mimeType: "application/xml",
+      buffer: Buffer.from(routeOsm),
+    });
+    await sleep(350);
+    await tab(page, "Каталог маршрутов");
+    const svg = page.locator('svg[aria-label^="Схема дорожной сети OSM"]');
+    await svg.waitFor({ state: "visible" });
+    const clicks = await svg.evaluate((element) => {
+      const roads = [...element.querySelectorAll("polyline")];
+      const screen = (polyline, t) => {
+        const points = polyline.points;
+        const first = points.getItem(0), last = points.getItem(points.numberOfItems - 1);
+        const p = element.createSVGPoint();
+        p.x = first.x + (last.x - first.x) * t;
+        p.y = first.y + (last.y - first.y) * t;
+        const out = p.matrixTransform(element.getScreenCTM());
+        return { x: out.x, y: out.y };
+      };
+      return roads.length >= 2 ? { start: screen(roads[0], 0.12), finish: screen(roads[1], 0.82), roads: roads.length } : null;
+    });
+    check("P1 импортированная OSM-сеть отображается в каталоге", Boolean(clicks), clicks ? `дорог на схеме: ${clicks.roads}` : "не найдены полилинии");
+    if (clicks) {
+      await page.mouse.click(clicks.start.x, clicks.start.y);
+      await page.mouse.click(clicks.finish.x, clicks.finish.y);
+      await page.getByRole("button", { name: /Построить и проверить/ }).click();
+      const built = await until(async () => (await low(page)).includes("маршрут построен по дорожному графу"), 5000, 100);
+      check("P2 маршрут строится между улицами через дорожный граф", built);
+      if (built) {
+        await page.getByRole("button", { name: /Сохранить в каталог/ }).click();
+        const saved = await until(async () => (await low(page)).includes("улица каталожная"), 5000, 100);
+        check("P3 маршрут сохраняется в каталоге", saved);
+        const count = await page.evaluate(() => new Promise((resolve) => {
+          const req = indexedDB.open("cdt-route-catalog");
+          req.onerror = () => resolve(-1);
+          req.onsuccess = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains("routes")) { resolve(-1); db.close(); return; }
+            const tx = db.transaction("routes", "readonly");
+            const get = tx.objectStore("routes").getAll();
+            get.onsuccess = () => resolve(get.result.length);
+            get.onerror = () => resolve(-1);
+            tx.oncomplete = () => db.close();
+          };
+        }));
+        check("P4 запись маршрута находится в отдельной IndexedDB", count === 1, `записей: ${count}`);
+        await page.getByRole("button", { name: /Открыть/ }).first().click();
+        await sleep(600);
+        check("P5 сохранённый маршрут открывается в 3D-тренажёре",
+          (await low(page)).includes("маршрут через дорожную сеть") || (await low(page)).includes("улица каталожная"));
+        await tab(page, "Каталог маршрутов");
+        await page.reload();
+        await sleep(500);
+        await tab(page, "Каталог маршрутов");
+        check("P6 маршрут сохраняется после перезагрузки", (await low(page)).includes("улица каталожная"));
+      }
+    }
+    check("P7 ошибок JavaScript в каталоге маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
+  } catch (e) {
+    check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  }
+  await ctx.close();
+}
+
 await browser.close();
 console.log(failed === 0 ? "SMOKE: все проверки пройдены" : `SMOKE: не пройдено ${failed}`);
 process.exit(failed === 0 ? 0 : 1);
