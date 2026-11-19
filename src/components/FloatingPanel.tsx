@@ -1,8 +1,8 @@
 /**
  * @module components/FloatingPanel
  * @layer ui
- * @role Перемещаемая и масштабируемая панель HUD/зеркал (grip `⠿`, удержание 420 мс, хранение в `cdt.layout.v1`).
- * @invariants #14 (перенос за grip или longPress 420 мс; у педалей grip отделён от рабочей зоны).
+ * @role Перемещаемая и масштабируемая панель HUD/зеркал (grip `⠿`, удержание 420 мс с выводом на передний план, хранение в `cdt.layout.v1` / `cdt.layoutOrder.v1`).
+ * @invariants #14 (перенос и подъём на передний слой за grip или longPress 420 мс; у педалей grip отделён от рабочей зоны).
  * @tests Смоук E, H, K, M (`tests/browser-smoke.mjs`)
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -12,8 +12,13 @@ export type PanelLayout = { x: number; y: number; w: number };
 export type LayoutMap = Record<string, PanelLayout>;
 
 export const LAYOUT_STORAGE_KEY = "cdt.layout.v1";
-/** Длительность удержания для переноса панели (мс). */
+export const LAYER_ORDER_STORAGE_KEY = "cdt.layoutOrder.v1";
+/** Длительность удержания для выделения, вывода на передний план и переноса панели (мс). */
 export const LONG_PRESS_MS = 420;
+/** Базовый z-index для панелей, поднятых пользователем на передний слой (выше всех дефолтных 20..27). */
+export const PANEL_PROMOTED_BASE_Z = 28;
+/** z-index активно удерживаемой/перетаскиваемой панели (выше всех HUD-панелей, но ниже модальных окон z-50). */
+export const PANEL_ACTIVE_Z = 45;
 
 export function loadLayout(): LayoutMap {
   try {
@@ -40,6 +45,56 @@ export function saveLayout(map: LayoutMap): void {
   }
 }
 
+/** Загружает сохранённый порядок слоёв HUD-панелей (последний элемент — самый верхний план). */
+export function loadLayerOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(LAYER_ORDER_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of parsed) {
+      if (typeof item === "string" && item.length > 0 && item.length <= 48 && !seen.has(item)) {
+        seen.add(item);
+        out.push(item);
+      }
+    }
+    return out.slice(-24);
+  } catch {
+    return [];
+  }
+}
+
+/** Сохраняет порядок слоёв HUD-панелей в `localStorage`. */
+export function saveLayerOrder(order: string[]): void {
+  try {
+    if (order.length === 0) {
+      localStorage.removeItem(LAYER_ORDER_STORAGE_KEY);
+    } else {
+      localStorage.setItem(LAYER_ORDER_STORAGE_KEY, JSON.stringify(order.slice(-24)));
+    }
+  } catch {
+    // storage blocked
+  }
+}
+
+/** Перемещает панель `id` на самый верхний слой стека (без лишнего копирования, если уже сверху). */
+export function promotePanelToFront(order: readonly string[], id: string): string[] {
+  if (order.length > 0 && order[order.length - 1] === id) return order as string[];
+  const next = order.filter((item) => item !== id);
+  next.push(id);
+  return next.slice(-24);
+}
+
+/** Вычисляет итоговый `z-index` панели с учётом пользовательского порядка слоёв. */
+export function resolvePanelZIndex(id: string, baseZ: number, order: readonly string[]): number {
+  const idx = order.indexOf(id);
+  if (idx === -1) return baseZ;
+  // Ограничиваем сверху 44, чтобы активная панель (45) и модальные окна (50) всегда были выше
+  const start = Math.max(PANEL_PROMOTED_BASE_Z, 44 - order.length);
+  return Math.min(44, start + idx);
+}
+
 type Props = {
   id: string;
   /** Без подписи панель перемещается только за grip-поле или по длительному нажатию */
@@ -50,9 +105,13 @@ type Props = {
   minW: number;
   maxW: number;
   onChange: (id: string, next: PanelLayout) => void;
+  /** Выводит панель на передний план/слой при длительном нажатии/тапе или захвате за ручку. */
+  onBringToFront?: (id: string) => void;
+  /** Признак того, что панель сейчас находится на самом верхнем пользовательском слое. */
+  isFront?: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   zIndex?: number;
-  /** "header" — за заголовок; "longPress" — удержание 420 мс или grip-поле */
+  /** "header" — за заголовок или удержание 420 мс; "longPress" — удержание 420 мс или grip; "grip" — только за отдельную полоску (педали) */
   activation?: "header" | "longPress" | "grip";
   /** Доступное имя ручки. В режиме grip вся верхняя полоска отделена от кнопки педали. */
   gripLabel?: string;
@@ -62,8 +121,9 @@ type Props = {
 
 /**
  * Плавающая панель внутри 3D-вьюпорта.
- * Перетаскивание — за grip-поле (⋮⋮) либо по длительному нажатию на панель;
- * изменение ширины — за правый нижний угол. Раскладка хранится в localStorage.
+ * Длительное нажатие/тап (0,4 с) или захват за grip-поле (⋮⋮) выделяет панель,
+ * помещает её на передний план/слой поверх остальных панелей и позволяет перенести;
+ * изменение ширины — за правый нижний угол. Раскладка и порядок слоёв хранятся в localStorage.
  */
 export function FloatingPanel({
   id,
@@ -74,6 +134,8 @@ export function FloatingPanel({
   minW,
   maxW,
   onChange,
+  onBringToFront,
+  isFront = false,
   containerRef,
   zIndex = 25,
   activation,
@@ -84,8 +146,11 @@ export function FloatingPanel({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [fallback, setFallback] = useState<PanelLayout | null>(null);
   const [armed, setArmed] = useState(false);
+  const suppressClickUntilRef = useRef<number>(0);
   const current: PanelLayout = layout ?? fallback ?? { x: 12, y: 12, w: minW };
   const mode = activation ?? (title ? "header" : "longPress");
+  // Длительный клик/тап работает на всех панелях, кроме рабочих поверхностей педалей (инвариант #14)
+  const supportsBodyLongPress = mode !== "grip";
   const dragRef = useRef<{
     mode: "move" | "resize";
     pointerId: number;
@@ -141,12 +206,13 @@ export function FloatingPanel({
   }, [id, layout, minW, maxW, containerRef, clampPos, onChange]);
 
   const beginDrag = (kind: "move" | "resize") => (e: React.PointerEvent<HTMLElement>) => {
-    if (e.button !== 0 || dragRef.current) return;
+    if ((e.pointerType === "mouse" && e.button !== 0) || dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { mode: kind, pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, ox: current.x, oy: current.y, ow: current.w };
     setArmed(true);
+    onBringToFront?.(id);
   };
 
   const moveDrag = (e: React.PointerEvent<HTMLElement>) => {
@@ -175,7 +241,7 @@ export function FloatingPanel({
     setArmed(false);
   };
 
-  // Длительное нажатие: запускаем перенос панели, если палец не сдвинулся дальше допуска
+  // Длительное нажатие/тап: выделяет панель, выводит её на передний слой и включает перенос
   const pressRef = useRef<{
     id: number;
     el: HTMLElement;
@@ -188,7 +254,8 @@ export function FloatingPanel({
   } | null>(null);
 
   const bodyDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (mode !== "longPress" || dragRef.current || pressRef.current) return;
+    if (!supportsBodyLongPress || dragRef.current || pressRef.current) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     const el = e.currentTarget;
     const sx = e.clientX;
     const sy = e.clientY;
@@ -199,6 +266,7 @@ export function FloatingPanel({
       if (!p) return;
       p.dragging = true;
       setArmed(true);
+      onBringToFront?.(id);
       try {
         p.el.setPointerCapture(p.id);
       } catch {
@@ -229,8 +297,12 @@ export function FloatingPanel({
     const p = pressRef.current;
     if (!p || p.id !== e.pointerId) return;
     window.clearTimeout(p.timer);
-    if (p.dragging && p.el.hasPointerCapture?.(p.id)) {
-      p.el.releasePointerCapture(p.id);
+    if (p.dragging) {
+      // Гасим синтетический click при отпускании длительного нажатия/тапа, чтобы не нажать кнопку под пальцем
+      suppressClickUntilRef.current = performance.now() + 220;
+      if (p.el.hasPointerCapture?.(p.id)) {
+        p.el.releasePointerCapture(p.id);
+      }
     }
     pressRef.current = null;
     setArmed(false);
@@ -241,6 +313,20 @@ export function FloatingPanel({
     if (p && !p.dragging) {
       window.clearTimeout(p.timer);
       pressRef.current = null;
+    }
+  };
+
+  const handleClickCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (suppressClickUntilRef.current > performance.now()) {
+      suppressClickUntilRef.current = 0;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (armed || pressRef.current?.dragging) {
+      e.preventDefault();
     }
   };
 
@@ -264,15 +350,18 @@ export function FloatingPanel({
     };
   }, []);
 
+  const effectiveZIndex = armed ? PANEL_ACTIVE_Z : zIndex;
+
   return (
     <div
       ref={panelRef}
       data-hud-panel={id}
-      style={{ left: current.x, top: current.y, width: current.w, zIndex }}
+      data-front={isFront || armed ? "true" : undefined}
+      style={{ left: current.x, top: current.y, width: current.w, zIndex: effectiveZIndex }}
       className={`absolute rounded-xl border-2 bg-[#0b1218]/94 shadow-xl overflow-hidden select-none transition-shadow ${
         armed
-          ? "border-[#f5b942] shadow-[0_0_24px_rgba(245,185,66,.25)]"
-          : mode === "longPress"
+          ? "border-[#f5b942] shadow-[0_0_24px_rgba(245,185,66,.3)]"
+          : supportsBodyLongPress
             ? "border-[#1f2c38] hover:border-[#2d414f]"
             : "border-[#1f2c38]"
       }`}
@@ -281,8 +370,10 @@ export function FloatingPanel({
       onPointerUp={bodyUp}
       onPointerCancel={bodyUp}
       onPointerLeave={bodyLeave}
+      onClickCapture={handleClickCapture}
+      onContextMenu={handleContextMenu}
       onDoubleClick={(e) => e.stopPropagation()}
-      title={mode === "longPress" ? "Удерживайте 0,4 с — панель можно перетащить" : undefined}
+      title={supportsBodyLongPress ? "Удерживайте 0,4 с — вывести на передний план и перетащить" : undefined}
     >
       {title && (
         <div
@@ -291,7 +382,7 @@ export function FloatingPanel({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           className="flex items-center gap-1.5 px-2 py-1 bg-[#0a1016]/92 cursor-move touch-none mono text-[9px] text-[#9bafbc]"
-          title="Перетащите, чтобы переместить"
+          title="Перетащите или удерживайте, чтобы вывести на передний план и переместить"
         >
           <Icon name={icon} size={11} />
           <span className="truncate">{title}</span>
@@ -310,6 +401,7 @@ export function FloatingPanel({
             const dir = delta[e.key];
             if (!dir) return;
             e.preventDefault(); e.stopPropagation();
+            onBringToFront?.(id);
             onChange(id, { ...current, ...clampPos(current.x + dir[0], current.y + dir[1], current.w) });
           }}>
           <svg width="22" height="10" viewBox="0 0 22 10" fill="currentColor" aria-hidden="true">

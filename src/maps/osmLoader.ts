@@ -1,9 +1,9 @@
 /**
  * @module maps/osmLoader
  * @layer pure-core
- * @role Офлайн-парсер выгрузок `.osm` XML, Overpass OSM JSON и GeoJSON в метрическую сцену (`+Z` север, `−X` восток).
+ * @role Офлайн-парсер выгрузок `.osm` XML, Overpass OSM JSON и GeoJSON в метрическую сцену (`+Z` север, `−X` восток) с поддержкой `<bounds>`, OBB зданий и произвольных границ.
  * @invariants #7 (чистое ядро без DOM и three), #8 (офлайн — ноль сетевых запросов к Overpass), #9 (атрибуция ODbL 1.0).
- * @tests T11, T12, T21, T27, T28
+ * @tests T11, T12, T21, T27, T28, T30
  */
 import { createDefaultSign, signToSpeedZone } from "../scenarios/signs";
 import type {
@@ -17,9 +17,19 @@ import type {
   SpeedZone,
   TrafficSignalDef,
   Vec2,
+  WorldBounds,
 } from "../sim/types";
-import { parseOsmXmlElements, type RawOsmElement } from "./osmXml";
-import { buildRouteFromRoads } from "./route";
+import {
+  boundingBoxOfPolygon,
+  boundsToPolygon,
+  clipPolylineToPolygon,
+  isPointInPolygon,
+  isValidBoundaryPolygon,
+  MAX_WORLD_COORD,
+  sanitizeBoundaryPolygon,
+} from "./boundary";
+import { parseOsmXmlDocument, type RawOsmElement } from "./osmXml";
+import { buildRouteFromRoads, nearestRoadPoint } from "./route";
 
 export type MapImportFormat = "osm_xml" | "osm_json" | "geojson";
 
@@ -52,7 +62,10 @@ export type NormalizedOsmPack = {
   /** Экзаменационный маршрут, собранный по реальной дороге участка. */
   routeCheckpoints: RouteCheckpoint[];
   routeRoadName: string;
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Точный неквадратный охватывающий прямоугольник участка (до ±3000 м). */
+  bounds: WorldBounds;
+  /** Произвольный полигон границы участка/маршрута (если задан в GeoJSON или при обрезке). */
+  boundaryPolygon?: Vec2[];
 };
 
 type GeoJsonFeature = {
@@ -72,9 +85,9 @@ function parseNumericTag(val: string | undefined): number | null {
 }
 
 /** Переводит азимут OSM (0° = север, 90° = восток) в курс симулятора `h` (+Z север, +h влево/на запад). */
-function parseDirectionRad(tags: Record<string, string>): number {
+function parseDirectionRad(tags: Record<string, string>): number | null {
   const raw = tags.direction ?? tags["traffic_signals:direction"];
-  if (!raw) return 0;
+  if (!raw) return null;
   const cardinal: Record<string, number> = {
     N: 0,
     S: Math.PI,
@@ -91,7 +104,7 @@ function parseDirectionRad(tags: Record<string, string>): number {
   if (deg !== null && deg >= -360 && deg <= 360) {
     return Number(((-deg * Math.PI) / 180).toFixed(3));
   }
-  return 0;
+  return null;
 }
 
 function projectFactory(centerLat: number, centerLon: number) {
@@ -104,33 +117,72 @@ function projectFactory(centerLat: number, centerLon: number) {
   });
 }
 
-function polygonToAabbObstacle(id: string, pts: Vec2[], tags: Record<string, string>, idx: number): ObstacleBox | null {
+/**
+ * Строит ориентированный прямоугольник (OBB) здания вдоль его самой длинной стены.
+ * В отличие от грубого AABB, здания вдоль диагональных улиц не вылезают углами на проезжую часть.
+ */
+function polygonToObbObstacle(id: string, pts: Vec2[], tags: Record<string, string>, idx: number): ObstacleBox | null {
   if (pts.length < 3) return null;
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const p of pts) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.z < minZ) minZ = p.z;
-    if (p.z > maxZ) maxZ = p.z;
+
+  // Находим направление самой длинной стены контура
+  let bestLenSq = 0;
+  let h = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const l2 = dx * dx + dz * dz;
+    if (l2 > bestLenSq) {
+      bestLenSq = l2;
+      h = Math.atan2(dx, dz);
+    }
   }
-  const w = maxX - minX;
-  const l = maxZ - minZ;
-  if (w < 2 || l < 2 || w > 180 || l > 180) return null;
+  // Для почти осевых зданий обнуляем угол, сохраняя компактные координаты
+  if (Math.abs(Math.sin(h)) < 0.02) h = 0;
+  else if (Math.abs(Math.cos(h)) < 0.02) h = 0;
+
+  // Локальные оси OBB: forward = (sin h, cos h), left = (cos h, -sin h)
+  const fx = Math.sin(h);
+  const fz = Math.cos(h);
+  const lx = Math.cos(h);
+  const lz = -Math.sin(h);
+
+  let minL = Infinity;
+  let maxL = -Infinity;
+  let minF = Infinity;
+  let maxF = -Infinity;
+  for (const p of pts) {
+    const pl = p.x * lx + p.z * lz;
+    const pf = p.x * fx + p.z * fz;
+    if (pl < minL) minL = pl;
+    if (pl > maxL) maxL = pl;
+    if (pf < minF) minF = pf;
+    if (pf > maxF) maxF = pf;
+  }
+
+  const w = maxL - minL;
+  const l = maxF - minF;
+  if (w < 2 || l < 2 || w > 240 || l > 240) return null;
+  const midL = (minL + maxL) * 0.5;
+  const midF = (minF + maxF) * 0.5;
+  const cx = lx * midL + fx * midF;
+  const cz = lz * midL + fz * midF;
+  if (Math.abs(cx) > MAX_WORLD_COORD || Math.abs(cz) > MAX_WORLD_COORD) return null;
+
   const heightTag = parseNumericTag(tags.height);
   const levelsTag = parseNumericTag(tags["building:levels"]);
   const height = Math.min(48, Math.max(4.5, heightTag ?? (levelsTag ? levelsTag * 3.2 : 9.6)));
   const palette = [0x4c5d6b, 0x5a6875, 0x625d57, 0x4b5862, 0x58646e];
+
   return {
     id,
     kind: "building",
-    cx: Number(((minX + maxX) / 2).toFixed(2)),
-    cz: Number(((minZ + maxZ) / 2).toFixed(2)),
+    cx: Number(cx.toFixed(2)),
+    cz: Number(cz.toFixed(2)),
     halfX: Number((w / 2).toFixed(2)),
     halfZ: Number((l / 2).toFixed(2)),
-    h: 0,
+    h: Number(h.toFixed(3)),
     height,
     color: palette[idx % palette.length],
     label: tags.name ? `здание «${tags.name}»` : "здание OSM",
@@ -151,12 +203,15 @@ function polylineToBarrierObstacles(
     const dx = p1.x - p0.x;
     const dz = p1.z - p0.z;
     const len = Math.hypot(dx, dz);
-    if (len < 1.0 || len > 110) continue;
+    if (len < 1.0 || len > 180) continue;
+    const cx = (p0.x + p1.x) / 2;
+    const cz = (p0.z + p1.z) / 2;
+    if (Math.abs(cx) > MAX_WORLD_COORD || Math.abs(cz) > MAX_WORLD_COORD) continue;
     out.push({
       id: `${baseId}-${i + 1}`,
       kind: isKerb ? "curb" : "fence",
-      cx: Number(((p0.x + p1.x) / 2).toFixed(2)),
-      cz: Number(((p0.z + p1.z) / 2).toFixed(2)),
+      cx: Number(cx.toFixed(2)),
+      cz: Number(cz.toFixed(2)),
       halfX: isKerb ? 0.16 : 0.12,
       halfZ: Number((len / 2).toFixed(2)),
       h: Number(Math.atan2(dx, dz).toFixed(3)),
@@ -179,7 +234,6 @@ function classifyOsmNodeSign(tags: Record<string, string>): { kind: RoadSignKind
 
   if (ts.includes("maxspeed") || ts.includes("3.24")) {
     const fromTag = parseNumericTag(tags.maxspeed);
-    // Ищем число скорости после maxspeed или 3.24 (например, RU:3.24[40] или maxspeed=30)
     const bracket = ts.match(/(?:3\.24|maxspeed)[^\d]{0,4}(\d{1,3})/);
     const limit = fromTag ?? (bracket ? Number(bracket[1]) : 40);
     return { kind: "speed_limit", limitKmh: Math.min(110, Math.max(5, limit)) };
@@ -202,23 +256,36 @@ function collectPointFeature(
   idSuffix: string,
   p: Vec2,
   tags: Record<string, string>,
+  roads: readonly RoadSegment[],
   signals: TrafficSignalDef[],
   crosswalks: CrosswalkDef[],
   signs: RoadSignDef[],
   speedZones: SpeedZone[],
   extraObstacles: ObstacleBox[]
 ): void {
-  const h = parseDirectionRad(tags);
+  if (Math.abs(p.x) > MAX_WORLD_COORD || Math.abs(p.z) > MAX_WORLD_COORD) return;
 
-  if (tags.highway === "traffic_signals" && signals.length < 30) {
+  const explicitH = parseDirectionRad(tags);
+  // Если в OSM нет тега direction=*, ориентируем светофор/переход/знак вдоль ближайшей улицы
+  const snap = explicitH === null && roads.length > 0 ? nearestRoadPoint(p.x, p.z, roads) : null;
+  const h = Number((explicitH ?? (snap && snap.dist <= 16 ? snap.h : 0)).toFixed(3));
+  const roadW = snap && snap.dist <= 16 ? snap.road.width : 7.5;
+
+  if (tags.highway === "traffic_signals" && signals.length < 40) {
+    // Стойка справа от полосы (-left = (-cos h, sin h)), стоп-линия на 4 м раньше по потоку
+    const rx = -Math.cos(h);
+    const rz = Math.sin(h);
+    const fx = Math.sin(h);
+    const fz = Math.cos(h);
+    const halfLane = Math.min(5.5, Math.max(2.6, roadW * 0.5));
     signals.push({
       id: `sig-${idSuffix}`,
-      x: Number((p.x - 3.6).toFixed(2)),
-      z: p.z,
+      x: Number((p.x + rx * (roadW * 0.5 + 0.9)).toFixed(2)),
+      z: Number((p.z + rz * (roadW * 0.5 + 0.9)).toFixed(2)),
       h,
-      stopLineX: Number((p.x - 1.8).toFixed(2)),
-      stopLineZ: Number((p.z - 4).toFixed(2)),
-      stopLineWidth: 4.5,
+      stopLineX: Number((p.x + rx * (halfLane * 0.45) - fx * 4).toFixed(2)),
+      stopLineZ: Number((p.z + rz * (halfLane * 0.45) - fz * 4).toFixed(2)),
+      stopLineWidth: Number(Math.min(12, Math.max(3.5, halfLane)).toFixed(2)),
       cycleOffset: (signals.length * 7) % 24,
       greenDuration: 14,
       redDuration: 12,
@@ -226,12 +293,12 @@ function collectPointFeature(
     return;
   }
 
-  if (tags.highway === "crossing" && crosswalks.length < 25) {
+  if (tags.highway === "crossing" && crosswalks.length < 35) {
     crosswalks.push({
       id: `cw-${idSuffix}`,
       cx: p.x,
       cz: p.z,
-      width: 7.5,
+      width: Number(Math.min(24, Math.max(5, roadW)).toFixed(1)),
       length: 3.4,
       h,
       pedSpeed: 1.25,
@@ -241,16 +308,16 @@ function collectPointFeature(
   }
 
   const signInfo = classifyOsmNodeSign(tags);
-  if (signInfo && signs.length < 80) {
+  if (signInfo && signs.length < 120) {
     const sign = createDefaultSign(`sign-${idSuffix}`, signInfo.kind, p.x, p.z, h, signInfo.limitKmh);
     if (tags.name) sign.label = `${sign.label} (${tags.name})`;
     signs.push(sign);
     const sz = signToSpeedZone(sign);
-    if (sz && speedZones.length < 30) speedZones.push(sz);
+    if (sz && speedZones.length < 40) speedZones.push(sz);
     return;
   }
 
-  if (extraObstacles.length >= 160) return;
+  if (extraObstacles.length >= 220) return;
 
   if (tags.natural === "tree") {
     extraObstacles.push({
@@ -296,7 +363,7 @@ function collectPointFeature(
 
 /**
  * Разбирает Overpass OSM JSON (`{ elements }`) или GeoJSON (`FeatureCollection`)
- * в нормализованный офлайн-пакет карты с ограничением 600 зданий.
+ * в нормализованный офлайн-пакет карты с сохранением реальных (неквадратных) границ участка.
  */
 export function parseOsmOrGeoJson(raw: unknown, title = "Импортированный участок OSM"): NormalizedOsmPack {
   if (!raw || typeof raw !== "object") {
@@ -319,11 +386,16 @@ export function parseOsmOrGeoJson(raw: unknown, title = "Импортирова�
 
 /**
  * Разбирает стандартный файл `.osm` (XML с openstreetmap.org / JOSM) в офлайн-пакет карты.
- * Исполняется и в браузере, и в Node.js без DOMParser.
+ * Учитывает рамку экспорта `<bounds/>` (подрезая длинные транзитные трассы по выбранному окну + буфер).
  */
 export function parseOsmXml(xml: string, title = "Импортированный участок .osm"): NormalizedOsmPack {
-  const elements = parseOsmXmlElements(xml);
-  return parseOverpassElements(elements, title, "Локальный импорт OSM XML (.osm, офлайн)");
+  const { elements, exportBbox } = parseOsmXmlDocument(xml);
+  return parseOverpassElements(
+    elements,
+    title,
+    "Локальный импорт OSM XML (.osm, офлайн)",
+    exportBbox
+  );
 }
 
 /**
@@ -360,7 +432,12 @@ export function parseMapFileText(
   return { pack: parseOsmOrGeoJson(parsed, title), format };
 }
 
-function parseOverpassElements(elements: RawOsmElement[], title: string, source: string): NormalizedOsmPack {
+function parseOverpassElements(
+  elements: RawOsmElement[],
+  title: string,
+  source: string,
+  exportBbox?: [number, number, number, number]
+): NormalizedOsmPack {
   const nodeMap = new Map<number, { lat: number; lon: number; tags?: Record<string, string> }>();
   let minLat = Infinity;
   let maxLat = -Infinity;
@@ -388,7 +465,28 @@ function parseOverpassElements(elements: RawOsmElement[], title: string, source:
     throw new Error("В OSM-файле не найдено ни одного узла с координатами (lat/lon).");
   }
 
-  const project = projectFactory((minLat + maxLat) / 2, (minLon + maxLon) / 2);
+  // Центрируем проекцию по окну экспорта <bounds/>, если оно задано, иначе по узлам файла
+  const centerLat = exportBbox ? (exportBbox[1] + exportBbox[3]) / 2 : (minLat + maxLat) / 2;
+  const centerLon = exportBbox ? (exportBbox[0] + exportBbox[2]) / 2 : (minLon + maxLon) / 2;
+  const project = projectFactory(centerLat, centerLon);
+
+  // Мягкое окно подрезки: не даёт 10-километровым хвостам way увести карту за пределы выбранного района
+  let clipPoly: Vec2[] | undefined;
+  if (exportBbox) {
+    const sw = project(exportBbox[1], exportBbox[0]);
+    const ne = project(exportBbox[3], exportBbox[2]);
+    const margin = 80;
+    clipPoly = boundsToPolygon({
+      minX: Math.max(-MAX_WORLD_COORD + 30, Math.min(sw.x, ne.x) - margin),
+      maxX: Math.min(MAX_WORLD_COORD - 30, Math.max(sw.x, ne.x) + margin),
+      minZ: Math.max(-MAX_WORLD_COORD + 30, Math.min(sw.z, ne.z) - margin),
+      maxZ: Math.min(MAX_WORLD_COORD - 30, Math.max(sw.z, ne.z) + margin),
+    });
+  } else {
+    const limit = MAX_WORLD_COORD - 40;
+    clipPoly = boundsToPolygon({ minX: -limit, maxX: limit, minZ: -limit, maxZ: limit });
+  }
+
   const roads: RoadSegment[] = [];
   const buildings: ObstacleBox[] = [];
   const extraObstacles: ObstacleBox[] = [];
@@ -399,90 +497,121 @@ function parseOverpassElements(elements: RawOsmElement[], title: string, source:
 
   for (const el of elements) {
     if (el.type === "way" && el.tags) {
-      const pts: Vec2[] = [];
+      const rawPts: Vec2[] = [];
       if (Array.isArray(el.geometry) && el.geometry.length > 0) {
-        for (const g of el.geometry) pts.push(project(g.lat, g.lon));
+        for (const g of el.geometry) rawPts.push(project(g.lat, g.lon));
       } else if (Array.isArray(el.nodes)) {
         for (const nid of el.nodes) {
           const n = nodeMap.get(nid);
-          if (n) pts.push(project(n.lat, n.lon));
+          if (n) rawPts.push(project(n.lat, n.lon));
         }
       }
-      if (pts.length < 2) continue;
+      if (rawPts.length < 2) continue;
 
       if (el.tags.highway && HIGHWAY_WIDTHS[el.tags.highway]) {
+        // В OSM oneway=-1 означает движение от последнего узла к первому
+        const directed = el.tags.oneway === "-1" ? [...rawPts].reverse() : rawPts;
+        const pieces = clipPoly ? clipPolylineToPolygon(directed, clipPoly) : [directed];
+        if (pieces.length === 0) continue;
+
         const preset = HIGHWAY_WIDTHS[el.tags.highway];
         const widthTag = parseNumericTag(el.tags.width);
         const lanesTag = parseNumericTag(el.tags.lanes);
         const maxspeed = parseNumericTag(el.tags.maxspeed);
-        const width = Math.min(22, Math.max(3.8, widthTag ?? preset.width));
-        const lanes = Math.max(1, Math.min(6, lanesTag ?? preset.lanes));
-        const speedLimitKmh = maxspeed ?? preset.limit;
-        roads.push({
-          id: `way-${el.id}`,
-          points: pts,
-          width,
-          lanes,
-          highway: el.tags.highway,
-          name: el.tags.name,
-          hasSolidCenter: lanes >= 2 && width >= 7,
-          speedLimitKmh,
+        const width = Number(Math.min(26, Math.max(3.2, widthTag ?? preset.width)).toFixed(2));
+        const lanes = Math.max(1, Math.min(6, Math.round(lanesTag ?? preset.lanes)));
+        const speedLimitKmh = maxspeed ? Math.min(110, Math.max(5, maxspeed)) : preset.limit;
+
+        pieces.forEach((pts, pIdx) => {
+          const roadId = pIdx === 0 ? `way-${el.id}` : `way-${el.id}-${pIdx + 1}`;
+          roads.push({
+            id: roadId,
+            points: pts,
+            width,
+            lanes,
+            highway: el.tags!.highway,
+            name: el.tags!.name,
+            hasSolidCenter: lanes >= 2 && width >= 7,
+            speedLimitKmh,
+          });
+          if (pIdx === 0 && maxspeed && maxspeed <= 40 && speedZones.length < 30) {
+            const midIdx = Math.floor(pts.length / 2);
+            const mid = pts[midIdx];
+            const prev = pts[Math.max(0, midIdx - 1)];
+            const next = pts[Math.min(pts.length - 1, midIdx + 1)];
+            const segH = Number(Math.atan2(next.x - prev.x, next.z - prev.z).toFixed(3));
+            const signX = Number((mid.x - Math.cos(segH) * (width / 2 + 1.1)).toFixed(2));
+            const signZ = Number((mid.z + Math.sin(segH) * (width / 2 + 1.1)).toFixed(2));
+            const kind: RoadSignKind =
+              el.tags!.highway === "living_street" && speedLimitKmh <= 20 ? "living_zone" : "speed_limit";
+            const sign: RoadSignDef = {
+              id: `sign-way-${el.id}`,
+              kind,
+              x: signX,
+              z: signZ,
+              h: segH,
+              limitKmh: speedLimitKmh,
+              zoneRadius: 28,
+              zoneX: mid.x,
+              zoneZ: mid.z,
+              label:
+                kind === "living_zone"
+                  ? `Знак 5.21 «Жилая зона» (${el.tags!.name || "20 км/ч"})`
+                  : `Знак 3.24 «${speedLimitKmh}» (${el.tags!.name || el.tags!.highway})`,
+            };
+            if (signs.length < 120) signs.push(sign);
+            const sz = signToSpeedZone(sign);
+            if (sz) speedZones.push(sz);
+          }
         });
-        if (maxspeed && maxspeed <= 40 && speedZones.length < 20) {
-          const midIdx = Math.floor(pts.length / 2);
-          const mid = pts[midIdx];
-          const prev = pts[Math.max(0, midIdx - 1)];
-          const next = pts[Math.min(pts.length - 1, midIdx + 1)];
-          const segH = Number(Math.atan2(next.x - prev.x, next.z - prev.z).toFixed(3));
-          // Стойка справа от дороги (-left = (-cos h, sin h))
-          const signX = Number((mid.x - Math.cos(segH) * (width / 2 + 1.1)).toFixed(2));
-          const signZ = Number((mid.z + Math.sin(segH) * (width / 2 + 1.1)).toFixed(2));
-          const kind: RoadSignKind = el.tags.highway === "living_street" && maxspeed <= 20 ? "living_zone" : "speed_limit";
-          const sign: RoadSignDef = {
-            id: `sign-way-${el.id}`,
-            kind,
-            x: signX,
-            z: signZ,
-            h: segH,
-            limitKmh: maxspeed,
-            zoneRadius: 28,
-            zoneX: mid.x,
-            zoneZ: mid.z,
-            label:
-              kind === "living_zone"
-                ? `Знак 5.21 «Жилая зона» (${el.tags.name || "20 км/ч"})`
-                : `Знак 3.24 «${maxspeed}» (${el.tags.name || el.tags.highway})`,
-          };
-          if (signs.length < 80) signs.push(sign);
-          const sz = signToSpeedZone(sign);
-          if (sz) speedZones.push(sz);
-        }
       } else if (el.tags.building && buildings.length < 600) {
-        const box = polygonToAabbObstacle(`bld-${el.id}`, pts, el.tags, buildings.length);
-        if (box) buildings.push(box);
+        const box = polygonToObbObstacle(`bld-${el.id}`, rawPts, el.tags, buildings.length);
+        if (box && (!clipPoly || isPointInPolygon(box.cx, box.cz, clipPoly))) {
+          buildings.push(box);
+        }
       } else if (
         el.tags.barrier &&
         (BARRIER_KINDS.has(el.tags.barrier) || el.tags.barrier === "kerb") &&
-        extraObstacles.length < 160
+        extraObstacles.length < 220
       ) {
-        const segs = polylineToBarrierObstacles(
-          `bar-${el.id}`,
-          pts,
-          el.tags.barrier,
-          160 - extraObstacles.length
-        );
-        extraObstacles.push(...segs);
+        // Бордюры (barrier=kerb) часто пересекают проезжую часть на съездах — берём только ограждения/стены или короткие бордюры вне дорог
+        const pieces = clipPoly ? clipPolylineToPolygon(rawPts, clipPoly) : [rawPts];
+        for (const piece of pieces) {
+          if (extraObstacles.length >= 220) break;
+          const segs = polylineToBarrierObstacles(
+            `bar-${el.id}`,
+            piece,
+            el.tags.barrier,
+            220 - extraObstacles.length
+          );
+          extraObstacles.push(...segs);
+        }
       }
     }
   }
 
-  // Светофоры, переходы, дорожные знаки и точечные объекты из узлов
+  // Светофоры, переходы, дорожные знаки и точечные объекты из узлов (ориентируются по уже собранным дорогам)
   for (const el of elements) {
     if (el.type === "node" && el.tags && typeof el.lat === "number" && typeof el.lon === "number") {
       const p = project(el.lat, el.lon);
-      collectPointFeature(String(el.id), p, el.tags, signals, crosswalks, signs, speedZones, extraObstacles);
+      if (clipPoly && !isPointInPolygon(p.x, p.z, clipPoly)) continue;
+      collectPointFeature(String(el.id), p, el.tags, roads, signals, crosswalks, signs, speedZones, extraObstacles);
     }
   }
+
+  const finalBbox: [number, number, number, number] = exportBbox
+    ? [
+        Number(exportBbox[0].toFixed(5)),
+        Number(exportBbox[1].toFixed(5)),
+        Number(exportBbox[2].toFixed(5)),
+        Number(exportBbox[3].toFixed(5)),
+      ]
+    : [
+        Number(minLon.toFixed(5)),
+        Number(minLat.toFixed(5)),
+        Number(maxLon.toFixed(5)),
+        Number(maxLat.toFixed(5)),
+      ];
 
   return finalizePack(
     roads,
@@ -492,7 +621,7 @@ function parseOverpassElements(elements: RawOsmElement[], title: string, source:
     signals,
     crosswalks,
     speedZones,
-    [Number(minLon.toFixed(5)), Number(minLat.toFixed(5)), Number(maxLon.toFixed(5)), Number(maxLat.toFixed(5))],
+    finalBbox,
     title,
     source
   );
@@ -533,6 +662,8 @@ function parseGeoJsonFeatures(features: GeoJsonFeature[], title: string): Normal
   const signals: TrafficSignalDef[] = [];
   const crosswalks: CrosswalkDef[] = [];
   const speedZones: SpeedZone[] = [];
+  const pendingPoints: Array<{ fid: string; p: Vec2; tags: Record<string, string> }> = [];
+  let customBoundary: Vec2[] | undefined;
 
   features.forEach((f, idx) => {
     const g = f.geometry;
@@ -545,25 +676,27 @@ function parseGeoJsonFeatures(features: GeoJsonFeature[], title: string): Normal
     const fid = String(f.id ?? idx);
 
     if (g.type === "LineString" && Array.isArray(g.coordinates)) {
-      const pts = (g.coordinates as number[][]).map(([lon, lat]) => project(lat, lon));
-      if (pts.length < 2) return;
+      const rawPts = (g.coordinates as number[][]).map(([lon, lat]) => project(lat, lon));
+      if (rawPts.length < 2) return;
       if (
         tags.barrier &&
         (BARRIER_KINDS.has(tags.barrier) || tags.barrier === "kerb") &&
         !tags.highway &&
-        extraObstacles.length < 160
+        extraObstacles.length < 220
       ) {
         extraObstacles.push(
-          ...polylineToBarrierObstacles(`gj-bar-${fid}`, pts, tags.barrier, 160 - extraObstacles.length)
+          ...polylineToBarrierObstacles(`gj-bar-${fid}`, rawPts, tags.barrier, 220 - extraObstacles.length)
         );
         return;
       }
       const hw = tags.highway || "residential";
       if (!HIGHWAY_WIDTHS[hw] && !tags.highway) return;
+      const pts = tags.oneway === "-1" ? [...rawPts].reverse() : rawPts;
       const preset = HIGHWAY_WIDTHS[hw] ?? HIGHWAY_WIDTHS.residential;
-      const width = parseNumericTag(tags.width) ?? preset.width;
-      const lanes = parseNumericTag(tags.lanes) ?? preset.lanes;
+      const width = Number(Math.min(26, Math.max(3.2, parseNumericTag(tags.width) ?? preset.width)).toFixed(2));
+      const lanes = Math.max(1, Math.min(6, Math.round(parseNumericTag(tags.lanes) ?? preset.lanes)));
       const maxspeed = parseNumericTag(tags.maxspeed);
+      const speedLimitKmh = maxspeed ? Math.min(110, Math.max(5, maxspeed)) : preset.limit;
       roads.push({
         id: `gj-road-${fid}`,
         points: pts,
@@ -572,33 +705,46 @@ function parseGeoJsonFeatures(features: GeoJsonFeature[], title: string): Normal
         highway: hw,
         name: tags.name,
         hasSolidCenter: lanes >= 2,
-        speedLimitKmh: maxspeed ?? preset.limit,
+        speedLimitKmh,
       });
-      if (maxspeed && maxspeed <= 40 && signs.length < 80 && speedZones.length < 20) {
+      if (maxspeed && maxspeed <= 40 && signs.length < 120 && speedZones.length < 40) {
         const mid = pts[Math.floor(pts.length / 2)];
-        const sign = createDefaultSign(`gj-sign-${fid}`, "speed_limit", mid.x - width / 2 - 1.1, mid.z, 0, maxspeed);
+        const sign = createDefaultSign(`gj-sign-${fid}`, "speed_limit", mid.x - width / 2 - 1.1, mid.z, 0, speedLimitKmh);
         sign.zoneX = mid.x;
         sign.zoneZ = mid.z;
         signs.push(sign);
         const sz = signToSpeedZone(sign);
         if (sz) speedZones.push(sz);
       }
-    } else if (g.type === "Polygon" && Array.isArray(g.coordinates) && buildings.length < 600) {
-      if (!tags.building && tags.highway) return;
+    } else if (g.type === "Polygon" && Array.isArray(g.coordinates)) {
       const ring = (g.coordinates as number[][][])[0];
-      if (Array.isArray(ring)) {
-        const pts = ring.map(([lon, lat]) => project(lat, lon));
-        const box = polygonToAabbObstacle(`gj-bld-${fid}`, pts, tags, buildings.length);
+      if (!Array.isArray(ring)) return;
+      const pts = ring.map(([lon, lat]) => project(lat, lon));
+      // Поддержка произвольного полигона границы прямо из GeoJSON (boundary=route | cdt:boundary=yes | role=boundary)
+      if (
+        !tags.building &&
+        (tags.boundary === "route" || tags["cdt:boundary"] === "yes" || tags.role === "boundary")
+      ) {
+        const poly = sanitizeBoundaryPolygon(pts);
+        if (poly) customBoundary = poly;
+        return;
+      }
+      if (!tags.building && tags.highway) return;
+      if (buildings.length < 600) {
+        const box = polygonToObbObstacle(`gj-bld-${fid}`, pts, tags, buildings.length);
         if (box) buildings.push(box);
       }
     } else if (g.type === "Point" && Array.isArray(g.coordinates)) {
       const [lon, lat] = g.coordinates as number[];
-      const p = project(lat, lon);
-      collectPointFeature(`gj-${fid}`, p, tags, signals, crosswalks, signs, speedZones, extraObstacles);
+      pendingPoints.push({ fid, p: project(lat, lon), tags });
     }
   });
 
-  return finalizePack(
+  for (const pt of pendingPoints) {
+    collectPointFeature(`gj-${pt.fid}`, pt.p, pt.tags, roads, signals, crosswalks, signs, speedZones, extraObstacles);
+  }
+
+  const basePack = finalizePack(
     roads,
     buildings,
     extraObstacles,
@@ -610,6 +756,8 @@ function parseGeoJsonFeatures(features: GeoJsonFeature[], title: string): Normal
     title,
     "Локальный импорт GeoJSON (офлайн)"
   );
+
+  return customBoundary ? cropOsmPackToPolygon(basePack, customBoundary) : basePack;
 }
 
 function finalizePack(
@@ -622,33 +770,58 @@ function finalizePack(
   speedZones: SpeedZone[],
   bbox: [number, number, number, number],
   title: string,
-  source: string
+  source: string,
+  boundaryPolygon?: Vec2[]
 ): NormalizedOsmPack {
-  let minX = -120;
-  let maxX = 120;
-  let minZ = -120;
-  let maxZ = 120;
+  // Фильтруем бордюры OSM (barrier=kerb), случайно попавшие прямо на проезжую часть (съезды/переходы)
+  const filteredExtras = extraObstacles.filter((o) => {
+    if (o.kind !== "curb" || roads.length === 0) return true;
+    const snap = nearestRoadPoint(o.cx, o.cz, roads);
+    return !snap || snap.dist > snap.road.width * 0.45;
+  });
+
+  // Вычисляем точные (неквадратные!) границы по фактической геометрии дорог и объектов
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
 
   const expand = (x: number, z: number, pad: number) => {
-    minX = Math.min(minX, x - pad);
-    maxX = Math.max(maxX, x + pad);
-    minZ = Math.min(minZ, z - pad);
-    maxZ = Math.max(maxZ, z + pad);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    if (x - pad < minX) minX = x - pad;
+    if (x + pad > maxX) maxX = x + pad;
+    if (z - pad < minZ) minZ = z - pad;
+    if (z + pad > maxZ) maxZ = z + pad;
   };
 
   for (const r of roads) {
-    for (const p of r.points) expand(p.x, p.z, 25);
+    const pad = Math.max(16, r.width * 0.5 + 12);
+    for (const p of r.points) expand(p.x, p.z, pad);
   }
-  for (const b of buildings) expand(b.cx, b.cz, Math.max(b.halfX, b.halfZ) + 10);
-  for (const s of signs) expand(s.x, s.z, 12);
+  for (const b of buildings) expand(b.cx, b.cz, Math.max(b.halfX, b.halfZ) + 8);
+  for (const o of filteredExtras) expand(o.cx, o.cz, Math.max(o.halfX, o.halfZ) + 6);
+  for (const s of signs) expand(s.x, s.z, 10);
+  for (const sg of signals) {
+    expand(sg.x, sg.z, 10);
+    expand(sg.stopLineX, sg.stopLineZ, 10);
+  }
+  for (const cw of crosswalks) expand(cw.cx, cw.cz, Math.max(cw.width, cw.length) * 0.5 + 8);
 
-  // Старт на первой дороге с правой полосы
+  if (!Number.isFinite(minX)) {
+    minX = -60;
+    maxX = 60;
+    minZ = -60;
+    maxZ = 60;
+  }
+
+  const allObstacles = [...buildings, ...filteredExtras];
+
+  // Старт по умолчанию на первой дороге с правой полосы
   let suggestedStart = { x: -2, z: 0, h: 0 };
   if (roads.length > 0 && roads[0].points.length >= 2) {
     const p0 = roads[0].points[0];
     const p1 = roads[0].points[1];
     const h = Math.atan2(p1.x - p0.x, p1.z - p0.z);
-    // Смещаемся вправо (-left) на четверть ширины дороги
     const rx = -Math.cos(h) * (roads[0].width * 0.23);
     const rz = Math.sin(h) * (roads[0].width * 0.23);
     suggestedStart = {
@@ -658,9 +831,24 @@ function finalizePack(
     };
   }
 
-  const route = buildRouteFromRoads(roads);
+  // Строим учебный маршрут с учётом произвольного контура и реальных препятствий OSM
+  const route = buildRouteFromRoads(roads, {
+    boundaryPolygon,
+    obstacles: allObstacles,
+  });
   if (route.startPose) suggestedStart = route.startPose;
-  for (const cp of route.checkpoints) expand(cp.x, cp.z, 12);
+
+  expand(suggestedStart.x, suggestedStart.z, 14);
+  for (const cp of route.checkpoints) expand(cp.x, cp.z, cp.radius + 8);
+
+  const bounds: WorldBounds = isValidBoundaryPolygon(boundaryPolygon)
+    ? boundingBoxOfPolygon(boundaryPolygon, 0)
+    : {
+        minX: Number(Math.max(-MAX_WORLD_COORD, Math.floor(minX)).toFixed(1)),
+        maxX: Number(Math.min(MAX_WORLD_COORD, Math.ceil(maxX)).toFixed(1)),
+        minZ: Number(Math.max(-MAX_WORLD_COORD, Math.floor(minZ)).toFixed(1)),
+        maxZ: Number(Math.min(MAX_WORLD_COORD, Math.ceil(maxZ)).toFixed(1)),
+      };
 
   return {
     meta: {
@@ -678,7 +866,7 @@ function finalizePack(
     },
     roads,
     buildings,
-    extraObstacles,
+    extraObstacles: filteredExtras,
     signs,
     signals,
     crosswalks,
@@ -686,11 +874,55 @@ function finalizePack(
     suggestedStart,
     routeCheckpoints: route.checkpoints,
     routeRoadName: route.roadName,
-    bounds: {
-      minX: Number(Math.max(-600, minX).toFixed(1)),
-      maxX: Number(Math.min(600, maxX).toFixed(1)),
-      minZ: Number(Math.max(-600, minZ).toFixed(1)),
-      maxZ: Number(Math.min(600, maxZ).toFixed(1)),
-    },
+    bounds,
+    ...(isValidBoundaryPolygon(boundaryPolygon) ? { boundaryPolygon: boundaryPolygon.map((p) => ({ ...p })) } : {}),
   };
+}
+
+/**
+ * Обрезает офлайн-пакет OSM по произвольному многоугольнику (нарисованному от руки или коридору маршрута)
+ * и пересобирает маршрут и стартовую позицию строго внутри новой границы.
+ */
+export function cropOsmPackToPolygon(pack: NormalizedOsmPack, rawPoly: readonly Vec2[]): NormalizedOsmPack {
+  const poly = sanitizeBoundaryPolygon(rawPoly);
+  if (!poly) return pack;
+
+  const roads: RoadSegment[] = [];
+  for (const r of pack.roads) {
+    const pieces = clipPolylineToPolygon(r.points, poly);
+    pieces.forEach((pts, idx) => {
+      roads.push({
+        ...r,
+        id: idx === 0 ? r.id : `${r.id}-c${idx + 1}`,
+        points: pts,
+      });
+    });
+  }
+
+  const buildings = pack.buildings.filter((b) => isPointInPolygon(b.cx, b.cz, poly));
+  const extraObstacles = (pack.extraObstacles ?? []).filter((o) => isPointInPolygon(o.cx, o.cz, poly));
+  const signs = (pack.signs ?? []).filter((s) => isPointInPolygon(s.x, s.z, poly));
+  const signals = pack.signals.filter(
+    (sg) => isPointInPolygon(sg.x, sg.z, poly) && isPointInPolygon(sg.stopLineX, sg.stopLineZ, poly)
+  );
+  const crosswalks = pack.crosswalks.filter((cw) => isPointInPolygon(cw.cx, cw.cz, poly));
+  const speedZones: SpeedZone[] = [];
+  for (const sn of signs) {
+    const sz = signToSpeedZone(sn);
+    if (sz) speedZones.push(sz);
+  }
+
+  return finalizePack(
+    roads,
+    buildings,
+    extraObstacles,
+    signs,
+    signals,
+    crosswalks,
+    speedZones,
+    pack.meta.bbox,
+    pack.meta.title,
+    pack.meta.source,
+    poly
+  );
 }

@@ -285,6 +285,13 @@ export type MapPackMeta = {
   signsCount?: number;
 };
 
+export type WorldBounds = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
 export type WorldData = {
   scenarioId: ScenarioId;
   title: string;
@@ -307,5 +314,16 @@ export type WorldData = {
    * карта OSM) — его снимок сохраняется в попытке, иначе реплей шёл бы по другому миру.
    */
   embedInAttempt?: boolean;
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Охватывающий прямоугольник мира (вычисляется по реальным пропорциям участка или `boundaryPolygon`). */
+  bounds: WorldBounds;
+  /**
+   * Произвольный замкнутый контур границы участка/маршрута (минимум 3 вершины, в метрах).
+   * Если задан — определяет точную неквадратную рабочую область (многоугольник, Г/Т-площадку или коридор маршрута).
+   */
+  boundaryPolygon?: Vec2[];
+  /**
+   * Произвольный многоугольный контур асфальтовой площадки автодрома (минимум 3 вершины, в метрах).
+   * Если задан — 3D-сцена и 2D-реплей строят асфальтовое покрытие и кромку точно по этой форме (вместо прямоугольника).
+   */
+  lotPolygon?: Vec2[];
 };

@@ -315,12 +315,17 @@ export function DebriefView({
       if (sy > maxSy) maxSy = sy;
     };
     for (const p of attempt.trajectory) include(p.x, p.z);
+    for (const cp of replayWorld.checkpoints) {
+      include(cp.x - cp.radius, cp.z - cp.radius);
+      include(cp.x + cp.radius, cp.z + cp.radius);
+    }
     for (const b of replayWorld.bays) {
       include(b.cx - b.width, b.cz - b.length);
       include(b.cx + b.width, b.cz + b.length);
     }
     if (!Number.isFinite(minSx)) return { x: -20, y: -20, w: 40, h: 40 };
-    const pad = attempt.scenarioId === "city_osm" ? 14 : 6;
+    const rawSpan = Math.max(maxSx - minSx, maxSy - minSy);
+    const pad = rawSpan > 70 ? Math.min(22, Math.max(12, rawSpan * 0.08)) : 6;
     const w = Math.max(18, maxSx - minSx + pad * 2);
     const h = Math.max(18, maxSy - minSy + pad * 2);
     return { x: minSx - pad, y: minSy - pad, w, h };
@@ -599,6 +604,29 @@ export function DebriefView({
               role="img"
               aria-label="Карта траектории заезда"
             >
+              {/* Асфальтовая площадка произвольной формы (если задана) */}
+              {replayWorld.lotPolygon && replayWorld.lotPolygon.length >= 3 && (
+                <polygon
+                  data-testid="debrief-lot-polygon"
+                  points={replayWorld.lotPolygon.map((p) => `${-p.x},${-p.z}`).join(" ")}
+                  fill="#1f2a35"
+                  stroke="#35485c"
+                  strokeWidth={Math.max(0.2, Math.min(1.1, Math.max(mapBounds.w, mapBounds.h) * 0.0035))}
+                />
+              )}
+
+              {/* Произвольная граница маршрута/мира (если задана) */}
+              {replayWorld.boundaryPolygon && replayWorld.boundaryPolygon.length >= 3 && (
+                <polygon
+                  points={replayWorld.boundaryPolygon.map((p) => `${-p.x},${-p.z}`).join(" ")}
+                  fill={replayWorld.lotPolygon ? "none" : "rgba(82,214,189,0.03)"}
+                  stroke="#f5b942"
+                  strokeWidth={Math.max(0.25, Math.min(1.4, Math.max(mapBounds.w, mapBounds.h) * 0.004))}
+                  strokeDasharray="2.5 1.8"
+                  opacity={0.78}
+                />
+              )}
+
               {/* Дороги */}
               {replayWorld.roads.map((r) => (
                 <polyline
@@ -685,10 +713,29 @@ export function DebriefView({
                 />
               ))}
 
+              {/* Контрольные точки маршрута */}
+              {replayWorld.checkpoints.map((cp, idx) => {
+                const scale = Math.max(mapBounds.w, mapBounds.h) > 80 ? 0.35 : 0.16;
+                return (
+                  <g key={cp.id} transform={`translate(${-cp.x} ${-cp.z})`}>
+                    <circle
+                      r={cp.radius}
+                      fill="rgba(82,214,189,0.06)"
+                      stroke="#52d6bd"
+                      strokeWidth={scale}
+                      strokeDasharray="1.1 0.8"
+                    />
+                    <circle r={Math.max(0.55, scale * 2.4)} fill="#52d6bd" />
+                    <title>{`КТ #${idx + 1}: ${cp.instruction}`}</title>
+                  </g>
+                );
+              })}
+
               {/* Линия траектории (бирюзовый — вперёд, янтарный — задний ход R) */}
               {attempt.trajectory.slice(1).map((pt, i) => {
                 const prev = attempt.trajectory[i];
                 const past = i < cursor;
+                const wideMap = Math.max(mapBounds.w, mapBounds.h) > 80;
                 return (
                   <line
                     key={i}
@@ -697,7 +744,7 @@ export function DebriefView({
                     x2={-pt.x}
                     y2={-pt.z}
                     stroke={pt.gear === "R" ? "#f5b942" : "#52d6bd"}
-                    strokeWidth={attempt.scenarioId === "city_osm" ? 0.55 : 0.24}
+                    strokeWidth={wideMap ? 0.55 : 0.24}
                     opacity={past ? 0.92 : 0.22}
                     strokeLinecap="round"
                   />

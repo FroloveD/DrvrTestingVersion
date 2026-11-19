@@ -1,9 +1,9 @@
 /**
  * @module maps/osmXml
  * @layer pure-core
- * @role Автономный парсер стандартных файлов `.osm` (XML с openstreetmap.org и JOSM) без DOMParser и внешних пакетов.
+ * @role Автономный парсер стандартных файлов `.osm` (XML с openstreetmap.org и JOSM), включая `<bounds>`, без DOMParser и внешних пакетов.
  * @invariants #7 (чистое ядро — исполняется в Node.js и браузере без DOM), #8 (строго офлайн), #9 (ODbL 1.0).
- * @tests T27
+ * @tests T27, T30
  */
 
 /** Унифицированный элемент OSM, совместимый со структурой Overpass JSON (`node` / `way`). */
@@ -15,6 +15,12 @@ export type RawOsmElement = {
   nodes?: number[];
   geometry?: Array<{ lat: number; lon: number }>;
   tags?: Record<string, string>;
+};
+
+export type ParsedOsmXmlDoc = {
+  elements: RawOsmElement[];
+  /** Рамка экспорта `<bounds minlat minlon maxlat maxlon/>` в формате `[minLon, minLat, maxLon, maxLat]`. */
+  exportBbox?: [number, number, number, number];
 };
 
 const XML_ENTITIES: Record<string, string> = {
@@ -57,19 +63,36 @@ function isIgnoredElement(attrs: Record<string, string>): boolean {
 }
 
 /**
- * Разбирает содержимое локального файла `.osm` (XML v0.6) в список `node` и `way`
- * с координатами, ссылками `<nd ref="..."/>` и тегами `<tag k="..." v="..."/>`.
- * Поддерживает как самозакрывающиеся `<node .../>`, так и вложенные блоки, а также
- * формат Overpass XML (`<nd lat="..." lon="..."/>`).
+ * Разбирает содержимое локального файла `.osm` (XML v0.6) в структуру `{ elements, exportBbox }`.
+ * Поддерживает `<bounds/>`, самозакрывающиеся и вложенные `<node>`/`<way>`, а также Overpass XML (`<nd lat lon/>`).
  */
-export function parseOsmXmlElements(xml: string): RawOsmElement[] {
+export function parseOsmXmlDocument(xml: string): ParsedOsmXmlDoc {
   if (typeof xml !== "string" || !xml.trim()) {
     throw new Error("OSM XML-файл пуст.");
   }
-  // Убираем BOM и XML-комментарии
   const cleaned = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
   if (!/<osm[\s>]/i.test(cleaned)) {
     throw new Error("Не найден корневой тег <osm>: ожидается выгрузка OpenStreetMap (.osm XML).");
+  }
+
+  let exportBbox: [number, number, number, number] | undefined;
+  const boundsMatch = cleaned.match(/<bounds\b([^>]*?)\/?>/i);
+  if (boundsMatch) {
+    const ba = parseAttributes(boundsMatch[1]);
+    const minLat = Number(ba.minlat);
+    const minLon = Number(ba.minlon);
+    const maxLat = Number(ba.maxlat);
+    const maxLon = Number(ba.maxlon);
+    if (
+      Number.isFinite(minLat) &&
+      Number.isFinite(minLon) &&
+      Number.isFinite(maxLat) &&
+      Number.isFinite(maxLon) &&
+      maxLat > minLat &&
+      maxLon > minLon
+    ) {
+      exportBbox = [minLon, minLat, maxLon, maxLat];
+    }
   }
 
   const elements: RawOsmElement[] = [];
@@ -144,19 +167,18 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
 
     if (name === "nd" && current.type === "way") {
       const attrs = parseAttributes(attrPart);
-      if (attrs.ref !== undefined) {
-        const ref = Number(attrs.ref);
-        if (Number.isFinite(ref)) {
-          current.nodes = current.nodes ?? [];
-          current.nodes.push(ref);
-        }
-      }
       if (attrs.lat !== undefined && attrs.lon !== undefined) {
         const lat = Number(attrs.lat);
         const lon = Number(attrs.lon);
         if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          current.geometry = current.geometry ?? [];
+          if (!current.geometry) current.geometry = [];
           current.geometry.push({ lat, lon });
+        }
+      } else if (attrs.ref !== undefined) {
+        const ref = Number(attrs.ref);
+        if (Number.isFinite(ref)) {
+          if (!current.nodes) current.nodes = [];
+          current.nodes.push(ref);
         }
       }
       continue;
@@ -165,15 +187,17 @@ export function parseOsmXmlElements(xml: string): RawOsmElement[] {
     if (name === "tag") {
       const attrs = parseAttributes(attrPart);
       if (attrs.k && attrs.v !== undefined) {
-        current.tags = current.tags ?? {};
+        if (!current.tags) current.tags = {};
         current.tags[attrs.k] = attrs.v;
       }
     }
   }
 
   if (current) elements.push(current);
-  if (elements.length === 0) {
-    throw new Error("В .osm XML не найдено ни одного узла <node> или линии <way>.");
-  }
-  return elements;
+  return { elements, exportBbox };
+}
+
+/** Разбирает список элементов `.osm` XML (совместимая обёртка над `parseOsmXmlDocument`). */
+export function parseOsmXmlElements(xml: string): RawOsmElement[] {
+  return parseOsmXmlDocument(xml).elements;
 }

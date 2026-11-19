@@ -554,6 +554,7 @@ export class SceneController {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly sun: THREE.DirectionalLight;
+  private readonly groundMesh: THREE.Mesh;
   private readonly worldGroup = new THREE.Group();
   private readonly buildingMeshes: THREE.Object3D[] = [];
   private readonly signalVisuals: SignalVisual[] = [];
@@ -640,15 +641,16 @@ export class SceneController {
     this.sun.shadow.camera.bottom = -d;
     this.scene.add(this.sun, this.sun.target);
 
-    // Травяная подложка
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(1400, 1400),
+    // Травяная подложка (масштабируется в loadWorld под реальные неквадратные размеры OSM-маршрута)
+    this.groundMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
       new THREE.MeshStandardMaterial({ color: 0x3f5743, roughness: 0.96 })
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.02;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    this.groundMesh.scale.set(1400, 1400, 1);
+    this.groundMesh.rotation.x = -Math.PI / 2;
+    this.groundMesh.position.y = -0.02;
+    this.groundMesh.receiveShadow = true;
+    this.scene.add(this.groundMesh);
 
     this.scene.add(this.worldGroup);
 
@@ -743,6 +745,25 @@ export class SceneController {
     this.checkpointMeshes.length = 0;
     this.bayVisuals.length = 0;
 
+    // Подгоняем травяную подложку и дальность камеры под реальные размеры карты (вплоть до 6×6 км)
+    const spanX = Math.max(120, world.bounds.maxX - world.bounds.minX);
+    const spanZ = Math.max(120, world.bounds.maxZ - world.bounds.minZ);
+    const maxSpan = Math.max(spanX, spanZ);
+    const midX = (world.bounds.minX + world.bounds.maxX) * 0.5;
+    const midZ = (world.bounds.minZ + world.bounds.maxZ) * 0.5;
+    this.groundMesh.position.set(midX, -0.02, midZ);
+    this.groundMesh.scale.set(Math.max(1400, spanX + 900), Math.max(1400, spanZ + 900), 1);
+
+    const targetFar = maxSpan > 340 ? Math.min(2400, Math.max(520, maxSpan * 0.85)) : 420;
+    if (this.camera.far !== targetFar) {
+      this.camera.far = targetFar;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.near = maxSpan > 340 ? 110 : 75;
+      this.scene.fog.far = maxSpan > 340 ? Math.min(560, Math.max(280, maxSpan * 0.55)) : 220;
+    }
+
     const asphaltTex = makeAsphaltTexture();
     const winTex = makeBuildingWindowTexture();
     const shadowTex = this.sharedTextures[1] as THREE.CanvasTexture;
@@ -750,6 +771,93 @@ export class SceneController {
     const asphaltMat = new THREE.MeshStandardMaterial({ map: asphaltTex, roughness: 0.92 });
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x5c6670, roughness: 0.9 });
     const whiteMarkMat = new THREE.MeshBasicMaterial({ color: 0xf1f5f9 });
+
+    // Асфальтовая площадка произвольной (неквадратной/вогнутой) формы и 3D-кромка границы мира
+    const makeWorldPolygonGeo = (pts: readonly { x: number; z: number }[]): THREE.ShapeGeometry => {
+      const shape = new THREE.Shape();
+      shape.moveTo(pts[0].x, -pts[0].z);
+      for (let i = 1; i < pts.length; i++) {
+        shape.lineTo(pts[i].x, -pts[i].z);
+      }
+      shape.closePath();
+      const geo = new THREE.ShapeGeometry(shape);
+      geo.rotateX(-Math.PI / 2);
+      const pos = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      if (pos && uv) {
+        for (let i = 0; i < pos.count; i++) {
+          uv.setXY(i, pos.getX(i) * 0.16, pos.getZ(i) * 0.16);
+        }
+        uv.needsUpdate = true;
+      }
+      geo.computeVertexNormals();
+      return geo;
+    };
+
+    if (world.lotPolygon && world.lotPolygon.length >= 3) {
+      // Асфальтовое полотно точно по контуру произвольной площадки (Г/Т/П-образной, трапеции, многоугольника)
+      const lotMesh = new THREE.Mesh(makeWorldPolygonGeo(world.lotPolygon), asphaltMat);
+      lotMesh.position.y = 0.009;
+      lotMesh.receiveShadow = true;
+      this.worldGroup.add(lotMesh);
+
+      // Бетонная кромка и белая краевая разметка вдоль всех сторон произвольной площадки
+      const rimMat = new THREE.MeshStandardMaterial({ color: 0x9aa6b2, roughness: 0.82 });
+      const poly = world.lotPolygon;
+      let area2 = 0;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        area2 += a.x * b.z - b.x * a.z;
+      }
+      const outSign = area2 >= 0 ? 1 : -1;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.4) continue;
+        const angle = Math.atan2(dx, dz);
+        const mx = (a.x + b.x) * 0.5;
+        const mz = (a.z + b.z) * 0.5;
+        const nx = (outSign * dz) / len;
+        const nz = (-outSign * dx) / len;
+
+        const rim = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, len + 0.2), rimMat);
+        rim.rotation.y = angle;
+        rim.position.set(mx + nx * 0.12, 0.035, mz + nz * 0.12);
+        rim.receiveShadow = true;
+        this.worldGroup.add(rim);
+
+        if (len > 1.2) {
+          const edgeLine = new THREE.Mesh(new THREE.PlaneGeometry(0.12, len - 0.3), whiteMarkMat);
+          edgeLine.rotation.order = "YXZ";
+          edgeLine.rotation.y = angle;
+          edgeLine.rotation.x = -Math.PI / 2;
+          edgeLine.position.set(mx - nx * 0.22, 0.016, mz - nz * 0.22);
+          this.worldGroup.add(edgeLine);
+        }
+      }
+    } else if (world.boundaryPolygon && world.boundaryPolygon.length >= 3) {
+      // Для городских/OSM-карт с произвольной границей: подсвеченный контур рабочей зоны по периметру
+      const borderMat = new THREE.MeshBasicMaterial({ color: 0xf5b942, transparent: true, opacity: 0.62 });
+      const poly = world.boundaryPolygon;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.5) continue;
+        const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.26, len), borderMat);
+        strip.rotation.order = "YXZ";
+        strip.rotation.y = Math.atan2(dx, dz);
+        strip.rotation.x = -Math.PI / 2;
+        strip.position.set((a.x + b.x) * 0.5, 0.04, (a.z + b.z) * 0.5);
+        this.worldGroup.add(strip);
+      }
+    }
 
     // Дороги и разметка
     for (const road of world.roads) {

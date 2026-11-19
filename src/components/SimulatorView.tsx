@@ -20,11 +20,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
-import { parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
-import { streetNameAt } from "../maps/route";
+import { buildRouteCorridorPolygon } from "../maps/boundary";
+import { cropOsmPackToPolygon, parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
+import { buildRouteFromRoads, listRouteCandidates, streetNameAt } from "../maps/route";
+import { checkScenarioRoute } from "../maps/routeCheck";
 import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { buildScenarioWorld } from "../scenarios/catalog";
-import type { CustomScenarioDef } from "../scenarios/custom";
+import { customFromOsmPack, type CustomScenarioDef } from "../scenarios/custom";
+import { autoFixScenarioRoute } from "../scenarios/editorOps";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
 import { checkEngineToggle, checkGearChange } from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
@@ -52,7 +55,17 @@ import {
   STEER_WHEEL,
 } from "../sim/vehicle";
 import { Chip, Icon } from "./Icons";
-import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
+import {
+  FloatingPanel,
+  loadLayout,
+  saveLayout,
+  loadLayerOrder,
+  saveLayerOrder,
+  promotePanelToFront,
+  resolvePanelZIndex,
+  type LayoutMap,
+  type PanelLayout,
+} from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
 
@@ -65,7 +78,9 @@ type Props = {
   onWheelLockChange: (deg: number) => void;
   ruleSet: RuleSet;
   customOsm: NormalizedOsmPack | null;
-  onCustomOsmChange: (pack: NormalizedOsmPack | null) => void;
+  rawCustomOsm: NormalizedOsmPack | null;
+  onCustomOsmChange: (pack: NormalizedOsmPack | null, rawPack?: NormalizedOsmPack | null) => void;
+  onEditOsmInEditor: (pack: NormalizedOsmPack, rawPack: NormalizedOsmPack | null) => void;
   customDef: CustomScenarioDef;
   onAttemptSaved: (attempt: RecordedAttempt, openDebrief: boolean, quiet?: boolean) => void;
   onNotify: (msg: string) => void;
@@ -175,7 +190,9 @@ export function SimulatorView({
   onWheelLockChange,
   ruleSet,
   customOsm,
+  rawCustomOsm,
   onCustomOsmChange,
+  onEditOsmInEditor,
   customDef,
   onAttemptSaved,
   onNotify,
@@ -196,6 +213,9 @@ export function SimulatorView({
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showOsmCheck, setShowOsmCheck] = useState(false);
+  const [osmRouteCandidate, setOsmRouteCandidate] = useState("");
+  const [osmRouteReverse, setOsmRouteReverse] = useState(false);
   const [webglFallback, setWebglFallback] = useState(false);
   const [pedalVisual, setPedalVisual] = useState<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
 
@@ -212,6 +232,7 @@ export function SimulatorView({
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
+  const [layerOrder, setLayerOrder] = useState<string[]>(loadLayerOrder);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
@@ -239,9 +260,20 @@ export function SimulatorView({
     saveLayout(layout);
   }, [layout]);
 
+  useEffect(() => {
+    saveLayerOrder(layerOrder);
+  }, [layerOrder]);
+
   const handleLayoutChange = useCallback((id: string, next: PanelLayout) => {
     setLayout((prev) => ({ ...prev, [id]: next }));
   }, []);
+
+  const handleBringPanelToFront = useCallback((id: string) => {
+    setLayerOrder((prev) => promotePanelToFront(prev, id));
+  }, []);
+
+  const panelZ = (id: string, baseZ: number) => resolvePanelZIndex(id, baseZ, layerOrder);
+  const isFrontPanel = (id: string) => layerOrder.length > 0 && layerOrder[layerOrder.length - 1] === id;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
@@ -945,15 +977,89 @@ export function SimulatorView({
         onNotify("В файле не найдено дорог с тегом highway");
         return;
       }
-      onCustomOsmChange(pack);
+      setOsmRouteCandidate("");
+      setOsmRouteReverse(false);
+      onCustomOsmChange(pack, pack);
       onScenarioChange("city_osm");
+      const check = checkScenarioRoute(customFromOsmPack(pack));
+      if (check.status !== "valid") setShowOsmCheck(true);
+      const spanX = Math.round(pack.bounds.maxX - pack.bounds.minX);
+      const spanZ = Math.round(pack.bounds.maxZ - pack.bounds.minZ);
       const signsPart = pack.signs.length > 0 ? `, знаков ${pack.signs.length}` : "";
       onNotify(
-        `Загружен пакет: дорог ${pack.meta.roadsCount}, зданий ${pack.meta.buildingsCount}, светофоров ${pack.meta.signalsCount}${signsPart}`
+        `Загружен OSM (${spanX}×${spanZ} м): дорог ${pack.meta.roadsCount}, КТ ${pack.routeCheckpoints.length}, светофоров ${pack.meta.signalsCount}${signsPart}`
       );
     } catch (err) {
       onNotify(err instanceof Error ? err.message : "Ошибка разбора файла карты (.osm / JSON / GeoJSON)");
     }
+  };
+
+  // Проверка и варианты маршрута для загруженного пакета OSM прямо в 3D-тренажёре
+  const osmRouteCheck = useMemo(() => {
+    if (!customOsm || scenarioId !== "city_osm") return null;
+    return checkScenarioRoute(customFromOsmPack(customOsm));
+  }, [customOsm, scenarioId]);
+
+  const osmCandidates = useMemo(() => {
+    if (!customOsm || scenarioId !== "city_osm") return [];
+    return listRouteCandidates(customOsm.roads, customOsm.boundaryPolygon);
+  }, [customOsm, scenarioId]);
+
+  const applyOsmRouteVariant = (candidateId: string, reverse: boolean) => {
+    if (!customOsm) return;
+    const built = buildRouteFromRoads(customOsm.roads, {
+      candidateId: candidateId || undefined,
+      reverse,
+      boundaryPolygon: customOsm.boundaryPolygon,
+      obstacles: [...customOsm.buildings, ...(customOsm.extraObstacles ?? [])],
+    });
+    if (built.checkpoints.length === 0) {
+      onNotify("По выбранной улице не удалось собрать контрольные точки");
+      return;
+    }
+    setOsmRouteCandidate(candidateId);
+    setOsmRouteReverse(reverse);
+    onCustomOsmChange({
+      ...customOsm,
+      suggestedStart: built.startPose ?? customOsm.suggestedStart,
+      routeCheckpoints: built.checkpoints,
+      routeRoadName: built.roadName,
+    });
+    onNotify(
+      `Маршрут перестроен: «${built.roadName}» (${built.checkpoints.length} КТ, ${Math.round(built.totalLengthM)} м${reverse ? ", реверс" : ""})`
+    );
+  };
+
+  const applyOsmCorridorCrop = () => {
+    if (!customOsm) return;
+    const base = rawCustomOsm ?? customOsm;
+    const spine =
+      osmRouteCheck && osmRouteCheck.fullSpine.length >= 2
+        ? osmRouteCheck.fullSpine
+        : customOsm.routeCheckpoints.map((c) => ({ x: c.x, z: c.z }));
+    const poly = buildRouteCorridorPolygon(spine, 30);
+    if (poly.length < 3) {
+      onNotify("Сначала выберите улицу маршрута для построения коридора");
+      return;
+    }
+    const cropped = cropOsmPackToPolygon(base, poly);
+    onCustomOsmChange(cropped, base);
+    onNotify(
+      `Карта обрезана по коридору маршрута (${poly.length} вершин, дорог: ${cropped.roads.length}, КТ: ${cropped.routeCheckpoints.length})`
+    );
+  };
+
+  const fixOsmRouteInPlace = () => {
+    if (!customOsm) return;
+    const { def: fixed, fixes } = autoFixScenarioRoute(customFromOsmPack(customOsm));
+    onCustomOsmChange({
+      ...customOsm,
+      suggestedStart: fixed.start,
+      routeCheckpoints: fixed.checkpoints,
+      bounds: fixed.bounds,
+      boundaryPolygon: fixed.boundaryPolygon,
+    });
+    onNotify(fixes.length > 0 ? fixes[0] : "Маршрут уже корректен");
   };
 
   const s = hud.state;
@@ -1009,7 +1115,8 @@ export function SimulatorView({
             type="button"
             className="btn btn-mini"
             onClick={() => {
-              onCustomOsmChange(null);
+              onCustomOsmChange(null, null);
+              setShowOsmCheck(false);
               onNotify("Восстановлен встроенный экзаменационный маршрут МРЭО");
             }}
           >
@@ -1055,6 +1162,137 @@ export function SimulatorView({
         </div>
       </div>
 
+      {/* Панель проверки маршрута и произвольной границы для загруженного OSM-пакета */}
+      {customOsm && scenarioId === "city_osm" && osmRouteCheck && (
+        <div
+          data-testid="sim-osm-route-bar"
+          className="panel px-3 py-2 text-[11px] space-y-2 border hairline"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="sim-osm-route-status"
+              onClick={() => setShowOsmCheck((v) => !v)}
+              className="inline-flex items-center gap-1.5"
+              title="Показать подробный отчёт проверки маршрута OSM"
+            >
+              <Chip
+                tone={
+                  osmRouteCheck.status === "valid"
+                    ? "mint"
+                    : osmRouteCheck.status === "warnings" || osmRouteCheck.status === "empty"
+                      ? "amber"
+                      : "red"
+                }
+              >
+                {osmRouteCheck.status === "valid"
+                  ? `✓ Маршрут: ${osmRouteCheck.checkpointsCount} КТ · ${osmRouteCheck.totalLengthM} м`
+                  : osmRouteCheck.status === "warnings" || osmRouteCheck.status === "empty"
+                    ? `⚠ Проверка: замечаний ${osmRouteCheck.issues.length}`
+                    : `✕ Проверка: ошибок ${osmRouteCheck.issues.filter((i) => i.severity === "error").length}`}
+              </Chip>
+            </button>
+
+            <span className="mono text-[10px] text-[#9bafbc]">
+              {Math.round(customOsm.bounds.maxX - customOsm.bounds.minX)}×
+              {Math.round(customOsm.bounds.maxZ - customOsm.bounds.minZ)} м
+              {customOsm.boundaryPolygon ? ` · контур ${customOsm.boundaryPolygon.length} т.` : ""}
+            </span>
+
+            {osmCandidates.length > 0 && (
+              <select
+                aria-label="Улица маршрута OSM"
+                value={osmRouteCandidate}
+                onChange={(ev) => applyOsmRouteVariant(ev.target.value, osmRouteReverse)}
+                className="bg-[#0b131a] border hairline rounded-lg px-2 py-1 text-[11px] max-w-[220px]"
+              >
+                <option value="">Автовыбор улицы ({customOsm.routeRoadName || "главная"})</option>
+                {osmCandidates.slice(0, 12).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} · {c.lengthM} м
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={() => applyOsmRouteVariant(osmRouteCandidate, !osmRouteReverse)}
+              title="Развернуть направление маршрута по выбранной улице"
+            >
+              ⇄ Реверс
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-mini"
+              onClick={applyOsmCorridorCrop}
+              title="Обрезать загруженную карту по коридору вдоль маршрута (вместо прямоугольника)"
+            >
+              ⬠ Коридор маршрута
+            </button>
+
+            {customOsm.boundaryPolygon && rawCustomOsm && (
+              <button
+                type="button"
+                className="btn btn-mini"
+                onClick={() => {
+                  onCustomOsmChange(rawCustomOsm, rawCustomOsm);
+                  onNotify("Восстановлена полная выгрузка OSM до обрезки");
+                }}
+              >
+                Вся выгрузка
+              </button>
+            )}
+
+            {osmRouteCheck.canAutoFix && (
+              <button type="button" className="btn btn-mini text-[#f5b942]" onClick={fixOsmRouteInPlace}>
+                Исправить маршрут
+              </button>
+            )}
+
+            <button
+              type="button"
+              data-testid="sim-osm-open-editor"
+              className="btn btn-mini ml-auto text-[#52d6bd]"
+              onClick={() => onEditOsmInEditor(customOsm, rawCustomOsm ?? customOsm)}
+              title="Открыть загруженную карту в 2D-редакторе для рисования произвольных границ и расстановки знаков/КТ"
+            >
+              <Icon name="sliders" size={12} /> Границы и маршрут → Редактор
+            </button>
+          </div>
+
+          {showOsmCheck && (
+            <div className="pt-1.5 border-t hairline space-y-1 text-[11px]">
+              <div className="text-[#c5d4df] font-semibold">{osmRouteCheck.summary}</div>
+              {osmRouteCheck.issues.length === 0 ? (
+                <div className="text-[#52d6bd]">
+                  Все {osmRouteCheck.legs.length} сегментов связаны по дорожной сети, старт и КТ внутри границы и без коллизий.
+                </div>
+              ) : (
+                <ul className="space-y-0.5 text-[#9bafbc]">
+                  {osmRouteCheck.issues.map((iss, idx) => (
+                    <li
+                      key={idx}
+                      className={
+                        iss.severity === "error"
+                          ? "text-[#ff8080]"
+                          : iss.severity === "warning"
+                            ? "text-[#f5b942]"
+                            : "text-[#9bafbc]"
+                      }
+                    >
+                      • {iss.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Главная 3D-сцена с зеркалами, статусом экзаменатора и органами управления */}
       <div
         ref={containerRef}
@@ -1085,8 +1323,10 @@ export function SimulatorView({
             minW={140}
             maxW={640}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("mirrorRear")}
             containerRef={containerRef}
-            zIndex={26}
+            zIndex={panelZ("mirrorRear", 26)}
           >
             <canvas ref={rearMirrorRef} role="img" aria-label="Отражение в зеркале заднего вида" width={320} height={96} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1099,8 +1339,10 @@ export function SimulatorView({
             minW={100}
             maxW={420}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("mirrorLeft")}
             containerRef={containerRef}
-            zIndex={25}
+            zIndex={panelZ("mirrorLeft", 25)}
           >
             <canvas ref={leftMirrorRef} role="img" aria-label="Отражение в левом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1113,8 +1355,10 @@ export function SimulatorView({
             minW={100}
             maxW={420}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("mirrorRight")}
             containerRef={containerRef}
-            zIndex={25}
+            zIndex={panelZ("mirrorRight", 25)}
           >
             <canvas ref={rightMirrorRef} role="img" aria-label="Отражение в правом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1131,8 +1375,10 @@ export function SimulatorView({
             minW={96}
             maxW={320}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("steeringWheel")}
             containerRef={containerRef}
-            zIndex={24}
+            zIndex={panelZ("steeringWheel", 24)}
           >
             <div className="p-2 flex flex-col gap-1.5">
               <svg
@@ -1190,8 +1436,10 @@ export function SimulatorView({
             minW={190}
             maxW={460}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("scorePanel")}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={panelZ("scorePanel", 20)}
           >
             <div className="px-3 py-2 pr-7">
             <div className="flex items-center gap-2">
@@ -1228,8 +1476,10 @@ export function SimulatorView({
             minW={150}
             maxW={480}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("speedPanel")}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={panelZ("speedPanel", 20)}
           >
             <div className="flex items-center gap-2 px-8 py-1.5 flex-wrap">
             {hud.nextSignal && (
@@ -1276,8 +1526,10 @@ export function SimulatorView({
             minW={300}
             maxW={820}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("statusBar")}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={panelZ("statusBar", 20)}
           >
             <div className="px-8 py-1.5">
             <div
@@ -1307,7 +1559,7 @@ export function SimulatorView({
 
         {/* Всплывающая карточка зафиксированного нарушения */}
         {!uiHidden && hud.latestViolation && (
-          <div className="absolute left-1/2 -translate-x-1/2 top-[210px] z-30 rounded-xl bg-[#2a0f14]/95 border border-[#ff6b6b]/60 px-3.5 py-2 shadow-2xl max-w-[90%] fade-in">
+          <div className="absolute left-1/2 -translate-x-1/2 top-[210px] z-50 rounded-xl bg-[#2a0f14]/95 border border-[#ff6b6b]/60 px-3.5 py-2 shadow-2xl max-w-[90%] fade-in">
             <div className="flex items-center gap-2 text-[11px] font-extrabold text-[#ff8585]">
               <Icon name="alert" size={14} />
               <span>+{hud.latestViolation.points} б. · {hud.latestViolation.title}</span>
@@ -1318,7 +1570,7 @@ export function SimulatorView({
 
         {/* Настройки управления: скорость руления клавишами A/D и сброс раскладки окон */}
         {showControls && !uiHidden && (
-          <div className="absolute right-3 top-16 z-40 w-[310px] max-h-[calc(100%-5rem)] overflow-y-auto scroll-thin rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
+          <div className="absolute right-3 top-16 z-50 w-[310px] max-h-[calc(100%-5rem)] overflow-y-auto scroll-thin rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-extrabold text-[#f5b942]">Управление</span>
               <button type="button" aria-label="Закрыть настройки управления" className="mono text-xs text-[#8fa2ae]" onClick={() => setShowControls(false)}>
@@ -1390,19 +1642,20 @@ export function SimulatorView({
                 className="btn btn-mini"
                 onClick={() => {
                   setLayout({});
-                  onNotify("Раскладка окон сброшена");
+                  setLayerOrder([]);
+                  onNotify("Раскладка окон и слоёв сброшена");
                 }}
               >
                 <Icon name="reset" size={12} /> Сбросить раскладку
               </button>
             </div>
-            <p className="mt-2 text-[10px] text-[#93a6b0]">Для переноса педали потяните за полоску с точками над ней. Удержание кнопки нажимает педаль.</p>
+            <p className="mt-2 text-[10px] text-[#93a6b0]">Удерживайте любую панель 0,4 с, чтобы вывести её на передний план и перенести. Педали переносятся за полоску с точками над кнопкой.</p>
           </div>
         )}
 
         {/* Справка по клавишам */}
         {showHelp && (
-          <div className="absolute right-3 top-16 z-30 w-[300px] rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
+          <div className="absolute right-3 top-16 z-50 w-[300px] rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
             <div className="flex items-center justify-between mb-2.5">
               <span className="text-xs font-extrabold text-[#f5b942]">Управление (инварианты v8)</span>
               <button type="button" className="mono text-xs text-[#8fa2ae]" onClick={() => setShowHelp(false)}>
@@ -1444,8 +1697,10 @@ export function SimulatorView({
             minW={250}
             maxW={680}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("camToggles")}
             containerRef={containerRef}
-            zIndex={21}
+            zIndex={panelZ("camToggles", 21)}
             resizable={false}
           >
             <div className="flex flex-wrap items-center justify-center gap-1.5 pl-2 pr-6 py-1.5">
@@ -1530,8 +1785,10 @@ export function SimulatorView({
             minW={330}
             maxW={880}
             onChange={handleLayoutChange}
+            onBringToFront={handleBringPanelToFront}
+            isFront={isFrontPanel("cluster")}
             containerRef={containerRef}
-            zIndex={22}
+            zIndex={panelZ("cluster", 22)}
           >
             <div className="px-3 py-2 flex flex-wrap items-center justify-center gap-2 sm:gap-3 pr-7">
               {/* Левый поворотник */}
@@ -1710,7 +1967,8 @@ export function SimulatorView({
               layout={layout[id]} defaults={(cw, ch) => ({
                 x: Math.max(0, cw - 12 - width - (gas ? 0 : 86)), y: Math.max(0, ch - 98), w: width,
               })}
-              minW={width} maxW={width} onChange={handleLayoutChange} containerRef={containerRef} zIndex={27}>
+              minW={width} maxW={width} onChange={handleLayoutChange} onBringToFront={handleBringPanelToFront}
+              isFront={isFrontPanel(id)} containerRef={containerRef} zIndex={panelZ(id, 27)}>
               <button type="button" {...bindPedal(which)} aria-label={gas ? "Газ" : "Тормоз"}
                 aria-pressed={pedalVisual[which]} title={gas ? "Газ: удерживайте кнопку или W" : "Тормоз: удерживайте кнопку или S"}
                 className={`pedal-face ${gas ? "pedal-gas" : "pedal-brake"}`}>

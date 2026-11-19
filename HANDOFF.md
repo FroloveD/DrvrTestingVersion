@@ -30,8 +30,8 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 29 автотестов ядра (T01–T29), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–O, >105 проверок (Playwright + headless Chromium, автозапуск в CI) |
+| Тесты ядра | 32 автотеста ядра (T01–T32), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
@@ -98,13 +98,14 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 29 автотестов ядра (T01–T29) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 32 автотеста ядра (T01–T32) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
-| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер `.osm` XML, Overpass JSON и GeoJSON (дороги, здания, знаки, заборы, деревья), ODbL |
-| `src/maps/route.ts` | маршрут по реальной улице, стартовая поза, «текущая улица» |
+| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер `.osm` XML (`<bounds>`), Overpass JSON и GeoJSON (неквадратные границы до ±3000 м, OBB зданий, знаки, `oneway=-1`), ODbL |
+| `src/maps/boundary.ts` | произвольные многоугольные границы карты: коридор маршрута, выпуклая оболочка, обрезка ломаных и удержание авто |
+| `src/maps/route.ts`, `src/maps/routeCheck.ts` | сшивка улиц OSM, маршрут и реверс, поиск пути Дейкстрой по графу дорог и диагностика маршрута |
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
-| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
-| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |
+| `src/scenarios/custom.ts` | редактор карт: схема (включая `boundaryPolygon`), офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
+| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 знаков, 8 препятствий, произвольные границы/обрезка, автопочинка маршрута, перенос, поворот и Undo/Redo |
 | `src/render/sceneController.ts`, `src/render/roadSignTextures.ts` | весь Three.js: сцена, машина, процедурные текстуры 12 знаков, зеркала, dispose (`[SEC:...]`) |
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
@@ -113,7 +114,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–O |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–P |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя

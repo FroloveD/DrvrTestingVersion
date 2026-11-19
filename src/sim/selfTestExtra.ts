@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM/границы/маршруты/редактор (T27–T32).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
@@ -16,28 +16,52 @@ import {
   updateAxisArming,
   type GamepadSnapshot,
 } from "../input/gamepad";
-import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
+import {
+  BOUNDARY_SHAPE_PRESETS,
+  buildRouteCorridorPolygon,
+  clipPolylineToPolygon,
+  insertBoundaryVertex,
+  isInsideWorldBoundary,
+  isPointInPolygon,
+  isSimplePolygon,
+  polygonArea,
+  removeBoundaryVertex,
+} from "../maps/boundary";
+import { cropOsmPackToPolygon, parseMapFileText, parseOsmOrGeoJson, parseOsmXml } from "../maps/osmLoader";
+import { buildRouteFromRoads, findRoadNetworkPath, listRouteCandidates } from "../maps/route";
+import { checkScenarioRoute } from "../maps/routeCheck";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
   customFromOsmPack,
   customFromWorld,
+  defaultCustomScenario,
   emptyCustomScenario,
   importEditorFileText,
   validateCustomScenario,
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  applyConvexHullBoundary,
+  applyPresetBoundaryShape,
+  applyRouteCorridorBoundary,
   attachCheckpointToSign,
+  autoFixScenarioRoute,
+  bringSelectionToFront,
+  clearBoundaryPolygon,
   createEditorHistory,
+  cropScenarioToBoundary,
   deleteSelected,
   duplicateSelected,
   fitBoundsToContent,
   moveSelected,
   placeObjectAt,
   pushEditorHistory,
+  rebuildRouteFromEditorRoads,
   redoEditorHistory,
+  reverseRoadDirection,
   rotateSelected,
+  setCustomBoundaryPolygon,
   undoEditorHistory,
 } from "../scenarios/editorOps";
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
@@ -739,6 +763,322 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(r1) && r1!.state.signs?.[0].x === 6.0, "Redo не вернул перенесённое состояние");
 
       return "Сетка 0,5 м · перенос/поворот · КТ от знака 4.1.2 · стоп-линия · узлы дороги · дубль/удаление · Undo/Redo OK";
+    },
+  },
+  {
+    id: "T30",
+    suite: "osm",
+    name: "Неквадратный импорт OSM (<bounds>, > 600 м), OBB диагональных зданий, oneway=-1 и сшивка улиц",
+    fn: () => {
+      // Узкий вытянутый коридор В–З (~1500 × 90 м): раньше обрезался до ±600 и раздувался в квадрат
+      const longXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="OpenStreetMap server">
+  <bounds minlat="55.7498" minlon="37.5980" maxlat="55.7503" maxlon="37.6220"/>
+  <node id="1" lat="55.7500" lon="37.5980"/>
+  <node id="2" lat="55.7500" lon="37.6060"/>
+  <node id="3" lat="55.7500" lon="37.6140">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="4" lat="55.7500" lon="37.6220"/>
+  <!-- Односторонняя улица с oneway=-1 -->
+  <node id="5" lat="55.7502" lon="37.6060"/>
+  <node id="6" lat="55.7502" lon="37.6120"/>
+  <!-- Диагональное здание под ~45° -->
+  <node id="10" lat="55.7501" lon="37.6020"/>
+  <node id="11" lat="55.7503" lon="37.6024"/>
+  <node id="12" lat="55.7502" lon="37.6026"/>
+  <node id="13" lat="55.7500" lon="37.6022"/>
+  <!-- Разбитая на 3 way одна и та же улица -->
+  <way id="201">
+    <nd ref="1"/><nd ref="2"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Длинный"/>
+    <tag k="maxspeed" v="60"/>
+  </way>
+  <way id="202">
+    <nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Длинный"/>
+  </way>
+  <way id="203">
+    <nd ref="3"/><nd ref="4"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Длинный"/>
+  </way>
+  <way id="204">
+    <nd ref="5"/><nd ref="6"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="пер. Обратный"/>
+    <tag k="oneway" v="-1"/>
+  </way>
+  <way id="205">
+    <nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="10"/>
+    <tag k="building" v="yes"/>
+  </way>
+</osm>`;
+
+      const pack = parseOsmXml(longXml, "Длинный коридор");
+      const spanX = pack.bounds.maxX - pack.bounds.minX;
+      const spanZ = pack.bounds.maxZ - pack.bounds.minZ;
+      assert(spanX > 1400, `Ожидалась длина участка > 1400 м без обрезки по ±600, получено ${spanX} м`);
+      assert(spanZ < 160 && spanX / spanZ > 9, `Карта не должна быть квадратной: ${spanX}×${spanZ} м`);
+
+      // Сшивка 3 сегментов «пр-т Длинный» в единый маршрут на всю длину (> 1400 м)
+      const cands = listRouteCandidates(pack.roads);
+      const main = cands.find((c) => c.name === "пр-т Длинный");
+      assert(Boolean(main) && main!.segmentsCount === 3 && main!.lengthM > 1400, "Сегменты одной улицы не сшиты");
+      assert(pack.routeCheckpoints.length >= 5, `Ожидалось ≥ 5 КТ по сшитой улице, получено ${pack.routeCheckpoints.length}`);
+
+      // oneway=-1 развернул узлы: движение от востока (lon 37.6120, меньший X) к западу (lon 37.6060, больший X)
+      const rev = pack.roads.find((r) => r.id === "way-204");
+      assert(Boolean(rev) && rev!.points[0].x < rev!.points[1].x, "oneway=-1 должен разворачивать направление way");
+
+      // Диагональное здание получило ориентированный OBB (h ≠ 0)
+      assert(pack.buildings.length === 1 && Math.abs(pack.buildings[0].h) > 0.2, "Диагональное здание должно иметь OBB-угол h");
+
+      // Безымянная короткая улица (22 м) тоже строит валидный маршрут (а не пустой массив КТ)
+      const shortRoute = buildRouteFromRoads([
+        {
+          id: "unnamed-short",
+          points: [
+            { x: 0, z: 0 },
+            { x: 0, z: 22 },
+          ],
+          width: 6,
+          lanes: 2,
+          highway: "residential",
+        },
+      ]);
+      assert(shortRoute.checkpoints.length >= 1 && Boolean(shortRoute.startPose), "Короткая безымянная дорога не дала КТ");
+
+      return `${Math.round(spanX)}×${Math.round(spanZ)} м (неквадрат) · сшито 3 way (${Math.round(main!.lengthM)} м) · OBB + oneway=-1 OK`;
+    },
+  },
+  {
+    id: "T31",
+    suite: "boundary",
+    name: "Произвольные границы: полигон, коридор маршрута, обрезка дорог OSM и удержание авто в симуляции",
+    fn: () => {
+      // 1. Вогнутый Г-образный контур + детектор самопересечения («бабочка»)
+      const lShape = [
+        { x: -40, z: -40 },
+        { x: 40, z: -40 },
+        { x: 40, z: 0 },
+        { x: 0, z: 0 },
+        { x: 0, z: 50 },
+        { x: -40, z: 50 },
+      ];
+      assert(isSimplePolygon(lShape) && polygonArea(lShape) > 4000, "Г-образный полигон должен быть простым");
+      assert(isPointInPolygon(-20, 30, lShape) && !isPointInPolygon(20, 30, lShape), "Ошибка point-in-polygon на вогнутом углу");
+
+      const bowtie = [
+        { x: -20, z: -20 },
+        { x: 20, z: 20 },
+        { x: -20, z: 20 },
+        { x: 20, z: -20 },
+      ];
+      assert(!isSimplePolygon(bowtie), "Самопересекающийся полигон должен отклоняться");
+
+      // Вставка и удаление вершины
+      const ins = insertBoundaryVertex(lShape, 0);
+      assert(ins.polygon.length === 7 && ins.insertedIndex === 1, "insertBoundaryVertex не вставил вершину");
+      const rem = removeBoundaryVertex(ins.polygon, 1);
+      assert(Boolean(rem) && rem!.length === 6, "removeBoundaryVertex не удалил вершину");
+
+      // Обрезка ломаной, дважды входящей в Г-образный контур
+      const clipped = clipPolylineToPolygon(
+        [
+          { x: -20, z: 35 },
+          { x: 30, z: 35 },
+          { x: 30, z: -20 },
+        ],
+        lShape
+      );
+      assert(clipped.length === 2, `Ожидалось 2 внутренних куска ломаной, получено ${clipped.length}`);
+
+      // 2. Коридор Г-образного маршрута и обрезка карты OSM
+      const osmPack = parseOsmOrGeoJson(
+        {
+          elements: [
+            { type: "node", id: 1, lat: 55.7500, lon: 37.6100 },
+            { type: "node", id: 2, lat: 55.7510, lon: 37.6100 },
+            { type: "node", id: 3, lat: 55.7510, lon: 37.6118 },
+            // Далёкая посторонняя улица и здание в стороне от маршрута
+            { type: "node", id: 4, lat: 55.7524, lon: 37.6075 },
+            { type: "node", id: 5, lat: 55.7528, lon: 37.6075 },
+            { type: "node", id: 6, lat: 55.7525, lon: 37.6078 },
+            { type: "node", id: 7, lat: 55.7525, lon: 37.6081 },
+            { type: "node", id: 8, lat: 55.7527, lon: 37.6081 },
+            { type: "node", id: 9, lat: 55.7527, lon: 37.6078 },
+            { type: "way", id: 10, nodes: [1, 2, 3], tags: { highway: "secondary", name: "ул. Маршрутная" } },
+            { type: "way", id: 11, nodes: [4, 5], tags: { highway: "residential", name: "ул. Дальняя" } },
+            { type: "way", id: 12, nodes: [6, 7, 8, 9, 6], tags: { building: "yes" } },
+          ],
+        },
+        "Квартал для обрезки"
+      );
+
+      let sc = customFromOsmPack(osmPack);
+      const corr = applyRouteCorridorBoundary(sc, 24);
+      assert(corr.ok && corr.vertices >= 6, "Коридор Г-образного маршрута не построен");
+      const crop = cropScenarioToBoundary(corr.def);
+      assert(crop.removedRoads === 1 && crop.removedObjects >= 1, "Внешняя улица и здание должны быть обрезаны");
+      assert(crop.keptCheckpoints >= 3, "Контрольные точки внутри коридора должны сохраниться");
+      assert(validateCustomScenario(crop.def).errors.length === 0, "Обрезанный сценарий должен быть валиден");
+
+      // Прямая обрезка пакета OSM, оболочка и сброс к прямоугольнику
+      const packCropped = cropOsmPackToPolygon(osmPack, buildRouteCorridorPolygon(osmPack.roads[0].points, 25));
+      assert(packCropped.roads.length === 1 && Boolean(packCropped.boundaryPolygon), "cropOsmPackToPolygon не сработал");
+      const hull = applyConvexHullBoundary(crop.def, 14);
+      assert(hull.ok && hull.vertices >= 3, "Выпуклая оболочка не построена");
+      const resetRect = clearBoundaryPolygon(hull.def, 10);
+      assert(resetRect.boundaryPolygon === undefined, "clearBoundaryPolygon должен сбрасывать полигон");
+      const badSet = setCustomBoundaryPolygon(resetRect, bowtie);
+      assert(!badSet.ok, "setCustomBoundaryPolygon должен отклонять самопересечение");
+
+      // 3. Все 6 шаблонов произвольной формы площадки (вкл. Г/Т/П-образную, трапецию, 8-угольник) + 3D-бордюр + передний слой
+      const baseLot = defaultCustomScenario();
+      for (const preset of BOUNDARY_SHAPE_PRESETS) {
+        const shaped = applyPresetBoundaryShape(baseLot, preset.id);
+        assert(
+          shaped.vertices >= 4 && isSimplePolygon(shaped.def.boundaryPolygon!),
+          `Шаблон площадки ${preset.id} невалиден`
+        );
+        const val = validateCustomScenario(shaped.def);
+        assert(val.errors.length === 0, `Шаблон ${preset.id} дал ошибки на площадке: ${val.errors.join("; ")}`);
+      }
+      const lYard = { ...applyPresetBoundaryShape(baseLot, "l_shape").def, perimeterCurb: true };
+      const lWorld = buildCustomWorld(lYard);
+      assert(lWorld.lotPolygon?.length === 6, "Г-образная площадка должна задавать lotPolygon из 6 вершин");
+      assert(
+        lWorld.roads.every((r) => r.id !== "custom-lot"),
+        "При lotPolygon прямоугольная custom-lot не должна создаваться"
+      );
+      assert(
+        lWorld.obstacles.filter((o) => o.id.startsWith("boundary-curb-")).length === 6,
+        "perimeterCurb должен строить 6 сегментов бордюра по Г-образному контуру"
+      );
+      const firstObsId = baseLot.obstacles[0].id;
+      const promoted = bringSelectionToFront(baseLot, { kind: "obstacle", id: firstObsId });
+      assert(
+        promoted.moved && promoted.def.obstacles[promoted.def.obstacles.length - 1].id === firstObsId,
+        "bringSelectionToFront должен переносить объект на передний слой"
+      );
+
+      // 4. Физика stepSimulation удерживает автомобиль внутри треугольной площадки
+      const tri = [
+        { x: -25, z: -20 },
+        { x: 25, z: -20 },
+        { x: 0, z: 25 },
+      ];
+      const triSc = setCustomBoundaryPolygon(
+        { ...emptyCustomScenario(), start: { x: 0, z: 0, h: 0 }, checkpoints: [{ id: "cp1", x: 0, z: 12, radius: 5, instruction: "Вперёд" }] },
+        tri
+      ).def;
+      const triWorld = buildCustomWorld(triSc);
+      assert(triWorld.lotPolygon?.length === 3, "Треугольная площадка должна строить треугольный lotPolygon");
+      const grid = new SpatialGrid(triWorld.obstacles, 10);
+      let st = createInitialState(triWorld, true);
+      const drive = { ...createReadyInput("D"), throttle: 1, signal: "left" as const };
+      for (let i = 0; i < 360; i++) {
+        st = stepSimulation(st, drive, triWorld, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        isInsideWorldBoundary(st.x, st.z, triWorld.bounds, triWorld.boundaryPolygon),
+        `Автомобиль вышел за треугольную границу: (${st.x.toFixed(2)}, ${st.z.toFixed(2)})`
+      );
+
+      return `6 форм площадки + lotPolygon/curb · коридор ${corr.vertices} т. · обрезано дорог=${crop.removedRoads} · clamp OK`;
+    },
+  },
+  {
+    id: "T32",
+    suite: "route",
+    name: "Проверка маршрута после импорта OSM: граф дорог (Дейкстра), реверс улицы и autoFixScenarioRoute",
+    fn: () => {
+      // Перекрёсток двух улиц OSM + проверка после импорта
+      const pack = parseOsmOrGeoJson(
+        {
+          elements: [
+            { type: "node", id: 1, lat: 55.7500, lon: 37.6100 },
+            { type: "node", id: 2, lat: 55.7508, lon: 37.6100, tags: { highway: "traffic_signals" } },
+            { type: "node", id: 3, lat: 55.7516, lon: 37.6100 },
+            { type: "node", id: 4, lat: 55.7508, lon: 37.6088 },
+            { type: "node", id: 5, lat: 55.7508, lon: 37.6114, tags: { highway: "crossing" } },
+            { type: "way", id: 50, nodes: [1, 2, 3], tags: { highway: "secondary", name: "ул. Северная", maxspeed: "40" } },
+            { type: "way", id: 51, nodes: [4, 2, 5], tags: { highway: "tertiary", name: "ул. Поперечная", maxspeed: "40" } },
+          ],
+        },
+        "Перекрёсток OSM"
+      );
+
+      const imported = customFromOsmPack(pack);
+      const initialCheck = checkScenarioRoute(imported);
+      assert(
+        initialCheck.ok && initialCheck.status === "valid" && initialCheck.connectedLegsCount === initialCheck.checkpointsCount,
+        `Свежеимпортированный маршрут OSM должен проходить проверку: ${initialCheck.summary}`
+      );
+      assert(initialCheck.signalsOnRoute >= 1, "Светофор на маршруте должен учитываться в отчёте");
+
+      // Поиск пути Дейкстрой с поворотом с «ул. Северной» на «ул. Поперечную»
+      const turnPath = findRoadNetworkPath(
+        imported.roads!,
+        imported.roads![0].points[0],
+        imported.roads![1].points[2]
+      );
+      assert(turnPath.connected && turnPath.roadNames.length === 2, "Граф дорог должен находить путь через перекрёсток");
+
+      // Перестроение маршрута по второй улице + реверс направления
+      const altFwd = rebuildRouteFromEditorRoads(imported, { candidateId: "way-51", reverse: false });
+      const altRev = rebuildRouteFromEditorRoads(imported, { candidateId: "way-51", reverse: true });
+      assert(altFwd.count >= 3 && altFwd.roadName === "ул. Поперечная", "Выбор альтернативной улицы не сработал");
+      assert(
+        Math.hypot(
+          altFwd.def.checkpoints[0].x - altRev.def.checkpoints[0].x,
+          altFwd.def.checkpoints[0].z - altRev.def.checkpoints[0].z
+        ) > 20,
+        "Реверс маршрута должен менять начало и конец местами"
+      );
+      const flipped = reverseRoadDirection(imported, "way-51");
+      assert(
+        flipped.roads![1].points[0].x === imported.roads![1].points[2].x,
+        "reverseRoadDirection не развернул узлы дороги"
+      );
+
+      // Намеренно ломаем маршрут (старт снаружи, КТ в поле, дубль ID, isFinalPark без боксов) и чиним
+      const broken = {
+        ...imported,
+        start: { x: imported.bounds.maxX + 45, z: imported.bounds.maxZ + 45, h: Math.PI },
+        checkpoints: [
+          { id: "dup", x: 65, z: -55, radius: 5, instruction: "КТ вне дороги" },
+          { id: "dup", x: imported.checkpoints[1].x, z: imported.checkpoints[1].z, radius: 0, instruction: "Финиш", isFinalPark: true },
+        ],
+      };
+      const brokenCheck = checkScenarioRoute(broken);
+      assert(!brokenCheck.ok && brokenCheck.status === "errors" && brokenCheck.canAutoFix, "Поломки маршрута не обнаружены");
+
+      const fixed = autoFixScenarioRoute(broken);
+      assert(fixed.fixes.length >= 4, `Ожидалось ≥ 4 автоисправлений, получено ${fixed.fixes.length}`);
+      assert(validateCustomScenario(fixed.def).errors.length === 0, "После autoFixScenarioRoute остались ошибки валидации");
+      const fixedCheck = checkScenarioRoute(fixed.def);
+      assert(fixedCheck.ok, `После autoFixScenarioRoute маршрут должен быть проходим: ${fixedCheck.summary}`);
+
+      // Проезд финишной КТ с isFinalPark=true на карте без боксов корректно завершает заезд
+      const parklessWorld = buildCustomWorld({
+        ...emptyCustomScenario(),
+        start: { x: 0, z: 0, h: 0 },
+        bays: [],
+        checkpoints: [{ id: "end", x: 0, z: 8, radius: 5, instruction: "Финиш", isFinalPark: true }],
+      });
+      let s = createInitialState(parklessWorld, true);
+      const g = new SpatialGrid([], 10);
+      const inp = { ...createReadyInput("D"), throttle: 0.7, signal: "left" as const };
+      for (let i = 0; i < 180 && !s.finished; i++) {
+        s = stepSimulation(s, inp, parklessWorld, g, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(s.finished && s.finishedReason === "completed", "Маршрут с isFinalPark без боксов должен завершаться на КТ");
+
+      return `OSM check OK (${initialCheck.checkpointsCount} КТ, ${initialCheck.totalLengthM} м) · Дейкстра 2 ул. · реверс · autoFix (${fixed.fixes.length}) OK`;
     },
   },
 ];

@@ -380,6 +380,7 @@ export function buildCityOsmScenario(
       mapMeta: customPack.meta,
       embedInAttempt: true,
       bounds: customPack.bounds,
+      ...(customPack.boundaryPolygon ? { boundaryPolygon: customPack.boundaryPolygon.map((p) => ({ ...p })) } : {}),
     };
   }
 

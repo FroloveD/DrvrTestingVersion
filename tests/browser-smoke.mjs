@@ -561,14 +561,46 @@ try {
   check("K2 долгое нажатие переносит панель", moved,
     `было ${before.x},${before.y} → стало ${after ? after.x + "," + after.y : "н/д"}`);
 
-  // Раскладка сохраняется после перезагрузки
+  // Длительное нажатие выводит панель на передний план/слой поверх всех остальных HUD-панелей (даже без переноса)
+  const frontAfterDrag = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll("[data-hud-panel]")];
+    const zOf = (id) => Number(document.querySelector(`[data-hud-panel="${id}"]`)?.style.zIndex || 0);
+    const maxZ = Math.max(...panels.map((el) => Number(el.style.zIndex || 0)));
+    return { statusZ: zOf("statusBar"), maxZ, front: document.querySelector('[data-hud-panel="statusBar"]')?.getAttribute("data-front") };
+  });
+  check("K2b длительное нажатие помещает панель на самый верхний слой",
+    frontAfterDrag.statusZ === frontAfterDrag.maxZ && frontAfterDrag.statusZ >= 28 && frontAfterDrag.front === "true",
+    JSON.stringify(frontAfterDrag));
+
+  // Раскладка и передний слой сохраняются после перезагрузки
   await page.reload();
   await page.waitForSelector("canvas");
   await sleep(1300);
   const restored = await statusBox();
-  check("K3 раскладка панели сохраняется после перезагрузки",
-    Boolean(restored && after) && Math.abs(restored.x - after.x) < 4 && Math.abs(restored.y - after.y) < 4,
-    `после перезагрузки ${restored ? restored.x + "," + restored.y : "н/д"}`);
+  const frontRestored = await page.evaluate(() => {
+    const el = document.querySelector('[data-hud-panel="statusBar"]');
+    return { z: Number(el?.style.zIndex || 0), front: el?.getAttribute("data-front") };
+  });
+  check("K3 раскладка и передний слой панели сохраняются после перезагрузки",
+    Boolean(restored && after) && Math.abs(restored.x - after.x) < 4 && Math.abs(restored.y - after.y) < 4
+      && frontRestored.z >= 28 && frontRestored.front === "true",
+    `после перезагрузки ${restored ? restored.x + "," + restored.y : "н/д"} z=${frontRestored.z}`);
+
+  // Длительный тап/клик без сдвига на scorePanel (baseZ=20) выводит её поверх statusBar
+  const scoreRect = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  await page.mouse.move(scoreRect.x + 24, scoreRect.y + 18);
+  await page.mouse.down();
+  await sleep(520);
+  await page.mouse.up();
+  await sleep(150);
+  const scoreFront = await page.evaluate(() => ({
+    scoreZ: Number(document.querySelector('[data-hud-panel="scorePanel"]')?.style.zIndex || 0),
+    statusZ: Number(document.querySelector('[data-hud-panel="statusBar"]')?.style.zIndex || 0),
+    front: document.querySelector('[data-hud-panel="scorePanel"]')?.getAttribute("data-front"),
+  }));
+  check("K3b длительный клик без переноса выводит scorePanel поверх ранее поднятой панели",
+    scoreFront.scoreZ > scoreFront.statusZ && scoreFront.front === "true",
+    JSON.stringify(scoreFront));
 
   // Обычный клик внутри той же панели не сломан длительным нажатием
   await page.getByRole("button", { name: "Быстрый старт" }).click({ timeout: 8000 });
@@ -886,6 +918,173 @@ try {
   await ctx.close();
 } catch (e) {
   check("O сценарий выполнен без исключений", false, String(e.message).slice(-460));
+}
+
+// ───────── P. Проверка маршрута OSM, неквадратные и произвольные границы, обрезка и фиксы редактора ─────────
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+
+  // Вытянутый неквадратный участок OSM (сшивка 2 сегментов главной улицы + далёкая побочная улица + здание)
+  const routeOsmXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="OpenStreetMap server">
+  <bounds minlat="55.7495" minlon="37.6060" maxlat="55.7518" maxlon="37.6145"/>
+  <node id="1" lat="55.7500" lon="37.6065"/>
+  <node id="2" lat="55.7500" lon="37.6105"><tag k="highway" v="traffic_signals"/></node>
+  <node id="3" lat="55.7500" lon="37.6142"><tag k="highway" v="crossing"/></node>
+  <node id="4" lat="55.7516" lon="37.6070"/>
+  <node id="5" lat="55.7516" lon="37.6095"/>
+  <node id="10" lat="55.7514" lon="37.6120"/>
+  <node id="11" lat="55.7514" lon="37.6124"/>
+  <node id="12" lat="55.7517" lon="37.6124"/>
+  <node id="13" lat="55.7517" lon="37.6120"/>
+  <way id="101">
+    <nd ref="1"/><nd ref="2"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Экзаменационный"/>
+    <tag k="maxspeed" v="50"/>
+  </way>
+  <way id="102">
+    <nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="пр-т Экзаменационный"/>
+    <tag k="maxspeed" v="40"/>
+  </way>
+  <way id="103">
+    <nd ref="4"/><nd ref="5"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="ул. Внешняя"/>
+  </way>
+  <way id="104">
+    <nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="10"/>
+    <tag k="building" v="yes"/>
+  </way>
+</osm>`;
+
+  // 1. Загрузка OSM прямо в 3D-тренажёре -> видна панель проверки маршрута -> переход в редактор
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "exam-corridor.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(routeOsmXml),
+  });
+  await sleep(600);
+  const simBar = await page.getByTestId("sim-osm-route-bar").innerText();
+  check("P1 после загрузки OSM в 3D-тренажёре активна панель проверки маршрута и неквадратный размер",
+    simBar.includes("Маршрут:") && simBar.includes("КТ") && !simBar.includes("240×240"),
+    simBar.slice(0, 140));
+
+  await page.getByTestId("sim-osm-open-editor").click();
+  await sleep(500);
+
+  // 2. В редакторе автоматически открыта панель «Проверка маршрута» + отрисованы сегменты по улице + размер неквадратный
+  const checkSummary = await page.getByTestId("route-check-summary").innerText();
+  const legsCount = await page.locator('[data-testid^="map-route-leg-"]').count();
+  const dimText = await page.getByTestId("map-dimensions-badge").innerText();
+  const dimMatch = dimText.match(/(\d+)×(\d+)\s*м/);
+  const isNonSquare = Boolean(dimMatch && Number(dimMatch[1]) > Number(dimMatch[2]) * 1.6);
+  check("P2 панель проверки маршрута в редакторе подтверждает маршрут и строит нитку по улицам",
+    checkSummary.includes("Маршрут исправен") && legsCount >= 4 && isNonSquare,
+    `${checkSummary} | legs=${legsCount} | ${dimText}`);
+
+  // 3. Реверс направления маршрута перестраивает КТ и сохраняет валидность
+  await page.getByTestId("editor-route-reverse-toggle").check();
+  await page.getByTestId("editor-build-route-btn").click();
+  await sleep(300);
+  const revStatus = await page.getByTestId("route-check-status").innerText();
+  check("P3 реверс и перестроение маршрута по улице OSM проходят проверку",
+    revStatus.includes("Маршрут проверен"), revStatus);
+
+  // 4. Построение неквадратного коридора маршрута и обрезка внешней улицы/здания
+  await page.getByTestId("editor-tool-boundary").click();
+  await sleep(150);
+  await page.getByTestId("editor-corridor-btn").click();
+  await sleep(250);
+  const polyExists = (await page.locator('[data-testid="map-boundary-polygon"]').count()) === 1;
+  await page.getByTestId("editor-crop-btn").click();
+  await sleep(300);
+  const croppedBody = await page.evaluate(() => document.body.innerText);
+  check("P4 коридор маршрута создаёт полигон и обрезает внешнюю улицу и здание",
+    polyExists && croppedBody.includes("Дороги (2)") && !croppedBody.includes("ул. Внешняя"),
+    `poly=${polyExists}`);
+
+  // 5. Восстановление всей выгрузки OSM и рисование произвольного 4-угольного контура от руки на холсте
+  await page.getByTestId("editor-restore-osm-btn").click();
+  await sleep(300);
+  const restoredOk = (await page.evaluate(() => document.body.innerText)).includes("ул. Внешняя");
+  await page.getByTestId("editor-tool-boundary").click();
+  const canvas = page.getByTestId("map-editor-canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  await sleep(150);
+  const box = await canvas.boundingBox();
+  for (const [rx, ry] of [[0.14, 0.56], [0.86, 0.56], [0.82, 0.86], [0.18, 0.86]]) {
+    await canvas.click({ position: { x: Math.round(box.width * rx), y: Math.round(box.height * ry) } });
+    await sleep(80);
+  }
+  const finishBtn = page.getByTestId("boundary-finish-btn");
+  await finishBtn.scrollIntoViewIfNeeded();
+  await finishBtn.click();
+  await sleep(250);
+  const vtxCount = await page.locator('[data-testid^="map-boundary-vertex-"]').count();
+  check("P5 восстановление выгрузки OSM и рисование произвольного контура от руки (4 вершины)",
+    restoredOk && vtxCount === 4, `restored=${restoredOk}, vertices=${vtxCount}`);
+
+  // 6. Сброс к прямоугольнику + ввод отрицательной координаты в NumField + автопочинка маршрута
+  const resetPolyBtn = page.getByTestId("editor-reset-boundary-btn");
+  await resetPolyBtn.scrollIntoViewIfNeeded();
+  await resetPolyBtn.click();
+  await sleep(150);
+  await page.getByTestId("editor-tool-select").click();
+  await page.getByTestId("map-start").click({ force: true });
+  await sleep(150);
+  const startXInput = page.getByTestId("editor-inspector").locator('input[type="number"]').first();
+  await startXInput.scrollIntoViewIfNeeded();
+  await startXInput.fill("-999");
+  await startXInput.press("Enter");
+  await sleep(200);
+  const brokenStatus = await page.getByTestId("route-check-status").innerText();
+  const fixBtn = page.getByTestId("editor-autofix-route-btn");
+  await fixBtn.scrollIntoViewIfNeeded();
+  await fixBtn.click();
+  await sleep(250);
+  const repairedStatus = await page.getByTestId("route-check-status").innerText();
+  check("P6 ввод отрицательного числа фиксирует выход старта, а «Исправить маршрут» чинит его",
+    brokenStatus.includes("Ошибок") && !repairedStatus.includes("Ошибок"),
+    `${brokenStatus} -> ${repairedStatus}`);
+
+  // 7. Проверка сетки редактора (Выкл / 0,5 м / 2 м / 5 м) и Г-образной площадки с 3D-бордюром в тренажёре
+  await page.getByRole("button", { name: "Площадка", exact: true }).click();
+  await sleep(200);
+  await page.getByTestId("editor-grid-0").click();
+  await sleep(100);
+  const gridOff = (await page.locator('[data-testid="map-grid"]').count()) === 0
+    && (await page.getByTestId("map-dimensions-badge").innerText()).includes("сетка выкл");
+  await page.getByTestId("editor-grid-2").click();
+  await sleep(100);
+  const step2 = await page.getByTestId("map-grid").getAttribute("data-grid-step");
+  const lines2 = await page.locator('[data-testid="map-grid"] line').count();
+  await page.getByTestId("editor-grid-0.5").click();
+  await sleep(100);
+  const step05 = await page.getByTestId("map-grid").getAttribute("data-grid-step");
+  const lines05 = await page.locator('[data-testid="map-grid"] line').count();
+  check("P7 сетка редактора реально отключается и меняет шаг линий (Выкл / 2 м / 0,5 м)",
+    gridOff && step2 === "2" && step05 === "0.5" && lines05 > lines2 * 2,
+    `off=${gridOff}, step2=${step2}(${lines2}), step05=${step05}(${lines05})`);
+
+  await page.getByTestId("editor-tool-boundary").click();
+  await page.getByTestId("editor-shape-l_shape").click();
+  await page.getByTestId("editor-perimeter-curb-toggle").check();
+  await sleep(200);
+  const hasLPoly = (await page.locator('[data-testid="map-boundary-polygon"]').count()) === 1;
+  const noRectLot = (await page.locator('[data-testid="map-lot-rect"]').count()) === 0;
+  const lVtx = await page.locator('[data-testid^="map-boundary-vertex-"]').count();
+  await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
+  await sleep(900);
+  check("P8 Г-образная асфальтовая площадка (без квадратного rect) с 3D-бордюром открывается в 3D без ошибок",
+    hasLPoly && noRectLot && lVtx === 6 && errors.length === 0,
+    `poly=${hasLPoly}, noRect=${noRectLot}, vtx=${lVtx}, err=${errors.slice(0, 2).join(" | ")}`);
+  await ctx.close();
+} catch (e) {
+  check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
 }
 
 await browser.close();
