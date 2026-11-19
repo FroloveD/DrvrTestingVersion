@@ -686,6 +686,26 @@ try {
   }));
   check("K7 заднее зеркало 10:3, оба боковых 2:1", Math.abs(aspects[0] - 10 / 3) < 1e-6 && aspects[1] === 2 && aspects[2] === 2);
 
+  // Сворачивание (−), разворачивание (+), закрытие (×) и восстановление через док «Окна»
+  const scoreFull = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  await page.getByRole("button", { name: "Свернуть: Оценка", exact: true }).click();
+  await sleep(120);
+  const scoreMin = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  const isMin = (await page.locator('[data-hud-panel="scorePanel"]').getAttribute("data-collapsed")) === "true";
+  await page.getByRole("button", { name: "Развернуть: Оценка", exact: true }).click();
+  await sleep(120);
+  const scoreBack = await page.locator('[data-hud-panel="scorePanel"]').boundingBox();
+  await page.getByRole("button", { name: "Закрыть: Оценка", exact: true }).click();
+  await sleep(120);
+  const closedGone = (await page.locator('[data-hud-panel="scorePanel"]').count()) === 0;
+  await page.getByTestId("hud-restore-dock").click();
+  await page.getByTestId("hud-panels-menu").getByRole("button", { name: "Показать все", exact: true }).click();
+  await sleep(120);
+  const reopened = (await page.locator('[data-hud-panel="scorePanel"]').count()) === 1;
+  check("K7b элементы HUD сворачиваются (−/+), закрываются (×) и возвращаются через «Окна»",
+    Boolean(isMin && scoreMin && scoreFull && scoreMin.height < scoreFull.height - 10 && scoreBack && scoreBack.height >= scoreFull.height - 2 && closedGone && reopened),
+    JSON.stringify({ isMin, fullH: scoreFull?.height, minH: scoreMin?.height, closedGone, reopened }));
+
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {

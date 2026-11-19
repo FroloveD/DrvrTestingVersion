@@ -67,10 +67,13 @@ import {
   saveLayout,
   loadLayerOrder,
   saveLayerOrder,
+  loadPanelState,
+  savePanelState,
   promotePanelToFront,
   resolvePanelZIndex,
   type LayoutMap,
   type PanelLayout,
+  type PanelStateMap,
 } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
@@ -187,6 +190,20 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
   ctx.restore();
 }
 
+const HUD_PANEL_CATALOG: ReadonlyArray<{ id: string; label: string; group: "hud" | "mirror" }> = [
+  { id: "scorePanel", label: "Оценка", group: "hud" },
+  { id: "speedPanel", label: "Лимит и FPS", group: "hud" },
+  { id: "statusBar", label: "Задание", group: "hud" },
+  { id: "cluster", label: "Приборы и КПП", group: "hud" },
+  { id: "camToggles", label: "Камера и вид", group: "hud" },
+  { id: "steeringWheel", label: "Руль", group: "hud" },
+  { id: "pedalBrake", label: "Педаль тормоза", group: "hud" },
+  { id: "pedalGas", label: "Педаль газа", group: "hud" },
+  { id: "mirrorRear", label: "Зеркало заднего вида", group: "mirror" },
+  { id: "mirrorLeft", label: "Левое зеркало", group: "mirror" },
+  { id: "mirrorRight", label: "Правое зеркало", group: "mirror" },
+];
+
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
@@ -219,6 +236,12 @@ export function SimulatorView({
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [helpCollapsed, setHelpCollapsed] = useState(false);
+  const [controlsCollapsed, setControlsCollapsed] = useState(false);
+  const [showPanelsMenu, setShowPanelsMenu] = useState(false);
+  const [osmBarCollapsed, setOsmBarCollapsed] = useState(false);
+  const [osmBarClosed, setOsmBarClosed] = useState(false);
+  const [footerCollapsed, setFooterCollapsed] = useState(false);
   const [showOsmCheck, setShowOsmCheck] = useState(false);
   const [osmRouteCandidate, setOsmRouteCandidate] = useState("");
   const [osmRouteReverse, setOsmRouteReverse] = useState(false);
@@ -270,6 +293,14 @@ export function SimulatorView({
     saveLayerOrder(layerOrder);
   }, [layerOrder]);
 
+  const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
+  useEffect(() => {
+    savePanelState(panelState);
+  }, [panelState]);
+
+  const isPanelClosed = (id: string) => panelState.closed.includes(id);
+  const isPanelCollapsed = (id: string) => panelState.collapsed.includes(id);
+
   const handleLayoutChange = useCallback((id: string, next: PanelLayout) => {
     setLayout((prev) => ({ ...prev, [id]: next }));
   }, []);
@@ -277,6 +308,91 @@ export function SimulatorView({
   const handleBringPanelToFront = useCallback((id: string) => {
     setLayerOrder((prev) => promotePanelToFront(prev, id));
   }, []);
+
+  const clearSinglePedal = useCallback((id: string) => {
+    if (id !== "pedalGas" && id !== "pedalBrake") return;
+    const which = id === "pedalGas" ? "gas" : "brake";
+    touchPedalRef.current[which] = false;
+    setPedalVisual((prev) => (prev[which] ? { ...prev, [which]: false } : prev));
+  }, []);
+
+  const handleToggleCollapse = useCallback(
+    (id: string) => {
+      clearSinglePedal(id);
+      setPanelState((prev) => {
+        const wasCollapsed = prev.collapsed.includes(id);
+        return {
+          closed: prev.closed.filter((x) => x !== id),
+          collapsed: wasCollapsed ? prev.collapsed.filter((x) => x !== id) : [...prev.collapsed, id],
+        };
+      });
+    },
+    [clearSinglePedal]
+  );
+
+  const handleClosePanel = useCallback(
+    (id: string) => {
+      clearSinglePedal(id);
+      setPanelState((prev) => ({
+        collapsed: prev.collapsed.filter((x) => x !== id),
+        closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id],
+      }));
+    },
+    [clearSinglePedal]
+  );
+
+  const handleRestorePanel = useCallback((id: string) => {
+    if (id === "mirrorRear") setShowRearMirror(true);
+    if (id === "mirrorLeft" || id === "mirrorRight") setShowMirrors(true);
+    setPanelState((prev) => ({
+      collapsed: prev.collapsed.filter((x) => x !== id),
+      closed: prev.closed.filter((x) => x !== id),
+    }));
+  }, []);
+
+  const handleRestoreAllPanels = useCallback(() => {
+    setShowRearMirror(true);
+    setShowMirrors(true);
+    setPanelState({ collapsed: [], closed: [] });
+    setShowPanelsMenu(false);
+  }, []);
+
+  const handleCollapseAllHud = useCallback(() => {
+    clearSinglePedal("pedalGas");
+    clearSinglePedal("pedalBrake");
+    const hudIds = HUD_PANEL_CATALOG.filter((p) => p.group === "hud").map((p) => p.id);
+    setPanelState((prev) => ({
+      closed: prev.closed,
+      collapsed: Array.from(new Set([...prev.collapsed, ...hudIds.filter((id) => !prev.closed.includes(id))])),
+    }));
+  }, [clearSinglePedal]);
+
+  const toggleSideMirrors = useCallback(() => {
+    const anyClosed =
+      panelState.closed.includes("mirrorLeft") || panelState.closed.includes("mirrorRight");
+    if (!showMirrors || anyClosed) {
+      setShowMirrors(true);
+      setPanelState((prev) => ({
+        collapsed: prev.collapsed.filter((id) => id !== "mirrorLeft" && id !== "mirrorRight"),
+        closed: prev.closed.filter((id) => id !== "mirrorLeft" && id !== "mirrorRight"),
+      }));
+    } else {
+      setShowMirrors(false);
+    }
+  }, [showMirrors, panelState.closed]);
+
+  const toggleRearMirror = useCallback(() => {
+    const wasClosed = panelState.closed.includes("mirrorRear");
+    if (!showRearMirror || wasClosed) {
+      setShowRearMirror(true);
+      setPanelState((prev) => ({
+        collapsed: prev.collapsed.filter((id) => id !== "mirrorRear"),
+        closed: prev.closed.filter((id) => id !== "mirrorRear"),
+      }));
+    } else {
+      setShowRearMirror(false);
+    }
+  }, [showRearMirror, panelState.closed]);
 
   const panelZ = (id: string, baseZ: number) => resolvePanelZIndex(id, baseZ, layerOrder);
   const isFrontPanel = (id: string) => layerOrder.length > 0 && layerOrder[layerOrder.length - 1] === id;
@@ -1030,6 +1146,8 @@ export function SimulatorView({
       }
       setOsmRouteCandidate("");
       setOsmRouteReverse(false);
+      setOsmBarClosed(false);
+      setOsmBarCollapsed(false);
       onCustomOsmChange(pack, pack);
       onScenarioChange("city_osm");
       const check = checkScenarioRoute(customFromOsmPack(pack));
@@ -1209,7 +1327,10 @@ export function SimulatorView({
           <button
             type="button"
             className="btn btn-mini"
-            onClick={() => setShowHelp((v) => !v)}
+            onClick={() => {
+              setHelpCollapsed(false);
+              setShowHelp((v) => !v);
+            }}
             title="Клавиши и управление"
           >
             <Icon name="help" size={13} /> Клавиши
@@ -1217,8 +1338,11 @@ export function SimulatorView({
           <button
             type="button"
             className="btn btn-mini"
-            onClick={() => setShowControls((v) => !v)}
-            title="Выворот колёс, скорость руления, педали и раскладка HUD"
+            onClick={() => {
+              setControlsCollapsed(false);
+              setShowControls((v) => !v);
+            }}
+            title="Выворот колёс, скорость руления, педали и элементы HUD"
           >
             <Icon name="sliders" size={13} /> Управление
           </button>
@@ -1232,8 +1356,23 @@ export function SimulatorView({
         </div>
       </div>
 
-      {/* Панель проверки маршрута и произвольной границы для загруженного OSM-пакета */}
-      {customOsm && scenarioId === "city_osm" && osmRouteCheck && (
+      {/* Панель проверки маршрута и произвольной границы для загруженного OSM-пакета (сворачиваемая и закрываемая) */}
+      {customOsm && scenarioId === "city_osm" && osmRouteCheck && osmBarClosed && (
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            className="btn btn-mini text-[#9bafbc]"
+            onClick={() => {
+              setOsmBarClosed(false);
+              setOsmBarCollapsed(false);
+            }}
+            title="Вернуть панель проверки маршрута OSM"
+          >
+            + Панель маршрута OSM
+          </button>
+        </div>
+      )}
+      {customOsm && scenarioId === "city_osm" && osmRouteCheck && !osmBarClosed && (
         <div
           data-testid="sim-osm-route-bar"
           className="panel px-3 py-2 text-[11px] space-y-2 border hairline"
@@ -1242,7 +1381,10 @@ export function SimulatorView({
             <button
               type="button"
               data-testid="sim-osm-route-status"
-              onClick={() => setShowOsmCheck((v) => !v)}
+              onClick={() => {
+                setOsmBarCollapsed(false);
+                setShowOsmCheck((v) => !v);
+              }}
               className="inline-flex items-center gap-1.5"
               title="Показать подробный отчёт проверки маршрута OSM"
             >
@@ -1272,7 +1414,7 @@ export function SimulatorView({
                 : ""}
             </span>
 
-            {osmCandidates.length > 0 && (
+            {!osmBarCollapsed && osmCandidates.length > 0 && (
               <select
                 aria-label="Улица маршрута OSM"
                 value={osmRouteCandidate}
@@ -1289,60 +1431,85 @@ export function SimulatorView({
               </select>
             )}
 
-            <button
-              type="button"
-              className="btn btn-mini"
-              disabled={Boolean(selectedOsmCandidate?.oneway)}
-              onClick={() => applyOsmRouteVariant(osmRouteCandidate, !osmRouteReverse)}
-              title={
-                selectedOsmCandidate?.oneway
-                  ? "Односторонняя улица OSM — реверс против потока отключён"
-                  : "Развернуть направление маршрута по выбранной улице"
-              }
-            >
-              {selectedOsmCandidate?.oneway ? "→ 1-стор." : "⇄ Реверс"}
-            </button>
+            {!osmBarCollapsed && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  disabled={Boolean(selectedOsmCandidate?.oneway)}
+                  onClick={() => applyOsmRouteVariant(osmRouteCandidate, !osmRouteReverse)}
+                  title={
+                    selectedOsmCandidate?.oneway
+                      ? "Односторонняя улица OSM — реверс против потока отключён"
+                      : "Развернуть направление маршрута по выбранной улице"
+                  }
+                >
+                  {selectedOsmCandidate?.oneway ? "→ 1-стор." : "⇄ Реверс"}
+                </button>
 
-            <button
-              type="button"
-              className="btn btn-mini"
-              onClick={applyOsmCorridorCrop}
-              title="Обрезать загруженную карту по коридору вдоль маршрута (вместо прямоугольника)"
-            >
-              ⬠ Коридор маршрута
-            </button>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  onClick={applyOsmCorridorCrop}
+                  title="Обрезать загруженную карту по коридору вдоль маршрута (вместо прямоугольника)"
+                >
+                  ⬠ Коридор маршрута
+                </button>
 
-            {customOsm.boundaryPolygon && rawCustomOsm && (
+                {customOsm.boundaryPolygon && rawCustomOsm && (
+                  <button
+                    type="button"
+                    className="btn btn-mini"
+                    onClick={() => {
+                      onCustomOsmChange(rawCustomOsm, rawCustomOsm);
+                      onNotify("Восстановлена полная выгрузка OSM до обрезки");
+                    }}
+                  >
+                    Вся выгрузка
+                  </button>
+                )}
+
+                {osmRouteCheck.canAutoFix && (
+                  <button type="button" className="btn btn-mini text-[#f5b942]" onClick={fixOsmRouteInPlace}>
+                    Исправить маршрут
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  data-testid="sim-osm-open-editor"
+                  className="btn btn-mini ml-auto text-[#52d6bd]"
+                  onClick={() => onEditOsmInEditor(customOsm, rawCustomOsm ?? customOsm)}
+                  title="Открыть загруженную карту в 2D-редакторе для рисования произвольных границ и расстановки знаков/КТ"
+                >
+                  <Icon name="sliders" size={12} /> Границы и маршрут → Редактор
+                </button>
+              </>
+            )}
+
+            <div className={`inline-flex items-center gap-1 ${osmBarCollapsed ? "ml-auto" : ""}`}>
               <button
                 type="button"
-                className="btn btn-mini"
-                onClick={() => {
-                  onCustomOsmChange(rawCustomOsm, rawCustomOsm);
-                  onNotify("Восстановлена полная выгрузка OSM до обрезки");
-                }}
+                aria-label={osmBarCollapsed ? "Развернуть панель маршрута OSM" : "Свернуть панель маршрута OSM"}
+                title={osmBarCollapsed ? "Развернуть панель маршрута OSM" : "Свернуть панель маршрута OSM"}
+                onClick={() => setOsmBarCollapsed((v) => !v)}
+                className="mono h-6 w-6 rounded-md border hairline grid place-items-center text-xs text-[#9bafbc] hover:text-[#f5b942]"
               >
-                Вся выгрузка
+                {osmBarCollapsed ? "+" : "−"}
               </button>
-            )}
-
-            {osmRouteCheck.canAutoFix && (
-              <button type="button" className="btn btn-mini text-[#f5b942]" onClick={fixOsmRouteInPlace}>
-                Исправить маршрут
+              <button
+                type="button"
+                aria-label="Закрыть панель маршрута OSM"
+                title="Скрыть панель маршрута OSM"
+                onClick={() => setOsmBarClosed(true)}
+                className="mono h-6 w-6 rounded-md border hairline grid place-items-center text-xs text-[#9bafbc] hover:text-[#ff8080]"
+              >
+                ×
               </button>
-            )}
-
-            <button
-              type="button"
-              data-testid="sim-osm-open-editor"
-              className="btn btn-mini ml-auto text-[#52d6bd]"
-              onClick={() => onEditOsmInEditor(customOsm, rawCustomOsm ?? customOsm)}
-              title="Открыть загруженную карту в 2D-редакторе для рисования произвольных границ и расстановки знаков/КТ"
-            >
-              <Icon name="sliders" size={12} /> Границы и маршрут → Редактор
-            </button>
+            </div>
           </div>
 
-          {showOsmCheck && (
+          {!osmBarCollapsed && showOsmCheck && (
             <div className="pt-1.5 border-t hairline space-y-1 text-[11px]">
               <div className="text-[#c5d4df] font-semibold">{osmRouteCheck.summary}</div>
               {osmRouteCheck.issues.length === 0 ? (
@@ -1398,10 +1565,15 @@ export function SimulatorView({
         />
 
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в «Салоне» отражения рендерятся на физических 3D-зеркалах) и руль */}
-        {!webglFallback && cameraMode !== "cockpit" && showRearMirror && (
+        {!webglFallback && cameraMode !== "cockpit" && showRearMirror && !isPanelClosed("mirrorRear") && (
           <FloatingPanel
             id="mirrorRear"
             title="Зеркало заднего вида"
+            label="Зеркало заднего вида"
+            collapsedSummary="Зеркало задн."
+            collapsed={isPanelCollapsed("mirrorRear")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             icon="eye"
             layout={layout.mirrorRear}
             defaults={(cw) => ({ x: Math.max(0, (cw - 270) / 2), y: 6, w: 270 })}
@@ -1416,9 +1588,14 @@ export function SimulatorView({
             <canvas ref={rearMirrorRef} role="img" aria-label="Отражение в зеркале заднего вида" width={320} height={96} className="block w-full h-auto" />
           </FloatingPanel>
         )}
-        {!webglFallback && cameraMode !== "cockpit" && showMirrors && (
+        {!webglFallback && cameraMode !== "cockpit" && showMirrors && !isPanelClosed("mirrorLeft") && (
           <FloatingPanel
             id="mirrorLeft"
+            label="Левое зеркало"
+            collapsedSummary="Левое зеркало"
+            collapsed={isPanelCollapsed("mirrorLeft")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.mirrorLeft}
             defaults={(_cw, ch) => ({ x: 12, y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1432,9 +1609,14 @@ export function SimulatorView({
             <canvas ref={leftMirrorRef} role="img" aria-label="Отражение в левом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
         )}
-        {!webglFallback && cameraMode !== "cockpit" && showMirrors && (
+        {!webglFallback && cameraMode !== "cockpit" && showMirrors && !isPanelClosed("mirrorRight") && (
           <FloatingPanel
             id="mirrorRight"
+            label="Правое зеркало"
+            collapsedSummary="Правое зеркало"
+            collapsed={isPanelCollapsed("mirrorRight")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.mirrorRight}
             defaults={(cw, ch) => ({ x: Math.max(0, cw - 182), y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1449,10 +1631,15 @@ export function SimulatorView({
           </FloatingPanel>
         )}
 
-        {/* Рулевое колесо: перетаскивается и масштабируется; поворот мышью/тачем и клавишами A/D */}
-        {!uiHidden && !webglFallback && (
+        {/* Рулевое колесо: перетаскивается, масштабируется, сворачивается и закрывается */}
+        {!uiHidden && !webglFallback && !isPanelClosed("steeringWheel") && (
           <FloatingPanel
             id="steeringWheel"
+            label="Руль"
+            collapsedSummary={`Руль · ${s.swDeg > 1 ? `←${Math.round(s.swDeg)}°` : s.swDeg < -1 ? `${Math.round(-s.swDeg)}°→` : "0°"}`}
+            collapsed={isPanelCollapsed("steeringWheel")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.steeringWheel}
             defaults={(cw, ch) => cw < 720
               ? {x: 8, y: ch - 162, w: 106}
@@ -1513,9 +1700,14 @@ export function SimulatorView({
         )}
 
         {/* [SEC:sim-hud] Штрафы, знаки/светофор/FPS, статус экзаменатора, настройки, справка и камера */}
-        {!uiHidden && (
+        {!uiHidden && !isPanelClosed("scorePanel") && (
           <FloatingPanel
             id="scorePanel"
+            label="Оценка"
+            collapsedSummary={`${hud.evalRes.verdict} · ${hud.evalRes.totalPoints}/${hud.evalRes.failThreshold} б.`}
+            collapsed={isPanelCollapsed("scorePanel")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.scorePanel}
             defaults={() => ({ x: 12, y: 12, w: 232 })}
             minW={190}
@@ -1552,10 +1744,15 @@ export function SimulatorView({
           </FloatingPanel>
         )}
 
-        {/* Правый верхний блок: знак скорости + светофор + FPS (перенос долгим нажатием) */}
-        {!uiHidden && (
+        {/* Правый верхний блок: знак скорости + светофор + FPS */}
+        {!uiHidden && !isPanelClosed("speedPanel") && (
           <FloatingPanel
             id="speedPanel"
+            label="Лимит и FPS"
+            collapsedSummary={`${hud.speedLimit} км/ч · ${hud.perf.fps} FPS`}
+            collapsed={isPanelCollapsed("speedPanel")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.speedPanel}
             defaults={(cw) => ({ x: Math.max(0, cw - 236), y: 12, w: 232 })}
             minW={150}
@@ -1603,9 +1800,14 @@ export function SimulatorView({
         )}
 
         {/* Строка статуса / задания экзаменатора (#status) */}
-        {!uiHidden && (
+        {!uiHidden && !isPanelClosed("statusBar") && (
           <FloatingPanel
             id="statusBar"
+            label="Задание"
+            collapsedSummary="Задание экзаменатора"
+            collapsed={isPanelCollapsed("statusBar")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.statusBar}
             defaults={(cw) => ({ x: Math.max(0, (cw - 540) / 2), y: 148, w: 540 })}
             minW={300}
@@ -1642,26 +1844,136 @@ export function SimulatorView({
           </FloatingPanel>
         )}
 
-        {/* Всплывающая карточка зафиксированного нарушения */}
+        {/* Всплывающая карточка зафиксированного нарушения (с кнопкой закрытия ×) */}
         {!uiHidden && hud.latestViolation && (
           <div className="absolute left-1/2 -translate-x-1/2 top-[210px] z-50 rounded-xl bg-[#2a0f14]/95 border border-[#ff6b6b]/60 px-3.5 py-2 shadow-2xl max-w-[90%] fade-in">
             <div className="flex items-center gap-2 text-[11px] font-extrabold text-[#ff8585]">
               <Icon name="alert" size={14} />
               <span>+{hud.latestViolation.points} б. · {hud.latestViolation.title}</span>
+              <button
+                type="button"
+                aria-label="Закрыть уведомление о нарушении"
+                title="Закрыть уведомление"
+                onClick={() => {
+                  latestViolationRef.current = null;
+                  setHud((prev) => ({ ...prev, latestViolation: null }));
+                }}
+                className="ml-auto mono text-xs text-[#f3d4d7]/75 hover:text-white px-1 cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
             <div className="text-[11px] text-[#f3d4d7] mt-0.5">{hud.latestViolation.detail}</div>
           </div>
         )}
 
-        {/* Настройки управления: скорость руления клавишами A/D и сброс раскладки окон */}
+        {/* Компактный док восстановления закрытых/свёрнутых элементов HUD */}
+        {!uiHidden && (panelState.closed.length > 0 || panelState.collapsed.length > 0 || showPanelsMenu) && (
+          <div className="absolute right-3 top-16 z-40 flex flex-col items-end gap-1.5">
+            <button
+              type="button"
+              data-testid="hud-restore-dock"
+              onClick={() => setShowPanelsMenu((v) => !v)}
+              className="mono px-2.5 py-1 rounded-lg text-[10px] font-bold border bg-[#0b131b]/94 border-[#f5b942]/55 text-[#f5b942] shadow-lg hover:bg-[#13202c] cursor-pointer"
+              title="Показать, свернуть или закрыть элементы интерфейса"
+            >
+              Окна
+              {panelState.closed.length > 0 ? ` · закрыто ${panelState.closed.length}` : ""}
+              {panelState.collapsed.length > 0 ? ` · свёрн. ${panelState.collapsed.length}` : ""}
+            </button>
+            {showPanelsMenu && (
+              <div
+                data-testid="hud-panels-menu"
+                className="w-[244px] rounded-xl bg-[#0b131b]/97 backdrop-blur-md border hairline p-3 shadow-2xl space-y-2 fade-in"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="mono text-[10px] font-bold text-[#f5b942]">ЭЛЕМЕНТЫ ИНТЕРФЕЙСА</span>
+                  <button
+                    type="button"
+                    aria-label="Закрыть меню окон"
+                    onClick={() => setShowPanelsMenu(false)}
+                    className="mono text-xs text-[#8fa2ae] hover:text-white cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-[250px] overflow-y-auto scroll-thin pr-0.5">
+                  {HUD_PANEL_CATALOG.map((item) => {
+                    const closed = isPanelClosed(item.id);
+                    const collapsed = isPanelCollapsed(item.id);
+                    return (
+                      <div key={item.id} className="flex items-center justify-between gap-1 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => (closed || collapsed ? handleRestorePanel(item.id) : handleClosePanel(item.id))}
+                          className={`truncate text-left flex-1 py-0.5 cursor-pointer ${
+                            closed ? "text-[#6e8492] line-through" : collapsed ? "text-[#f5b942]" : "text-[#d9e6ee]"
+                          }`}
+                          title={closed ? "Показать элемент" : "Скрыть элемент"}
+                        >
+                          {item.label}
+                        </button>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          {!closed && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCollapse(item.id)}
+                              title={collapsed ? "Развернуть" : "Свернуть"}
+                              className="mono h-5 w-5 rounded border hairline text-[10px] text-[#9bafbc] hover:text-[#f5b942] cursor-pointer"
+                            >
+                              {collapsed ? "+" : "−"}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => (closed ? handleRestorePanel(item.id) : handleClosePanel(item.id))}
+                            title={closed ? "Открыть заново" : "Закрыть"}
+                            className={`mono h-5 px-1.5 rounded border hairline text-[10px] cursor-pointer ${
+                              closed ? "text-[#52d6bd] border-[#52d6bd]/40" : "text-[#9bafbc] hover:text-[#ff8080]"
+                            }`}
+                          >
+                            {closed ? "Показать" : "×"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="pt-1.5 border-t hairline flex items-center gap-1.5">
+                  <button type="button" className="btn btn-mini flex-1 text-[#52d6bd]" onClick={handleRestoreAllPanels}>
+                    Показать все
+                  </button>
+                  <button type="button" className="btn btn-mini flex-1" onClick={handleCollapseAllHud}>
+                    Свернуть HUD
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Настройки управления: выворот, скорость руления, элементы HUD и сброс раскладки */}
         {showControls && !uiHidden && (
           <div className="absolute right-3 top-16 z-50 w-[310px] max-h-[calc(100%-5rem)] overflow-y-auto scroll-thin rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
-            <div className="flex items-center justify-between mb-3">
+            <div className={`flex items-center justify-between ${controlsCollapsed ? "" : "mb-3"}`}>
               <span className="text-xs font-extrabold text-[#f5b942]">Управление</span>
-              <button type="button" aria-label="Закрыть настройки управления" className="mono text-xs text-[#8fa2ae]" onClick={() => setShowControls(false)}>
-                ✕
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label={controlsCollapsed ? "Развернуть настройки управления" : "Свернуть настройки управления"}
+                  title={controlsCollapsed ? "Развернуть" : "Свернуть"}
+                  className="mono h-5 w-5 rounded grid place-items-center text-xs text-[#8fa2ae] hover:text-[#f5b942] hover:bg-white/10"
+                  onClick={() => setControlsCollapsed((v) => !v)}
+                >
+                  {controlsCollapsed ? "+" : "−"}
+                </button>
+                <button type="button" aria-label="Закрыть настройки управления" className="mono text-xs text-[#8fa2ae] hover:text-white" onClick={() => setShowControls(false)}>
+                  ✕
+                </button>
+              </div>
             </div>
+            {!controlsCollapsed && (
+              <>
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <label className="block text-[11px] text-[#d3e0e7] mb-1.5" htmlFor="key-steer-rate">
               Скорость руления клавишами A / D:{" "}
@@ -1704,8 +2016,8 @@ export function SimulatorView({
               <div className="mono text-[10px] text-[#7c909d] mb-1.5">ЗЕРКАЛА (НЕЗАВИСИМО)</div>
               <div className="flex flex-wrap gap-1.5">
                 {([
-                  ["Боковые (2:1)", showMirrors, () => setShowMirrors((v) => !v)],
-                  ["Заднее (3.33:1)", showRearMirror, () => setShowRearMirror((v) => !v)],
+                  ["Боковые (2:1)", showMirrors && !(isPanelClosed("mirrorLeft") && isPanelClosed("mirrorRight")), toggleSideMirrors],
+                  ["Заднее (3.33:1)", showRearMirror && !isPanelClosed("mirrorRear"), toggleRearMirror],
                 ] as const).map(([label, on, toggle]) => (
                   <button
                     key={label}
@@ -1720,6 +2032,45 @@ export function SimulatorView({
                 ))}
               </div>
             </div>
+
+            <div className="mt-3 pt-3 border-t hairline">
+              <div className="flex items-center justify-between gap-1 mb-1.5">
+                <span className="mono text-[10px] text-[#7c909d]">ОКНА ИНТЕРФЕЙСА (− / ×)</span>
+                <div className="flex items-center gap-1">
+                  <button type="button" className="mono text-[10px] text-[#f5b942] hover:underline" onClick={handleCollapseAllHud}>
+                    Свернуть
+                  </button>
+                  <span className="text-[#4b5e6b]">·</span>
+                  <button type="button" className="mono text-[10px] text-[#52d6bd] hover:underline" onClick={handleRestoreAllPanels}>
+                    Все
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {HUD_PANEL_CATALOG.filter((p) => p.group === "hud").map((item) => {
+                  const closed = isPanelClosed(item.id);
+                  const collapsed = isPanelCollapsed(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => (closed || collapsed ? handleRestorePanel(item.id) : handleClosePanel(item.id))}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition cursor-pointer ${
+                        closed
+                          ? "border-[rgba(148,176,194,.16)] text-[#6e8492]"
+                          : collapsed
+                            ? "border-[#f5b942]/50 text-[#f5b942] bg-[#f5b942]/10"
+                            : "border-[#52d6bd]/45 text-[#52d6bd] bg-[#52d6bd]/10"
+                      }`}
+                      title={closed ? "Показать элемент" : collapsed ? "Развернуть элемент" : "Закрыть элемент (можно также − / × на самой панели)"}
+                    >
+                      {item.label}{collapsed ? " (−)" : closed ? " (×)" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="mt-3 pt-3 border-t hairline flex items-center justify-between gap-2">
               <span className="text-[11px] text-[#9bafbc]">Раскладка HUD</span>
               <button
@@ -1728,53 +2079,83 @@ export function SimulatorView({
                 onClick={() => {
                   setLayout({});
                   setLayerOrder([]);
-                  onNotify("Раскладка окон и слоёв сброшена");
+                  setPanelState({ collapsed: [], closed: [] });
+                  setShowMirrors(true);
+                  setShowRearMirror(true);
+                  setShowPanelsMenu(false);
+                  onNotify("Раскладка и видимость всех окон сброшены");
                 }}
               >
                 <Icon name="reset" size={12} /> Сбросить раскладку
               </button>
             </div>
-            <p className="mt-2 text-[10px] text-[#93a6b0]">Удерживайте любую панель 0,4 с, чтобы вывести её на передний план и перенести. Педали переносятся за полоску с точками над кнопкой.</p>
+            <p className="mt-2 text-[10px] text-[#93a6b0]">На каждой панели: «−» свернуть, «×» закрыть, удержание 0,4 с — перенести и вывести наверх. Клавиша H скрывает весь HUD.</p>
+              </>
+            )}
           </div>
         )}
 
-        {/* Справка по клавишам */}
+        {/* Справка по клавишам (сворачиваемая и закрываемая) */}
         {showHelp && (
           <div className="absolute right-3 top-16 z-50 w-[300px] rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
-            <div className="flex items-center justify-between mb-2.5">
-              <span className="text-xs font-extrabold text-[#f5b942]">Управление (инварианты v8)</span>
-              <button type="button" className="mono text-xs text-[#8fa2ae]" onClick={() => setShowHelp(false)}>
-                ✕
-              </button>
+            <div className={`flex items-center justify-between ${helpCollapsed ? "" : "mb-2.5"}`}>
+              <span className="text-xs font-extrabold text-[#f5b942]">Управление (клавиши)</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label={helpCollapsed ? "Развернуть справку по клавишам" : "Свернуть справку по клавишам"}
+                  title={helpCollapsed ? "Развернуть" : "Свернуть"}
+                  className="mono h-5 w-5 rounded grid place-items-center text-xs text-[#8fa2ae] hover:text-[#f5b942] hover:bg-white/10"
+                  onClick={() => setHelpCollapsed((v) => !v)}
+                >
+                  {helpCollapsed ? "+" : "−"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Закрыть справку по клавишам"
+                  className="mono text-xs text-[#8fa2ae] hover:text-white"
+                  onClick={() => setShowHelp(false)}
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
-              {[
-                ["W / ↑", "Газ в выбранной передаче"],
-                ["S / ↓", "Тормоз (в D не даёт реверс)"],
-                ["A / D", "Руль влево (+X) / вправо (−X)"],
-                ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
-                ["ПКМ + колесо", "Вращение и зум камеры"],
-                ["Shift / RShift·X", "КПП вверх ▲ / вниз ▼ (M1–M6)"],
-                ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
-                ["I (в P/N)", "Запуск ДВС только из P или N"],
-                ["Q / E / Z", "Поворотники лев. / прав. / аварийка"],
-                ["I / Space / B", "Двигатель / Ручник / Ремень"],
-                ["L · H", "Фары · Скрыть/показать HUD"],
-                ["1–4 / C", "Вид: сзади, салон, сверху, орбита"],
-              ].map(([k, d]) => (
-                <div key={k} className="contents">
-                  <span className="mono text-[#f5b942] font-semibold">{k}</span>
-                  <span className="text-[#b9c9d3]">{d}</span>
-                </div>
-              ))}
-            </div>
+            {!helpCollapsed && (
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
+                {[
+                  ["W / ↑", "Газ в выбранной передаче"],
+                  ["S / ↓", "Тормоз (в D не даёт реверс)"],
+                  ["A / D", "Руль влево (+X) / вправо (−X)"],
+                  ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
+                  ["ПКМ + колесо", "Вращение и зум камеры"],
+                  ["Shift / RShift·X", "КПП вверх ▲ / вниз ▼ (M1–M6)"],
+                  ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
+                  ["I (в P/N)", "Запуск ДВС только из P или N"],
+                  ["Q / E / Z", "Поворотники лев. / прав. / аварийка"],
+                  ["I / Space / B", "Двигатель / Ручник / Ремень"],
+                  ["L · H", "Фары · Скрыть/показать HUD"],
+                  ["− / ×", "Свернуть / закрыть любую панель"],
+                  ["1–4 / C", "Вид: сзади, салон, сверху, орбита"],
+                ].map(([k, d]) => (
+                  <div key={k} className="contents">
+                    <span className="mono text-[#f5b942] font-semibold">{k}</span>
+                    <span className="text-[#b9c9d3]">{d}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Переключатели камеры, траектории, зеркал и качества (перенос долгим нажатием) */}
-        {!uiHidden && (
+        {/* Переключатели камеры, траектории, зеркал и качества */}
+        {!uiHidden && !isPanelClosed("camToggles") && (
           <FloatingPanel
             id="camToggles"
+            label="Камера и вид"
+            collapsedSummary={`Камера · ${cameraMode === "chase" ? "Сзади" : cameraMode === "cockpit" ? "Салон" : cameraMode === "top" ? "Сверху" : "Орбита"}`}
+            collapsed={isPanelCollapsed("camToggles")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.camToggles}
             defaults={(cw, ch) => {
               const w = Math.min(660, cw - 16);
@@ -1823,9 +2204,9 @@ export function SimulatorView({
             </button>
             <button
               type="button"
-              onClick={() => setShowMirrors((v) => !v)}
+              onClick={toggleSideMirrors}
               className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
-                showMirrors
+                showMirrors && !(isPanelClosed("mirrorLeft") && isPanelClosed("mirrorRight"))
                   ? "bg-[#52d6bd]/20 border-[#52d6bd]/50 text-[#52d6bd]"
                   : "bg-[#091017]/80 border-[rgba(148,176,194,.18)] text-[#8fa2ae]"
               }`}
@@ -1835,9 +2216,9 @@ export function SimulatorView({
             </button>
             <button
               type="button"
-              onClick={() => setShowRearMirror((v) => !v)}
+              onClick={toggleRearMirror}
               className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
-                showRearMirror
+                showRearMirror && !isPanelClosed("mirrorRear")
                   ? "bg-[#52d6bd]/20 border-[#52d6bd]/50 text-[#52d6bd]"
                   : "bg-[#091017]/80 border-[rgba(148,176,194,.18)] text-[#8fa2ae]"
               }`}
@@ -1860,9 +2241,14 @@ export function SimulatorView({
         )}
 
         {/* [SEC:sim-cluster] Приборная панель, селектор АКПП, кнопки I/РН/B/L и раздельные педали */}
-        {!uiHidden && (
+        {!uiHidden && !isPanelClosed("cluster") && (
           <FloatingPanel
             id="cluster"
+            label="Приборы и КПП"
+            collapsedSummary={`${kmh} км/ч · ${gearDisplay}`}
+            collapsed={isPanelCollapsed("cluster")}
+            onToggleCollapse={handleToggleCollapse}
+            onClose={handleClosePanel}
             layout={layout.cluster}
             defaults={(cw, ch) => {
               const w = Math.min(620, cw - 16);
@@ -2067,13 +2453,20 @@ export function SimulatorView({
           </FloatingPanel>
         )}
 
-        {/* Две независимые панели. Перенос — только за grip; на самой педали нет long press. */}
+        {/* Две независимые панели педалей: перенос за grip, сворачивание − и закрытие × над рабочей зоной */}
         {!uiHidden && (["brake", "gas"] as const).map((which) => {
           const gas = which === "gas";
           const id = gas ? "pedalGas" : "pedalBrake";
+          if (isPanelClosed(id)) return null;
           const width = gas ? 76 : 84;
+          const pLabel = gas ? "Педаль газа" : "Педаль тормоза";
           return (
             <FloatingPanel key={id} id={id} activation="grip" resizable={false}
+              label={pLabel}
+              collapsedSummary={gas ? "ГАЗ (W)" : "ТОРМ (S)"}
+              collapsed={isPanelCollapsed(id)}
+              onToggleCollapse={handleToggleCollapse}
+              onClose={handleClosePanel}
               gripLabel={gas ? "Переместить педаль газа" : "Переместить педаль тормоза"}
               layout={layout[id]} defaults={(cw, ch) => ({
                 x: Math.max(0, cw - 12 - width - (gas ? 0 : 86)), y: Math.max(0, ch - 98), w: width,
@@ -2093,20 +2486,33 @@ export function SimulatorView({
         {/* В режиме H на экране остаются только зеркала. Вернуть HUD — клавиша H. */}
       </div>
 
-      {/* Компактная нижняя строка метаданных: габариты, версия правил, обязательная атрибуция ODbL */}
+      {/* Компактная нижняя строка метаданных (сворачиваемая, атрибуция ODbL сохраняется всегда) */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#7c909d] px-1">
         <div className="flex flex-wrap items-center gap-2">
-          <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°</Chip>
-          <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
-            Правила: {ruleSet.version} ({ruleSet.status === "instructor_signed" ? "подписано" : "демо"})
-          </Chip>
-          <span>{world.subtitle}</span>
-          {street && (
-            <span className="mono text-[#52d6bd] flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#52d6bd]" />
-              ул.: {street.name}
-              {street.limitKmh ? ` · ${street.limitKmh} км/ч` : ""}
-            </span>
+          <button
+            type="button"
+            aria-label={footerCollapsed ? "Развернуть строку сведений" : "Свернуть строку сведений"}
+            title={footerCollapsed ? "Развернуть сведения об автомобиле и правилах" : "Свернуть строку сведений"}
+            onClick={() => setFooterCollapsed((v) => !v)}
+            className="mono h-5 px-1.5 rounded border hairline text-[10px] text-[#8fa2ae] hover:text-[#f5b942] cursor-pointer"
+          >
+            {footerCollapsed ? "+ Сведения" : "−"}
+          </button>
+          {!footerCollapsed && (
+            <>
+              <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°</Chip>
+              <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
+                Правила: {ruleSet.version} ({ruleSet.status === "instructor_signed" ? "подписано" : "демо"})
+              </Chip>
+              <span>{world.subtitle}</span>
+              {street && (
+                <span className="mono text-[#52d6bd] flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#52d6bd]" />
+                  ул.: {street.name}
+                  {street.limitKmh ? ` · ${street.limitKmh} км/ч` : ""}
+                </span>
+              )}
+            </>
           )}
         </div>
         <div className="mono text-[10px] text-[#8fa2ae]">

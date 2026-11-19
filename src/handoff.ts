@@ -172,6 +172,7 @@ L.push("localStorage:");
 L.push("");
 L.push("```text");
 L.push("cdt.layout.v1           позиции и размеры плавающих панелей HUD");
+L.push("cdt.panelState.v1       свёрнутые (−) и закрытые (×) панели HUD");
 L.push("cdt.controls.v1         скорость руления с клавиатуры");
 L.push("cdt.calibration.v1      размеры боксов, выворот колёс, табличка «У»");
 L.push("cdt.ruleset.v1          активный набор правил");

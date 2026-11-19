@@ -13,6 +13,62 @@ export type LayoutMap = Record<string, PanelLayout>;
 
 export const LAYOUT_STORAGE_KEY = "cdt.layout.v1";
 export const LAYER_ORDER_STORAGE_KEY = "cdt.layoutOrder.v1";
+export const PANEL_STATE_STORAGE_KEY = "cdt.panelState.v1";
+
+export type PanelStateMap = {
+  collapsed: string[];
+  closed: string[];
+};
+
+const EMPTY_PANEL_STATE: PanelStateMap = { collapsed: [], closed: [] };
+
+function sanitizeIdList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && item.length > 0 && item.length <= 48 && !seen.has(item)) {
+      seen.add(item);
+      out.push(item);
+    }
+  }
+  return out.slice(0, 32);
+}
+
+/** Загружает список свёрнутых и закрытых HUD-панелей из `localStorage`. */
+export function loadPanelState(): PanelStateMap {
+  try {
+    const raw = localStorage.getItem(PANEL_STATE_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return EMPTY_PANEL_STATE;
+    const rec = parsed as Record<string, unknown>;
+    return {
+      collapsed: sanitizeIdList(rec.collapsed),
+      closed: sanitizeIdList(rec.closed),
+    };
+  } catch {
+    return EMPTY_PANEL_STATE;
+  }
+}
+
+/** Сохраняет список свёрнутых и закрытых HUD-панелей в `localStorage`. */
+export function savePanelState(state: PanelStateMap): void {
+  try {
+    if (state.collapsed.length === 0 && state.closed.length === 0) {
+      localStorage.removeItem(PANEL_STATE_STORAGE_KEY);
+    } else {
+      localStorage.setItem(
+        PANEL_STATE_STORAGE_KEY,
+        JSON.stringify({
+          collapsed: state.collapsed.slice(0, 32),
+          closed: state.closed.slice(0, 32),
+        })
+      );
+    }
+  } catch {
+    // storage blocked
+  }
+}
 /** Длительность удержания для выделения, вывода на передний план и переноса панели (мс). */
 export const LONG_PRESS_MS = 420;
 /** Базовый z-index для панелей, поднятых пользователем на передний слой (выше всех дефолтных 20..27). */
@@ -99,6 +155,16 @@ type Props = {
   id: string;
   /** Без подписи панель перемещается только за grip-поле или по длительному нажатию */
   title?: string;
+  /** Короткое название панели для кнопок «Свернуть / Закрыть» и свёрнутой шапки */
+  label?: string;
+  /** Краткая живая сводка, отображаемая когда панель свёрнута */
+  collapsedSummary?: string;
+  /** Свёрнута ли панель до компактной полоски заголовка */
+  collapsed?: boolean;
+  /** Переключение свёрнутого состояния (`−` / `+`) */
+  onToggleCollapse?: (id: string) => void;
+  /** Закрытие панели (`×`); восстановление — через меню «Окна» или «Управление» */
+  onClose?: (id: string) => void;
   icon?: string;
   layout: PanelLayout | undefined;
   defaults: (containerW: number, containerH: number) => PanelLayout;
@@ -123,11 +189,16 @@ type Props = {
  * Плавающая панель внутри 3D-вьюпорта.
  * Длительное нажатие/тап (0,4 с) или захват за grip-поле (⋮⋮) выделяет панель,
  * помещает её на передний план/слой поверх остальных панелей и позволяет перенести;
- * изменение ширины — за правый нижний угол. Раскладка и порядок слоёв хранятся в localStorage.
+ * изменение ширины — за правый нижний угол; кнопки `−`/`+` и `×` сворачивают и закрывают элемент.
  */
 export function FloatingPanel({
   id,
   title,
+  label,
+  collapsedSummary,
+  collapsed = false,
+  onToggleCollapse,
+  onClose,
   icon = "grid",
   layout,
   defaults,
@@ -351,14 +422,27 @@ export function FloatingPanel({
   }, []);
 
   const effectiveZIndex = armed ? PANEL_ACTIVE_Z : zIndex;
+  const panelName = label ?? title ?? id;
+  const hasWinControls = Boolean(onToggleCollapse || onClose);
+  // В свёрнутом виде широкие панели сжимаются до аккуратной плашки, сохраняя исходную ширину при развороте
+  const renderedWidth = collapsed
+    ? mode === "grip"
+      ? Math.max(current.w, 84)
+      : Math.min(Math.max(current.w, 132), 228)
+    : current.w;
+
+  const stopBtnPointer = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+  };
 
   return (
     <div
       ref={panelRef}
       data-hud-panel={id}
       data-front={isFront || armed ? "true" : undefined}
-      style={{ left: current.x, top: current.y, width: current.w, zIndex: effectiveZIndex }}
-      className={`absolute rounded-xl border-2 bg-[#0b1218]/94 shadow-xl overflow-hidden select-none transition-shadow ${
+      data-collapsed={collapsed ? "true" : undefined}
+      style={{ left: current.x, top: current.y, width: renderedWidth, zIndex: effectiveZIndex }}
+      className={`group absolute rounded-xl border-2 bg-[#0b1218]/94 shadow-xl overflow-hidden select-none transition-shadow ${
         armed
           ? "border-[#f5b942] shadow-[0_0_24px_rgba(245,185,66,.3)]"
           : supportsBodyLongPress
@@ -375,71 +459,229 @@ export function FloatingPanel({
       onDoubleClick={(e) => e.stopPropagation()}
       title={supportsBodyLongPress ? "Удерживайте 0,4 с — вывести на передний план и перетащить" : undefined}
     >
-      {title && (
+      {collapsed ? (
         <div
           onPointerDown={beginDrag("move")}
           onPointerMove={moveDrag}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
-          className="flex items-center gap-1.5 px-2 py-1 bg-[#0a1016]/92 cursor-move touch-none mono text-[9px] text-[#9bafbc]"
-          title="Перетащите или удерживайте, чтобы вывести на передний план и переместить"
-        >
-          <Icon name={icon} size={11} />
-          <span className="truncate">{title}</span>
-          <span className="ml-auto text-[#5b6f7d]">⋮⋮</span>
-        </div>
-      )}
-      {mode === "grip" && (
-        <button type="button" className="pedal-grab" aria-label={gripLabel} title={`${gripLabel} · потяните или используйте стрелки`}
-          onPointerDown={beginDrag("move")} onPointerMove={moveDrag} onPointerUp={endDrag}
-          onPointerCancel={endDrag} onLostPointerCapture={endDrag}
-          onKeyDown={(e) => {
-            const step = e.shiftKey ? 20 : 4;
-            const delta: Record<string, [number, number]> = {
-              ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
-            };
-            const dir = delta[e.key];
-            if (!dir) return;
-            e.preventDefault(); e.stopPropagation();
-            onBringToFront?.(id);
-            onChange(id, { ...current, ...clampPos(current.x + dir[0], current.y + dir[1], current.w) });
-          }}>
-          <svg width="22" height="10" viewBox="0 0 22 10" fill="currentColor" aria-hidden="true">
-            {[3, 8, 13, 18].map((x) => <g key={x}><circle cx={x} cy="2.5" r="1.35" /><circle cx={x} cy="7.5" r="1.35" /></g>)}
-          </svg>
-        </button>
-      )}
-      <div>{children}</div>
-
-      {/* У педалей ручка находится над рабочей кнопкой и не перекрывает её. */}
-      {mode !== "grip" && <div
-        onPointerDown={beginDrag("move")}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        className={`absolute right-1 top-1 flex items-center gap-[2px] px-1 py-[2px] rounded-md cursor-grab active:cursor-grabbing touch-none transition-opacity ${
-          armed ? "bg-[#f5b942] opacity-100" : "bg-[#182430]/85 opacity-70 hover:opacity-100"
-        }`}
-        onLostPointerCapture={endDrag}
-        title={gripLabel}
-      >
-        <span className={`text-[11px] leading-none ${armed ? "text-[#17130a]" : "text-[#9bafbc]"}`}>⠿</span>
-      </div>}
-
-      {resizable && (
-        <div
-          onPointerDown={beginDrag("resize")}
-          onPointerMove={moveDrag}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
           onLostPointerCapture={endDrag}
-          className="absolute right-0 bottom-0 h-4 w-4 cursor-nwse-resize touch-none"
-          title="Потяните, чтобы изменить размер"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapse?.(id);
+          }}
+          className="flex items-center gap-1.5 pl-2 pr-1 py-1 bg-[#0c151d]/96 cursor-grab active:cursor-grabbing touch-none mono text-[10px] text-[#c5d4de]"
+          title={`${panelName} (свёрнуто) — перетащите или нажмите «+» для разворота`}
         >
-          <svg width="10" height="10" viewBox="0 0 10 10" className="absolute right-0.5 bottom-0.5 text-[#9bafbc]">
-            <path d="M9 1 L1 9 M9 5 L5 9" stroke="currentColor" strokeWidth="1.2" />
-          </svg>
+          <span className="truncate font-semibold text-[#d9e6ee]">
+            {collapsedSummary ?? panelName}
+          </span>
+          <div className="ml-auto flex items-center gap-0.5 shrink-0">
+            {onToggleCollapse && (
+              <button
+                type="button"
+                aria-label={`Развернуть: ${panelName}`}
+                title={`Развернуть «${panelName}»`}
+                onPointerDown={stopBtnPointer}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCollapse(id);
+                }}
+                className="grid place-items-center h-4 w-4 rounded text-[11px] font-bold leading-none text-[#52d6bd] hover:bg-[#52d6bd]/20 cursor-pointer"
+              >
+                +
+              </button>
+            )}
+            {onClose && (
+              <button
+                type="button"
+                aria-label={`Закрыть: ${panelName}`}
+                title={`Закрыть «${panelName}»`}
+                onPointerDown={stopBtnPointer}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(id);
+                }}
+                className="grid place-items-center h-4 w-4 rounded text-[11px] font-bold leading-none text-[#8fa2ae] hover:text-[#ff8080] hover:bg-[#ff6b6b]/18 cursor-pointer"
+              >
+                ×
+              </button>
+            )}
+          </div>
         </div>
+      ) : (
+        <>
+          {title && (
+            <div
+              onPointerDown={beginDrag("move")}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              className="flex items-center gap-1.5 pl-2 pr-1 py-1 bg-[#0a1016]/92 cursor-move touch-none mono text-[9px] text-[#9bafbc]"
+              title="Перетащите или удерживайте, чтобы вывести на передний план и переместить"
+            >
+              <Icon name={icon} size={11} />
+              <span className="truncate">{title}</span>
+              <div className="ml-auto flex items-center gap-0.5 shrink-0">
+                {onToggleCollapse && (
+                  <button
+                    type="button"
+                    aria-label={`Свернуть: ${panelName}`}
+                    title={`Свернуть «${panelName}»`}
+                    onPointerDown={stopBtnPointer}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleCollapse(id);
+                    }}
+                    className="grid place-items-center h-3.5 w-3.5 rounded text-[11px] leading-none text-[#8fa2ae] hover:text-[#f5b942] hover:bg-white/10 cursor-pointer"
+                  >
+                    −
+                  </button>
+                )}
+                {onClose && (
+                  <button
+                    type="button"
+                    aria-label={`Закрыть: ${panelName}`}
+                    title={`Закрыть «${panelName}»`}
+                    onPointerDown={stopBtnPointer}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClose(id);
+                    }}
+                    className="grid place-items-center h-3.5 w-3.5 rounded text-[11px] leading-none text-[#8fa2ae] hover:text-[#ff8080] hover:bg-[#ff6b6b]/18 cursor-pointer"
+                  >
+                    ×
+                  </button>
+                )}
+                <span className="px-0.5 text-[#5b6f7d]">⋮⋮</span>
+              </div>
+            </div>
+          )}
+          {mode === "grip" && (
+            <div className="pedal-bar">
+              {onToggleCollapse && (
+                <button
+                  type="button"
+                  className="pedal-win-btn"
+                  aria-label={`Свернуть: ${panelName}`}
+                  title={`Свернуть «${panelName}»`}
+                  onPointerDown={stopBtnPointer}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleCollapse(id);
+                  }}
+                >
+                  −
+                </button>
+              )}
+              <button type="button" className="pedal-grab" aria-label={gripLabel} title={`${gripLabel} · потяните или используйте стрелки`}
+                onPointerDown={beginDrag("move")} onPointerMove={moveDrag} onPointerUp={endDrag}
+                onPointerCancel={endDrag} onLostPointerCapture={endDrag}
+                onKeyDown={(e) => {
+                  const step = e.shiftKey ? 20 : 4;
+                  const delta: Record<string, [number, number]> = {
+                    ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
+                  };
+                  const dir = delta[e.key];
+                  if (!dir) return;
+                  e.preventDefault(); e.stopPropagation();
+                  onBringToFront?.(id);
+                  onChange(id, { ...current, ...clampPos(current.x + dir[0], current.y + dir[1], current.w) });
+                }}>
+                <svg width="22" height="10" viewBox="0 0 22 10" fill="currentColor" aria-hidden="true">
+                  {[3, 8, 13, 18].map((x) => <g key={x}><circle cx={x} cy="2.5" r="1.35" /><circle cx={x} cy="7.5" r="1.35" /></g>)}
+                </svg>
+              </button>
+              {onClose && (
+                <button
+                  type="button"
+                  className="pedal-win-btn pedal-win-btn-close"
+                  aria-label={`Закрыть: ${panelName}`}
+                  title={`Закрыть «${panelName}»`}
+                  onPointerDown={stopBtnPointer}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClose(id);
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
+          <div>{children}</div>
+
+          {/* Кнопки управления окном (− свернуть, × закрыть) и ручка переноса ⠿ */}
+          {mode !== "grip" && !title && (
+            <div
+              className={`absolute right-1 top-1 flex items-center gap-[1px] px-0.5 py-[1px] rounded-md transition-opacity ${
+                armed
+                  ? "bg-[#f5b942] opacity-100"
+                  : hasWinControls
+                    ? "bg-[#131e28]/88 opacity-75 group-hover:opacity-100 focus-within:opacity-100"
+                    : "bg-[#182430]/85 opacity-70 hover:opacity-100"
+              }`}
+            >
+              {onToggleCollapse && !armed && (
+                <button
+                  type="button"
+                  aria-label={`Свернуть: ${panelName}`}
+                  title={`Свернуть «${panelName}»`}
+                  onPointerDown={stopBtnPointer}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleCollapse(id);
+                  }}
+                  className="grid place-items-center h-3.5 w-3.5 rounded text-[10px] font-bold leading-none text-[#9bafbc] hover:text-[#f5b942] hover:bg-white/10 cursor-pointer"
+                >
+                  −
+                </button>
+              )}
+              {onClose && !armed && (
+                <button
+                  type="button"
+                  aria-label={`Закрыть: ${panelName}`}
+                  title={`Закрыть «${panelName}»`}
+                  onPointerDown={stopBtnPointer}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClose(id);
+                  }}
+                  className="grid place-items-center h-3.5 w-3.5 rounded text-[10px] font-bold leading-none text-[#9bafbc] hover:text-[#ff8080] hover:bg-[#ff6b6b]/20 cursor-pointer"
+                >
+                  ×
+                </button>
+              )}
+              <div
+                onPointerDown={beginDrag("move")}
+                onPointerMove={moveDrag}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+                onLostPointerCapture={endDrag}
+                className="grid place-items-center h-3.5 px-0.5 cursor-grab active:cursor-grabbing touch-none"
+                title={gripLabel}
+              >
+                <span className={`text-[10px] leading-none ${armed ? "text-[#17130a]" : "text-[#9bafbc]"}`}>⠿</span>
+              </div>
+            </div>
+          )}
+
+          {resizable && (
+            <div
+              onPointerDown={beginDrag("resize")}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onLostPointerCapture={endDrag}
+              className="absolute right-0 bottom-0 h-4 w-4 cursor-nwse-resize touch-none"
+              title="Потяните, чтобы изменить размер"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" className="absolute right-0.5 bottom-0.5 text-[#9bafbc]">
+                <path d="M9 1 L1 9 M9 5 L5 9" stroke="currentColor" strokeWidth="1.2" />
+              </svg>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

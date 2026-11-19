@@ -138,6 +138,7 @@ requestAnimationFrame(now)
 | Ключ | Владелец | Назначение |
 |---|---|---|
 | `cdt.layout.v1` | `FloatingPanel.tsx` | Координаты `{ x, y, w }` плавающих панелей HUD и зеркал |
+| `cdt.panelState.v1` | `FloatingPanel.tsx` | Списки свёрнутых (`collapsed`) и закрытых (`closed`) элементов HUD |
 | `cdt.controls.v1` | `SimulatorView.tsx` | Скорость руления с клавиатуры (`steerKeyRate`, °/с) |
 | `cdt.calibration.v1` | `App.tsx` | Размеры боксов, `maxInnerWheelDeg` (`33–42°`), пороги, знак «У» |
 | `cdt.ruleset.v1` | `App.tsx` | Активный набор правил `RuleSet` |

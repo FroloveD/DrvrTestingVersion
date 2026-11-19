@@ -150,6 +150,7 @@ localStorage:
 
 ```text
 cdt.layout.v1           позиции и размеры плавающих панелей HUD
+cdt.panelState.v1       свёрнутые (−) и закрытые (×) панели HUD
 cdt.controls.v1         скорость руления с клавиатуры
 cdt.calibration.v1      размеры боксов, выворот колёс, табличка «У»
 cdt.ruleset.v1          активный набор правил

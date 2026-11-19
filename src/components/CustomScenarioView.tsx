@@ -311,6 +311,19 @@ export function CustomScenarioView({
   const [listFilter, setListFilter] = useState<ListFilter>("all");
   const [showOsmHelp, setShowOsmHelp] = useState(false);
 
+  // Сворачивание (−) и закрытие (×) панелей интерфейса 2D-редактора
+  const [editorCollapsed, setEditorCollapsed] = useState<Record<string, boolean>>({});
+  const [editorClosed, setEditorClosed] = useState<Record<string, boolean>>({});
+  const toggleEditorCollapse = (key: string) =>
+    setEditorCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  const closeEditorCard = (key: string) =>
+    setEditorClosed((prev) => ({ ...prev, [key]: true }));
+  const reopenEditorCard = (key: string) => {
+    setEditorClosed((prev) => ({ ...prev, [key]: false }));
+    setEditorCollapsed((prev) => ({ ...prev, [key]: false }));
+  };
+  const anySidebarOpen = !editorClosed.inspector || !editorClosed.objects || !editorClosed.bounds;
+
   const validation = useMemo(() => validateCustomScenario(def), [def]);
   const routeCheck = useMemo(() => checkScenarioRoute(def), [def]);
   const routeCandidates = useMemo(
@@ -998,12 +1011,29 @@ export function CustomScenarioView({
               >
                 ⬠ Коридор ±{corridorBufferM} м
               </button>
-              <button type="button" className="btn btn-mini" onClick={() => setShowRouteCheck(false)}>
-                Скрыть
+              <button
+                type="button"
+                aria-label={editorCollapsed.routeCheck ? "Развернуть проверку маршрута" : "Свернуть проверку маршрута"}
+                title={editorCollapsed.routeCheck ? "Развернуть подробности проверки" : "Свернуть подробности проверки"}
+                onClick={() => toggleEditorCollapse("routeCheck")}
+                className="mono h-7 w-7 rounded-lg border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+              >
+                {editorCollapsed.routeCheck ? "+" : "−"}
+              </button>
+              <button
+                type="button"
+                aria-label="Закрыть проверку маршрута"
+                title="Закрыть панель проверки маршрута"
+                className="btn btn-mini"
+                onClick={() => setShowRouteCheck(false)}
+              >
+                ✕
               </button>
             </div>
           </div>
 
+          {!editorCollapsed.routeCheck && (
+          <>
           {/* Выбор улицы OSM и пересборка маршрута */}
           {roads.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg bg-[#091017] border hairline px-3 py-2 text-[11px]">
@@ -1138,28 +1168,92 @@ export function CustomScenarioView({
               ))}
             </div>
           )}
+          </>
+          )}
         </div>
       )}
 
-      {/* Ошибки и предупреждения проверки геометрии */}
-      {(blocked || validation.warnings.length > 0) && (
+      {/* Ошибки и предупреждения проверки геометрии (сворачиваемый и закрываемый блок) */}
+      {(blocked || validation.warnings.length > 0) && !editorClosed.validation && (
         <div className="panel p-3.5 space-y-1">
-          {validation.errors.map((e, i) => (
-            <div key={`e${i}`} className="flex gap-2 text-[12px] text-[#ff9494]">
-              <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
-              <span>{e}</span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="mono text-[10px] text-[#9bafbc]">
+              ПРОВЕРКА ГЕОМЕТРИИ ({validation.errors.length + validation.warnings.length})
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={editorCollapsed.validation ? "Развернуть проверку геометрии" : "Свернуть проверку геометрии"}
+                onClick={() => toggleEditorCollapse("validation")}
+                className="mono h-5 w-5 rounded border hairline text-[10px] text-[#9bafbc] hover:text-[#f5b942]"
+              >
+                {editorCollapsed.validation ? "+" : "−"}
+              </button>
+              <button
+                type="button"
+                aria-label="Закрыть проверку геометрии"
+                onClick={() => closeEditorCard("validation")}
+                className="mono h-5 w-5 rounded border hairline text-[10px] text-[#9bafbc] hover:text-[#ff8080]"
+              >
+                ×
+              </button>
             </div>
-          ))}
-          {validation.warnings.map((w, i) => (
-            <div key={`w${i}`} className="flex gap-2 text-[12px] text-[#f5d78a]">
-              <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
-              <span>{w}</span>
-            </div>
-          ))}
+          </div>
+          {!editorCollapsed.validation && (
+            <>
+              {validation.errors.map((e, i) => (
+                <div key={`e${i}`} className="flex gap-2 text-[12px] text-[#ff9494]">
+                  <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
+                  <span>{e}</span>
+                </div>
+              ))}
+              {validation.warnings.map((w, i) => (
+                <div key={`w${i}`} className="flex gap-2 text-[12px] text-[#f5d78a]">
+                  <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
+                  <span>{w}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Панель быстрого возврата закрытых блоков редактора */}
+      {(editorClosed.palette || editorClosed.inspector || editorClosed.objects || editorClosed.bounds || (editorClosed.validation && (blocked || validation.warnings.length > 0))) && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="mono text-[10px] text-[#7c909d]">СКРЫТЫЕ ПАНЕЛИ:</span>
+          {([
+            ["palette", "Инструменты"],
+            ["inspector", "Инспектор"],
+            ["objects", "Объекты"],
+            ["bounds", "Площадка и границы"],
+            ["validation", "Проверка геометрии"],
+          ] as const)
+            .filter(([k]) =>
+              k === "validation"
+                ? Boolean(editorClosed.validation && (blocked || validation.warnings.length > 0))
+                : Boolean(editorClosed[k])
+            )
+            .map(([k, lbl]) => (
+              <button key={k} type="button" className="btn btn-mini text-[#52d6bd]" onClick={() => reopenEditorCard(k)}>
+                + {lbl}
+              </button>
+            ))}
+          <button
+            type="button"
+            className="btn btn-mini"
+            onClick={() => {
+              setEditorClosed({});
+              setEditorCollapsed({});
+            }}
+          >
+            Показать все
+          </button>
         </div>
       )}
 
       {/* === [SEC:custom-preview] Палитра классов, действия Undo/Redo и интерактивный 2D-холст === */}
+      {!editorClosed.palette && (
       <div className="panel p-3.5 space-y-3">
         {/* Инструменты палитры + Undo/Redo/Дубль/Удалить */}
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1222,8 +1316,29 @@ export function CustomScenarioView({
             >
               Удалить
             </button>
+            <button
+              type="button"
+              aria-label={editorCollapsed.palette ? "Развернуть настройки палитры" : "Свернуть настройки палитры"}
+              title={editorCollapsed.palette ? "Развернуть настройки палитры" : "Свернуть дополнительные строки палитры"}
+              onClick={() => toggleEditorCollapse("palette")}
+              className="mono h-7 w-7 rounded-lg border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+            >
+              {editorCollapsed.palette ? "+" : "−"}
+            </button>
+            <button
+              type="button"
+              aria-label="Закрыть палитру инструментов"
+              title="Скрыть палитру инструментов (вернуть — кнопкой «+ Инструменты»)"
+              onClick={() => closeEditorCard("palette")}
+              className="mono h-7 w-7 rounded-lg border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+            >
+              ×
+            </button>
           </div>
         </div>
+
+        {!editorCollapsed.palette && (
+        <>
 
         {/* Подпанель произвольных границ карты и обрезки загруженного маршрута OSM */}
         {tool === "boundary" && (
@@ -1602,10 +1717,13 @@ export function CustomScenarioView({
             </button>
           </div>
         </div>
+        </>
+        )}
       </div>
+      )}
 
-      {/* Основная рабочая область: слева 2D-холст, справа инспектор выбранного объекта */}
-      <div className="grid xl:grid-cols-[1fr_410px] gap-4 items-start">
+      {/* Основная рабочая область: слева 2D-холст (на всю ширину, если правые панели закрыты), справа инспектор */}
+      <div className={`grid gap-4 items-start ${anySidebarOpen ? "xl:grid-cols-[1fr_410px]" : ""}`}>
         <MapCanvasEditor
           def={def}
           tool={tool}
@@ -1626,8 +1744,10 @@ export function CustomScenarioView({
         />
 
         {/* === [SEC:custom-forms] Инспектор выбранного объекта, реестр и параметры карты === */}
+        {anySidebarOpen && (
         <div className="space-y-4 min-w-0">
           {/* Инспектор свойств выбранного объекта */}
+          {!editorClosed.inspector && (
           <div className="panel p-4 space-y-3" data-testid="editor-inspector">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -1636,7 +1756,8 @@ export function CustomScenarioView({
                   {selectedAnchor ? selectedAnchor.label : "Объект не выбран"}
                 </div>
               </div>
-              {selectedAnchor && (
+              <div className="flex flex-wrap items-center gap-1">
+              {selectedAnchor && !editorCollapsed.inspector && (
                 <div className="flex flex-wrap items-center gap-1" title="Поворот и порядок слоёв объекта">
                   {primary &&
                     ["obstacle", "bay", "sign", "signal", "crosswalk", "road"].includes(primary.kind) && (
@@ -1668,7 +1789,29 @@ export function CustomScenarioView({
                   )}
                 </div>
               )}
+                <button
+                  type="button"
+                  aria-label={editorCollapsed.inspector ? "Развернуть инспектор" : "Свернуть инспектор"}
+                  title={editorCollapsed.inspector ? "Развернуть инспектор" : "Свернуть инспектор"}
+                  onClick={() => toggleEditorCollapse("inspector")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+                >
+                  {editorCollapsed.inspector ? "+" : "−"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Закрыть инспектор"
+                  title="Закрыть инспектор (вернуть — «+ Инспектор»)"
+                  onClick={() => closeEditorCard("inspector")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+                >
+                  ×
+                </button>
+              </div>
             </div>
+
+            {!editorCollapsed.inspector && (
+            <>
 
             {!primary && (
               <p className="text-[12px] text-[#8fa2ae] leading-relaxed">
@@ -2745,18 +2888,45 @@ export function CustomScenarioView({
                 </div>
               </div>
             )}
+            </>
+            )}
           </div>
+          )}
 
           {/* Реестр всех объектов на карте с быстрым переходом */}
+          {!editorClosed.objects && (
           <div className="panel p-4 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-extrabold">Объекты на карте ({totalObjects})</span>
-              {roads.length > 0 && (
-                <button type="button" className="btn btn-mini" onClick={() => handleAutoRoute()}>
-                  Автомаршрут
+              <div className="flex items-center gap-1">
+                {roads.length > 0 && !editorCollapsed.objects && (
+                  <button type="button" className="btn btn-mini" onClick={() => handleAutoRoute()}>
+                    Автомаршрут
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label={editorCollapsed.objects ? "Развернуть список объектов" : "Свернуть список объектов"}
+                  title={editorCollapsed.objects ? "Развернуть" : "Свернуть"}
+                  onClick={() => toggleEditorCollapse("objects")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+                >
+                  {editorCollapsed.objects ? "+" : "−"}
                 </button>
-              )}
+                <button
+                  type="button"
+                  aria-label="Закрыть список объектов"
+                  title="Закрыть список объектов (вернуть — «+ Объекты»)"
+                  onClick={() => closeEditorCard("objects")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+                >
+                  ×
+                </button>
+              </div>
             </div>
+
+            {!editorCollapsed.objects && (
+            <>
 
             <div className="flex flex-wrap gap-1">
               {([
@@ -2957,13 +3127,19 @@ export function CustomScenarioView({
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
+          )}
 
           {/* Общие параметры сценария, площадки и произвольных границ мира */}
+          {!editorClosed.bounds && (
           <div className="panel p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-1.5">
               <span className="text-xs font-extrabold">Площадка и границы мира</span>
-              <div className="flex flex-wrap gap-1">
+              <div className="flex flex-wrap items-center gap-1">
+                {!editorCollapsed.bounds && (
+                <>
                 <button
                   type="button"
                   className="btn btn-mini text-[#f5b942]"
@@ -2996,8 +3172,31 @@ export function CustomScenarioView({
                 >
                   {def.boundaryPolygon ? "В прямоуг." : "Подогнать"}
                 </button>
+                </>
+                )}
+                <button
+                  type="button"
+                  aria-label={editorCollapsed.bounds ? "Развернуть параметры площадки" : "Свернуть параметры площадки"}
+                  title={editorCollapsed.bounds ? "Развернуть" : "Свернуть"}
+                  onClick={() => toggleEditorCollapse("bounds")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#f5b942]"
+                >
+                  {editorCollapsed.bounds ? "+" : "−"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Закрыть параметры площадки"
+                  title="Закрыть блок (вернуть — «+ Площадка и границы»)"
+                  onClick={() => closeEditorCard("bounds")}
+                  className="mono h-6 w-6 rounded-md border hairline text-xs text-[#9bafbc] hover:text-[#ff8080]"
+                >
+                  ×
+                </button>
               </div>
             </div>
+
+            {!editorCollapsed.bounds && (
+            <>
             {def.boundaryPolygon && def.boundaryPolygon.length >= 3 && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#091017] border border-[#f5b942]/30 px-2.5 py-1.5 text-[11px]">
                 <span className="text-[#f5d78a]">
@@ -3103,8 +3302,12 @@ export function CustomScenarioView({
                 onChange={(v) => patchDef({ boundaryPolygon: undefined, bounds: { ...def.bounds, maxZ: v } })}
               />
             </div>
+            </>
+            )}
           </div>
+          )}
         </div>
+        )}
       </div>
     </div>
   );
