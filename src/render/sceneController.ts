@@ -184,8 +184,6 @@ export class SceneController {
   private readonly cockpitLeftMat: THREE.MeshBasicMaterial;
   private readonly cockpitRightMat: THREE.MeshBasicMaterial;
   private readonly mirrorIdleMat: THREE.Material;
-  private readonly cockpitEyeWorld = new THREE.Vector3();
-  private readonly cockpitLookWorld = new THREE.Vector3();
   private cockpitRearPrimed = false;
   private cockpitSidePrimed = false;
   private qualityPreset: QualityPreset = "high";
