@@ -20,6 +20,7 @@ import { parseMapFileText, parseOsmXml } from "../maps/osmLoader";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
+  defaultCustomScenario,
   customFromOsmPack,
   customFromWorld,
   emptyCustomScenario,
@@ -575,6 +576,15 @@ export const extraCases: SelfTestCase[] = [
       assert(ROAD_SIGN_CATALOG.length === 12, `Ожидалось 12 классов знаков, есть ${ROAD_SIGN_CATALOG.length}`);
       assert(OBSTACLE_CATALOG.length === 8, `Ожидалось 8 классов препятствий, есть ${OBSTACLE_CATALOG.length}`);
 
+      // Стартовую прямоугольную асфальтовую площадку можно отключить, не удаляя дороги/объекты карты.
+      const lotDef = defaultCustomScenario();
+      const lotOnWorld = buildCustomWorld(lotDef);
+      const lotOffWorld = buildCustomWorld({ ...lotDef, useLotSurface: false });
+      assert(lotOnWorld.roads.some((road) => road.id === "custom-lot"), "Стартовая площадка должна быть в шаблоне по умолчанию");
+      assert(!lotOffWorld.roads.some((road) => road.id === "custom-lot"), "При отключении площадка не должна попадать в 3D-мир");
+      assert(lotOffWorld.bays.length === lotOnWorld.bays.length && lotOffWorld.obstacles.length === lotOnWorld.obstacles.length,
+        "Отключение асфальта не должно удалять боксы и препятствия");
+
       // Клон встроенного города переносит дороги, светофоры, переход, знак 40 и ODbL
       const cityWorld = buildScenarioWorld("city_osm", DEFAULT_CALIBRATION);
       const clonedCity = customFromWorld(cityWorld, "Клон города");
@@ -691,7 +701,7 @@ export const extraCases: SelfTestCase[] = [
       );
       assert(validateCustomScenario(osmDef).errors.length === 0, "Импортированная OSM-карта должна быть валидна");
 
-      return "12 знаков · 8 препятствий · отрезки 30/20 км/ч · перекрёсток отменяет лимит · КТ STOP · реплей бит-в-бит";
+      return "12 знаков · 8 препятствий · стартовая асфальтовая площадка отключается отдельно · отрезки 30/20 км/ч · перекрёсток отменяет лимит · КТ STOP · реплей бит-в-бит";
     },
   },
   {
