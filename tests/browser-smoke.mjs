@@ -753,6 +753,11 @@ try {
   await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 3 });
   await sleep(80);
   const afterDragD = (await hudDriveBtn.innerText()).trim();
+  // Тормоз нужен только чтобы снять селектор с P; отпускаем S (удержание педали без газа
+  // включает антизаглохание и возвращает M2→M1 на стоящем автомобиле), зато D1 разгоняется
+  // самоходом на ХХ, поэтому шаг M1→M2 идёт на реально движущейся машине.
+  await page.keyboard.up("KeyS");
+  await sleep(900);
   // Тянем рычаг влево (к водителю) в ручной паз M, затем качаем вверх к + (M2)
   const slotMPx = { x: slotDPx.x - 28, y: slotDPx.y };
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 5 });
@@ -773,7 +778,6 @@ try {
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
   await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
   await page.mouse.up();
-  await page.keyboard.up("KeyS");
   await sleep(100);
   const afterBackD = (await hudDriveBtn.innerText()).trim();
   // Возвращаем вид сзади (1)
@@ -966,6 +970,10 @@ try {
   const at42=await until(async()=> /Л 42.0°/.test(await page.locator('.wheel-readout').innerText()));
   await page.getByRole("button", {name:"Закрыть настройки управления"}).click();
   check("L7 предел 42° применяется без сброса заезда или руля",Boolean(at42) && await page.getByRole('button',{name:'Быстрый старт'}).count()===0);
+  // Возвращаем панель приборов: её показания скорости читает speedOf в L8
+  await page.getByTestId("hud-restore-dock").click();
+  await page.getByTestId("hud-panels-menu").getByRole("button", { name: "Показать все", exact: true }).click();
+  await sleep(220);
 
   const press = async (button) => {const r=await button.boundingBox();await page.mouse.move(r.x+r.width/2, r.y+r.height/2);await page.mouse.down();};
   await press(gas); const drives=await until(async()=> (await speedOf(page))>=2); await page.mouse.up();
