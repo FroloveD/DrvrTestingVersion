@@ -5,6 +5,7 @@
  * @invariants #7 (чистое ядро), #8–#9 (офлайн-импорт + сохранение ODbL 1.0), #15 (снимок `customWorld` в попытке и реплее).
  * @tests T16, T28, T29
  */
+import { boundingBoxOfPolygon, buildBoundaryCurbSegments, isInsideWorldBoundary, isValidBoundaryPolygon, isSimplePolygon, polygonArea, sanitizeBoundaryPolygon, boundsToPolygon } from "../maps/boundary";
 import { parseMapFileText, type MapImportFormat, type NormalizedOsmPack } from "../maps/osmLoader";
 import { isCarInsideBay, SpatialGrid } from "../sim/spatialGrid";
 import type {
@@ -20,6 +21,7 @@ import type {
   RouteCheckpoint,
   SpeedZone,
   TrafficSignalDef,
+  Vec2,
   WorldData,
 } from "../sim/types";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
@@ -59,6 +61,10 @@ export type CustomScenarioDef = {
   /** Метаданные и атрибуция ODbL 1.0, если карта создана из выгрузки OpenStreetMap. */
   mapMeta?: MapPackMeta;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Произвольная граница рабочей области мира. */
+  boundaryPolygon?: Vec2[];
+  /** Добавить физический бордюр по периметру. */
+  perimeterCurb?: boolean;
 };
 
 export type EditorImportKind = "scenario" | "backup" | MapImportFormat;
@@ -218,6 +224,8 @@ export function normalizeCustomScenario(raw: Partial<CustomScenarioDef>): Custom
     crosswalks: Array.isArray(raw.crosswalks) ? raw.crosswalks.map((c) => ({ ...c })) : [],
     checkpoints: Array.isArray(raw.checkpoints) ? raw.checkpoints.map((c) => ({ ...c })) : [],
     mapMeta: raw.mapMeta ? { ...raw.mapMeta, bbox: [...raw.mapMeta.bbox] as [number, number, number, number] } : undefined,
+    boundaryPolygon: Array.isArray(raw.boundaryPolygon) ? sanitizeBoundaryPolygon(raw.boundaryPolygon) : undefined,
+    perimeterCurb: Boolean(raw.perimeterCurb) || undefined,
   };
 }
 
@@ -431,8 +439,10 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
     });
   }
 
+  const validPoly = isValidBoundaryPolygon(def.boundaryPolygon) ? def.boundaryPolygon.map((p) => ({ ...p })) : undefined;
+  const useLot = def.useLotSurface !== false;
   const roads: RoadSegment[] = [];
-  if (def.useLotSurface !== false) {
+  if (useLot && !validPoly) {
     roads.push({
       id: "custom-lot",
       points: [
@@ -445,6 +455,11 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
       name: "Своя площадка",
     });
   }
+  if (def.perimeterCurb) {
+    const ring = validPoly ?? (useLot ? boundsToPolygon({ minX: (def.lotCenterX ?? 0) - def.lotHalfX, maxX: (def.lotCenterX ?? 0) + def.lotHalfX, minZ: (def.lotCenterZ ?? 0) - def.lotHalfZ, maxZ: (def.lotCenterZ ?? 0) + def.lotHalfZ }) : boundsToPolygon(def.bounds));
+    buildBoundaryCurbSegments(ring, 0.28).forEach((seg, i) => obstacles.push({ id: `boundary-curb-${i+1}`, kind: "curb", cx: seg.cx, cz: seg.cz, halfX: seg.halfX, halfZ: seg.halfZ, h: seg.h, height: 0.16, color: 0xcbd5e1, label: "Бордюр границы площадки" }));
+  }
+
   for (const r of def.roads ?? []) {
     if (Array.isArray(r.points) && r.points.length >= 2) {
       roads.push({ ...r, points: r.points.map((p) => ({ ...p })) });
@@ -485,7 +500,9 @@ export function buildCustomWorld(def: CustomScenarioDef): WorldData {
       ? { mapMeta: { ...def.mapMeta, bbox: [...def.mapMeta.bbox] as [number, number, number, number] } }
       : {}),
     embedInAttempt: true,
-    bounds: { ...def.bounds },
+    bounds: validPoly ? boundingBoxOfPolygon(validPoly, 0) : { ...def.bounds },
+    ...(validPoly ? { boundaryPolygon: validPoly.map((p) => ({ ...p })) } : {}),
+    ...(useLot && validPoly ? { lotPolygon: validPoly.map((p) => ({ ...p })) } : {}),
   };
 }
 
@@ -512,6 +529,12 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
   const signals = def.signals ?? [];
   const crosswalks = def.crosswalks ?? [];
 
+  const rawPoly = def.boundaryPolygon;
+  if (rawPoly && (!isValidBoundaryPolygon(rawPoly) || !isSimplePolygon(rawPoly) || polygonArea(rawPoly) < 25)) {
+    errors.push("Контур границы должен быть простым многоугольником площадью не менее 25 м².");
+  }
+  const poly = isValidBoundaryPolygon(rawPoly) ? rawPoly : undefined;
+  const insideWorld = (x: number, z: number) => poly ? isInsideWorldBoundary(x, z, def.bounds, poly) : insideBounds(x, z, def.bounds);
   if (!def.title.trim()) errors.push("Укажите название сценария.");
   if (useLot) {
     if (!Number.isFinite(def.lotHalfX) || def.lotHalfX < 5 || def.lotHalfX > 200) {
@@ -524,7 +547,7 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
   if (def.bounds.minX >= def.bounds.maxX || def.bounds.minZ >= def.bounds.maxZ) {
     errors.push("Границы мира заданы неверно: min должен быть меньше max.");
   }
-  if (!insideBounds(def.start.x, def.start.z, def.bounds)) {
+  if (!insideWorld(def.start.x, def.start.z)) {
     errors.push("Стартовая позиция находится за границами мира.");
   }
 
@@ -549,7 +572,7 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
     if (!(bay.length >= 4.4 && bay.length <= 12)) {
       errors.push(`Бокс №${bay.id}: длина должна быть 4.4–12 м (кузов ${CAR.length} м).`);
     }
-    if (!insideBounds(bay.cx, bay.cz, def.bounds)) {
+    if (!insideWorld(bay.cx, bay.cz)) {
       errors.push(`Бокс №${bay.id}: центр за границами мира.`);
     }
   }
@@ -574,7 +597,7 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
   }
 
   for (const sn of signs) {
-    if (!insideBounds(sn.x, sn.z, def.bounds)) {
+    if (!insideWorld(sn.x, sn.z)) {
       warnings.push(`Знак «${sn.label || sn.id}» находится за границами мира.`);
     }
     if (sn.limitKmh !== undefined && !(sn.limitKmh >= 5 && sn.limitKmh <= 130)) {
@@ -607,7 +630,7 @@ export function validateCustomScenario(def: CustomScenarioDef): CustomValidation
     if (!(cp.radius > 0 && cp.radius <= 18)) {
       errors.push(`Точка «${cp.id}»: радиус должен быть 0–18 м.`);
     }
-    if (!insideBounds(cp.x, cp.z, def.bounds)) {
+    if (!insideWorld(cp.x, cp.z)) {
       errors.push(`Точка «${cp.id}»: находится за границами мира.`);
     }
   }
