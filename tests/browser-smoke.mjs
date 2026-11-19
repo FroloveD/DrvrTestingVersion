@@ -1277,7 +1277,8 @@ try {
           mimeType: "application/json",
           buffer: Buffer.from(JSON.stringify({ schema: "cdt.routes.v1", routes: [sharedRoute] })),
         });
-        await page.getByText("Импортировано маршрутов: 1").waitFor({ timeout: 5000 });
+        const imported = await until(async () => await page.getByTestId("route-card").count() === 2, 5000, 100);
+        check("P17 импорт второго маршрута на ту же карту проходит", imported);
         const storageStats = await page.evaluate(() => new Promise((resolve, reject) => {
           const request = indexedDB.open("cdt-route-catalog", 2);
           request.onerror = () => reject(request.error);
