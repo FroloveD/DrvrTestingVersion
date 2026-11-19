@@ -54,7 +54,7 @@ import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { SimEvent } from "./types";
-import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, STEER_WHEEL, wheelDegToSteerRad } from "./vehicle";
+import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, predictTrajectoryArc, STEER_WHEEL, wheelDegToSteerRad, writeTrajectoryArcPositions } from "./vehicle";
 
 export type SelfTestCase = { id: string; suite: string; name: string; fn: () => string };
 
@@ -870,6 +870,44 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(cropped.boundaryPolygon) && cropped.roads.length >= 1,
         "Обрезка OSM-пакета по полигону должна сохранять границу и дорогу");
       return `oneway=-1 · roundabout · service/lanes/width · courtyard=${pack.buildings.length} корп. · crop OK`;
+    },
+  },
+  {
+    id: "T32",
+    suite: "performance",
+    name: "Буферный прогноз траектории совпадает с эталонной дугой Аккермана",
+    fn: () => {
+      const left = new Float32Array(19 * 3);
+      const right = new Float32Array(19 * 3);
+      const samples = [
+        { x: 0, z: 0, h: 0, steer: 0, reverse: false },
+        { x: 12.5, z: -4.25, h: 0.31, steer: 0.42, reverse: false },
+        { x: -8, z: 17, h: -0.62, steer: -0.28, reverse: true },
+      ];
+      for (const sample of samples) {
+        const expected = predictTrajectoryArc(
+          sample.x, sample.z, sample.h, sample.steer, sample.reverse, 6.2, 18
+        );
+        writeTrajectoryArcPositions(
+          sample.x, sample.z, sample.h, sample.steer, sample.reverse, left, right, 6.2, 18, 0.06
+        );
+        for (let i = 0; i <= 18; i++) {
+          const offset = i * 3;
+          assert(Math.abs(left[offset] - expected.leftTrack[i].x) < 1e-5, `Левая точка ${i}: X расходится`);
+          assert(Math.abs(left[offset + 2] - expected.leftTrack[i].z) < 1e-5, `Левая точка ${i}: Z расходится`);
+          assert(Math.abs(right[offset] - expected.rightTrack[i].x) < 1e-5, `Правая точка ${i}: X расходится`);
+          assert(Math.abs(right[offset + 2] - expected.rightTrack[i].z) < 1e-5, `Правая точка ${i}: Z расходится`);
+          assert(left[offset + 1] === 0.06 && right[offset + 1] === 0.06, `Точка ${i}: неверная высота линии`);
+        }
+      }
+      let rejected = false;
+      try {
+        writeTrajectoryArcPositions(0, 0, 0, 0, false, new Float32Array(3), new Float32Array(3), 6.2, 18);
+      } catch (error) {
+        rejected = error instanceof RangeError;
+      }
+      assert(rejected, "Короткий буфер должен отклоняться с RangeError");
+      return "57 координат на линию · прямой/обратный ход · разные углы руля · проверка ёмкости буфера OK";
     },
   },
 ];
