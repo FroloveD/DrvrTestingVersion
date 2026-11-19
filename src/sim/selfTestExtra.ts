@@ -379,6 +379,33 @@ export const extraCases: SelfTestCase[] = [
       assert(replay.finalState.x === state.x && replay.finalState.z === state.z && replay.finalState.h === state.h, "Изменение угла нарушило воспроизводимость");
       const fixed = replayInputStream([{ count: 240, input: inp, maxInnerWheelDeg: 33 }], world, DEFAULT_CALIBRATION, DEFAULT_RULESET, true);
       assert(Math.abs(fixed.finalState.h - state.h) > 0.01, "Настройка должна менять движение, а не только визуальные колёса");
+      // Буферный writer должен совпадать с объектным эталоном для прямого и обратного хода.
+      const left = new Float32Array(19 * 3);
+      const right = new Float32Array(19 * 3);
+      const samples = [
+        { x: 0, z: 0, h: 0, steer: 0, reverse: false },
+        { x: 12.5, z: -4.25, h: 0.31, steer: 0.42, reverse: false },
+        { x: -8, z: 17, h: -0.62, steer: -0.28, reverse: true },
+      ];
+      for (const sample of samples) {
+        const expected = predictTrajectoryArc(sample.x, sample.z, sample.h, sample.steer, sample.reverse, 6.2, 18);
+        writeTrajectoryArcPositions(sample.x, sample.z, sample.h, sample.steer, sample.reverse, left, right, 6.2, 18, 0.06);
+        for (let i = 0; i <= 18; i++) {
+          const offset = i * 3;
+          assert(Math.abs(left[offset] - expected.leftTrack[i].x) < 1e-5, `Левая точка ${i}: X расходится`);
+          assert(Math.abs(left[offset + 2] - expected.leftTrack[i].z) < 1e-5, `Левая точка ${i}: Z расходится`);
+          assert(Math.abs(right[offset] - expected.rightTrack[i].x) < 1e-5, `Правая точка ${i}: X расходится`);
+          assert(Math.abs(right[offset + 2] - expected.rightTrack[i].z) < 1e-5, `Правая точка ${i}: Z расходится`);
+          assert(Math.abs(left[offset + 1] - 0.06) < 1e-7 && Math.abs(right[offset + 1] - 0.06) < 1e-7, `Точка ${i}: неверная высота линии`);
+        }
+      }
+      let rejected = false;
+      try {
+        writeTrajectoryArcPositions(0, 0, 0, 0, false, new Float32Array(3), new Float32Array(3), 6.2, 18);
+      } catch (error) {
+        rejected = error instanceof RangeError;
+      }
+      assert(rejected, "Короткий буфер должен отклоняться с RangeError");
       return "240 тиков: 33° → 42° → 37,5° · 3 блока RLE · поза совпала точно";
     },
   },
@@ -872,42 +899,4 @@ export const extraCases: SelfTestCase[] = [
       return `oneway=-1 · roundabout · service/lanes/width · courtyard=${pack.buildings.length} корп. · crop OK`;
     },
   },
-  {
-    id: "T32",
-    suite: "performance",
-    name: "Буферный прогноз траектории совпадает с эталонной дугой Аккермана",
-    fn: () => {
-      const left = new Float32Array(19 * 3);
-      const right = new Float32Array(19 * 3);
-      const samples = [
-        { x: 0, z: 0, h: 0, steer: 0, reverse: false },
-        { x: 12.5, z: -4.25, h: 0.31, steer: 0.42, reverse: false },
-        { x: -8, z: 17, h: -0.62, steer: -0.28, reverse: true },
-      ];
-      for (const sample of samples) {
-        const expected = predictTrajectoryArc(
-          sample.x, sample.z, sample.h, sample.steer, sample.reverse, 6.2, 18
-        );
-        writeTrajectoryArcPositions(
-          sample.x, sample.z, sample.h, sample.steer, sample.reverse, left, right, 6.2, 18, 0.06
-        );
-        for (let i = 0; i <= 18; i++) {
-          const offset = i * 3;
-          assert(Math.abs(left[offset] - expected.leftTrack[i].x) < 1e-5, `Левая точка ${i}: X расходится`);
-          assert(Math.abs(left[offset + 2] - expected.leftTrack[i].z) < 1e-5, `Левая точка ${i}: Z расходится`);
-          assert(Math.abs(right[offset] - expected.rightTrack[i].x) < 1e-5, `Правая точка ${i}: X расходится`);
-          assert(Math.abs(right[offset + 2] - expected.rightTrack[i].z) < 1e-5, `Правая точка ${i}: Z расходится`);
-          assert(Math.abs(left[offset + 1] - 0.06) < 1e-7 && Math.abs(right[offset + 1] - 0.06) < 1e-7, `Точка ${i}: неверная высота линии`);
-        }
-      }
-      let rejected = false;
-      try {
-        writeTrajectoryArcPositions(0, 0, 0, 0, false, new Float32Array(3), new Float32Array(3), 6.2, 18);
-      } catch (error) {
-        rejected = error instanceof RangeError;
-      }
-      assert(rejected, "Короткий буфер должен отклоняться с RangeError");
-      return "57 координат на линию · прямой/обратный ход · разные углы руля · проверка ёмкости буфера OK";
-    },
-  },
-];
+ ];
