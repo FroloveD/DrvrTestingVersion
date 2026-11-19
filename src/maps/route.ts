@@ -661,31 +661,45 @@ export function findRoadNetworkPath(
     }
   }
 
-  // Строим ориентированный граф дорожной сети с учётом `oneway` и вертикальных уровней `layer` (мосты/тоннели)
+  // Строим ориентированный граф дорожной сети с учётом oneway/layer.
+  // Пространственные бакеты заменяют полный перебор узлов и сегментов на каждом шаге.
   type Edge = { to: number; w: number; roadName?: string };
   type GraphNode = { x: number; z: number; layer: number; isEndpoint: boolean };
   const nodes: GraphNode[] = [];
   const adj: Edge[][] = [];
   const roadVertexIds = new Map<string, number[]>();
+  const nodeCellSize = 4;
+  const nodeBuckets = new Map<string, number[]>();
+  const cellKey = (x: number, z: number) => `${Math.floor(x / nodeCellSize)}:${Math.floor(z / nodeCellSize)}`;
 
   const addNode = (x: number, z: number, layer: number, isEndpoint: boolean): number => {
-    for (let i = 0; i < nodes.length; i++) {
-      const nd = nodes[i];
-      const sameLayer = nd.layer === layer;
-      // Разные уровни (въезд на мост / выезд из тоннеля) стыкуются ТОЛЬКО в общей концевой вершине (≤ 1.2 м),
-      // а пролёт эстакады над улицей не создаёт ложного перекрёстка
-      const tol = sameLayer ? 3.2 : isEndpoint && nd.isEndpoint ? 1.2 : -1;
-      if (tol < 0) continue;
-      if (Math.abs(nd.x - x) <= tol && Math.abs(nd.z - z) <= tol) {
-        if (Math.hypot(nd.x - x, nd.z - z) <= tol) {
-          if (isEndpoint) nd.isEndpoint = true;
-          return i;
+    const cx = Math.floor(x / nodeCellSize);
+    const cz = Math.floor(z / nodeCellSize);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const candidates = nodeBuckets.get(`${cx + dx}:${cz + dz}`);
+        if (!candidates) continue;
+        for (const i of candidates) {
+          const nd = nodes[i];
+          const sameLayer = nd.layer === layer;
+          // Разные уровни стыкуются только в общей концевой вершине (≤ 1,2 м).
+          const tol = sameLayer ? 3.2 : isEndpoint && nd.isEndpoint ? 1.2 : -1;
+          if (tol < 0) continue;
+          if (Math.abs(nd.x - x) <= tol && Math.abs(nd.z - z) <= tol &&
+              Math.hypot(nd.x - x, nd.z - z) <= tol) {
+            if (isEndpoint) nd.isEndpoint = true;
+            return i;
+          }
         }
       }
     }
     const id = nodes.length;
     nodes.push({ x, z, layer, isEndpoint });
     adj.push([]);
+    const key = cellKey(x, z);
+    const bucket = nodeBuckets.get(key);
+    if (bucket) bucket.push(id);
+    else nodeBuckets.set(key, [id]);
     return id;
   };
 
@@ -701,7 +715,6 @@ export function findRoadNetworkPath(
   };
 
   for (const r of streetRoads) {
-    if (nodes.length > 1600) break;
     const layer = r.layer ?? 0;
     const isOw = Boolean(r.oneway);
     const ids: number[] = [];
@@ -715,39 +728,63 @@ export function findRoadNetworkPath(
     roadVertexIds.set(r.id, ids);
   }
 
-  // Подсоединяем Т-образные примыкания на ОДНОМ уровне `layer` (с сохранением направления `oneway`)
-  for (const r of streetRoads) {
-    const ids = roadVertexIds.get(r.id);
+  // Индексируем дорожные сегменты по AABB с тем же запасом, что и точная проверка примыкания.
+  type SegmentRef = { road: RoadSegment; u: number; v: number };
+  const segmentCellSize = 32;
+  const segmentBuckets = new Map<string, SegmentRef[]>();
+  const segmentCellKey = (x: number, z: number) =>
+    `${Math.floor(x / segmentCellSize)}:${Math.floor(z / segmentCellSize)}`;
+  for (const road of streetRoads) {
+    const ids = roadVertexIds.get(road.id);
+    if (!ids) continue;
+    const pad = road.width * 0.55 + 2.5;
+    for (let i = 0; i < ids.length - 1; i++) {
+      const u = ids[i], v = ids[i + 1];
+      const a = nodes[u], b = nodes[v];
+      const minX = Math.floor((Math.min(a.x, b.x) - pad) / segmentCellSize);
+      const maxX = Math.floor((Math.max(a.x, b.x) + pad) / segmentCellSize);
+      const minZ = Math.floor((Math.min(a.z, b.z) - pad) / segmentCellSize);
+      const maxZ = Math.floor((Math.max(a.z, b.z) + pad) / segmentCellSize);
+      const ref = { road, u, v };
+      for (let cx = minX; cx <= maxX; cx++) {
+        for (let cz = minZ; cz <= maxZ; cz++) {
+          const key = `${cx}:${cz}`;
+          const bucket = segmentBuckets.get(key);
+          if (bucket) bucket.push(ref);
+          else segmentBuckets.set(key, [ref]);
+        }
+      }
+    }
+  }
+
+  // Подсоединяем Т-образные примыкания на одном layer. Точная геометрическая проверка сохранена.
+  for (const road of streetRoads) {
+    const ids = roadVertexIds.get(road.id);
     if (!ids || ids.length < 2) continue;
-    const rLayer = r.layer ?? 0;
-    const rOw = Boolean(r.oneway);
+    const roadLayer = road.layer ?? 0;
+    const roadOneway = Boolean(road.oneway);
     const endSpecs: Array<{ idx: number; canExit: boolean; canEnter: boolean }> = [
-      { idx: ids[0], canExit: !rOw, canEnter: true },
-      { idx: ids[ids.length - 1], canExit: true, canEnter: !rOw },
+      { idx: ids[0], canExit: !roadOneway, canEnter: true },
+      { idx: ids[ids.length - 1], canExit: true, canEnter: !roadOneway },
     ];
-    for (const epSpec of endSpecs) {
-      const ep = nodes[epSpec.idx];
-      for (const other of streetRoads) {
-        if (other.id === r.id || (other.layer ?? 0) !== rLayer) continue;
-        const oids = roadVertexIds.get(other.id);
-        if (!oids) continue;
-        const oOw = Boolean(other.oneway);
-        for (let i = 0; i < oids.length - 1; i++) {
-          const u = oids[i];
-          const v = oids[i + 1];
-          if (u === epSpec.idx || v === epSpec.idx) continue;
-          const cp = closestPointOnSegment(ep.x, ep.z, nodes[u].x, nodes[u].z, nodes[v].x, nodes[v].z);
-          if (cp.distSq <= Math.pow(other.width * 0.55 + 2.5, 2)) {
-            // Выезд с примыкающей дороги на `other`: вперёд к `v`, а если `other` двусторонняя — и к `u`
-            if (epSpec.canExit) {
-              addDirEdge(epSpec.idx, v, other.name);
-              if (!oOw) addDirEdge(epSpec.idx, u, other.name);
-            }
-            // Съезд с `other` на примыкающую дорогу: от `u`, а если `other` двусторонняя — и от `v`
-            if (epSpec.canEnter) {
-              addDirEdge(u, epSpec.idx, other.name);
-              if (!oOw) addDirEdge(v, epSpec.idx, other.name);
-            }
+    for (const end of endSpecs) {
+      const ep = nodes[end.idx];
+      const candidates = segmentBuckets.get(segmentCellKey(ep.x, ep.z)) ?? [];
+      for (const segment of candidates) {
+        const other = segment.road;
+        if (other.id === road.id || (other.layer ?? 0) !== roadLayer) continue;
+        const u = segment.u, v = segment.v;
+        if (u === end.idx || v === end.idx) continue;
+        const cp = closestPointOnSegment(ep.x, ep.z, nodes[u].x, nodes[u].z, nodes[v].x, nodes[v].z);
+        if (cp.distSq <= Math.pow(other.width * 0.55 + 2.5, 2)) {
+          const otherOneway = Boolean(other.oneway);
+          if (end.canExit) {
+            addDirEdge(end.idx, v, other.name);
+            if (!otherOneway) addDirEdge(end.idx, u, other.name);
+          }
+          if (end.canEnter) {
+            addDirEdge(u, end.idx, other.name);
+            if (!otherOneway) addDirEdge(v, end.idx, other.name);
           }
         }
       }
@@ -764,18 +801,16 @@ export function findRoadNetworkPath(
     });
     adj.push([]);
     const rids = roadVertexIds.get(snap.road.id);
-    const ow = Boolean(snap.road.oneway);
+    const oneway = Boolean(snap.road.oneway);
     if (rids) {
       const u = rids[snap.segIndex];
       const v = rids[snap.segIndex + 1];
       if (role === "src") {
-        // Из точки старта можно ехать вперёд к `v`; назад к `u` — только если дорога двусторонняя
         if (v !== undefined) addDirEdge(id, v, snap.road.name);
-        if (!ow && u !== undefined) addDirEdge(id, u, snap.road.name);
+        if (!oneway && u !== undefined) addDirEdge(id, u, snap.road.name);
       } else {
-        // В целевую точку можно приехать по потоку от `u`; с обратной стороны от `v` — только на двусторонней
         if (u !== undefined) addDirEdge(u, id, snap.road.name);
-        if (!ow && v !== undefined) addDirEdge(v, id, snap.road.name);
+        if (!oneway && v !== undefined) addDirEdge(v, id, snap.road.name);
       }
     }
     return id;
@@ -783,30 +818,65 @@ export function findRoadNetworkPath(
 
   const src = attachSnap(snapA, "src");
   const dst = attachSnap(snapB, "dst");
-
   const dist = new Float64Array(nodes.length).fill(Infinity);
   const prev = new Int32Array(nodes.length).fill(-1);
   const prevRoad: Array<string | undefined> = new Array(nodes.length);
-  const visited = new Uint8Array(nodes.length);
+  const closed = new Uint8Array(nodes.length);
   dist[src] = 0;
 
-  for (let step = 0; step < nodes.length; step++) {
-    let u = -1;
-    let best = Infinity;
-    for (let i = 0; i < nodes.length; i++) {
-      if (!visited[i] && dist[i] < best) {
-        best = dist[i];
-        u = i;
+  // A* с евклидовой эвристикой: вес каждого ребра не меньше прямого расстояния между его узлами.
+  type HeapItem = { id: number; g: number; f: number };
+  const heap: HeapItem[] = [];
+  const less = (a: HeapItem, b: HeapItem) =>
+    a.f < b.f || (a.f === b.f && (a.g < b.g || (a.g === b.g && a.id < b.id)));
+  const pushHeap = (item: HeapItem) => {
+    let i = heap.length;
+    heap.push(item);
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (!less(heap[i], heap[parent])) break;
+      [heap[i], heap[parent]] = [heap[parent], heap[i]];
+      i = parent;
+    }
+  };
+  const popHeap = (): HeapItem | undefined => {
+    if (heap.length === 0) return undefined;
+    const first = heap[0];
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      for (;;) {
+        const left = i * 2 + 1, right = left + 1;
+        let smallest = i;
+        if (left < heap.length && less(heap[left], heap[smallest])) smallest = left;
+        if (right < heap.length && less(heap[right], heap[smallest])) smallest = right;
+        if (smallest === i) break;
+        [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+        i = smallest;
       }
     }
-    if (u === -1 || u === dst || best > directLen * 6 + 400) break;
-    visited[u] = 1;
-    for (const e of adj[u]) {
-      const nd = best + e.w;
-      if (nd < dist[e.to]) {
-        dist[e.to] = nd;
-        prev[e.to] = u;
-        prevRoad[e.to] = e.roadName;
+    return first;
+  };
+
+  const heuristic = (id: number) => Math.hypot(nodes[id].x - nodes[dst].x, nodes[id].z - nodes[dst].z);
+  const maxPathCost = directLen * 6 + 400;
+  pushHeap({ id: src, g: 0, f: heuristic(src) });
+  while (heap.length > 0) {
+    const current = popHeap()!;
+    const u = current.id;
+    if (closed[u] || current.g !== dist[u]) continue;
+    if (current.g > maxPathCost) break;
+    closed[u] = 1;
+    if (u === dst) break;
+    for (const edge of adj[u]) {
+      if (closed[edge.to]) continue;
+      const nextG = current.g + edge.w;
+      if (nextG < dist[edge.to]) {
+        dist[edge.to] = nextG;
+        prev[edge.to] = u;
+        prevRoad[edge.to] = edge.roadName;
+        pushHeap({ id: edge.to, g: nextG, f: nextG + heuristic(edge.to) });
       }
     }
   }
