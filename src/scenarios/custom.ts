@@ -288,6 +288,8 @@ export function customFromWorld(world: WorldData, title: string): CustomScenario
       ? { mapMeta: { ...world.mapMeta, bbox: [...world.mapMeta.bbox] as [number, number, number, number] } }
       : {}),
     bounds: { ...world.bounds },
+    ...(isValidBoundaryPolygon(world.boundaryPolygon) ? { boundaryPolygon: world.boundaryPolygon.map(p => ({ ...p })) } : {}),
+    perimeterCurb: undefined,
   };
 }
 
@@ -332,6 +334,7 @@ export function customFromOsmPack(pack: NormalizedOsmPack, customTitle?: string)
       bbox: [...pack.meta.bbox] as [number, number, number, number],
     },
     bounds: { ...pack.bounds },
+    ...(isValidBoundaryPolygon(pack.boundaryPolygon) ? { boundaryPolygon: pack.boundaryPolygon.map(p => ({ ...p })) } : {}),
   };
 }
 
