@@ -237,6 +237,10 @@ export type RoadSegment = {
   speedLimitKmh?: number;
   /** Радиус скругления углов осевой линии дороги, м; 0/undefined — острые углы. */
   cornerRadiusM?: number;
+  /** Высотный уровень OSM: положительное значение — эстакада/мост, отрицательное — тоннель. */
+  layer?: number;
+  /** Одностороннее движение по данным OSM. */
+  oneway?: boolean;
 };
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
