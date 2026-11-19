@@ -885,8 +885,11 @@ export function SimulatorView({
       const activeDrag = pointerDragRef.current;
       const orbiting = activeDrag?.id === e.pointerId && activeDrag.btn === 2;
       const steeringActive = mouseSteerMode === "free" || (activeDrag?.id === e.pointerId && activeDrag.btn === 0);
-      if (steeringActive && !orbiting && prevX !== null) {
-        const steerDx = e.clientX - prevX;
+      if (steeringActive && !orbiting) {
+        // После включения опции указатель может уже находиться над canvas:
+        // pointerenter тогда не повторится, поэтому используем movementX
+        // для первого события, пока предыдущая координата ещё не инициализирована.
+        const steerDx = prevX === null ? e.movementX : e.clientX - prevX;
         if (steerDx !== 0) {
           // Движение мыши вправо уменьшает swDeg (поворот вправо), без удержания ЛКМ.
           inputRef.current.steerWheelDeg = clamp(
