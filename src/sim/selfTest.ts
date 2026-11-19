@@ -538,9 +538,11 @@ export function runAllSelfTests(): TestCaseResult[] {
       suite: "strategy",
       name: "Стратегия: фазы, принципы, приоритеты и Markdown-экспорт согласованы",
       fn: () => {
-        assert(STRATEGY_PHASES.length === 6, `Ожидалось 6 фаз, получено ${STRATEGY_PHASES.length}`);
+        assert(STRATEGY_PHASES.length === 7, `Ожидалось 7 фаз, получено ${STRATEGY_PHASES.length}`);
         const statuses = STRATEGY_PHASES.map((p) => p.status);
         assert(statuses.filter((s) => s === "done").length === 3, "Фазы 0, 2 и 3 должны быть завершены");
+        assert(STRATEGY_PHASES.find((p) => p.id === "ph4")?.status === "active", "Фаза OSM и производительности должна быть активной");
+        assert(STRATEGY_PHASES.find((p) => p.id === "ph5")?.status === "next", "Каталог экзаменационных маршрутов должен быть следующим");
         assert(statuses.includes("active") && statuses.includes("next") && statuses.includes("later"), "Нет активных/следующих фаз");
         for (const p of STRATEGY_PHASES) {
           assert(p.goal.length > 0 && p.metric.length > 0, `Фаза ${p.num}: нет цели или метрики`);
