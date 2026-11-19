@@ -334,7 +334,6 @@ export function customFromOsmPack(pack: NormalizedOsmPack, customTitle?: string)
       bbox: [...pack.meta.bbox] as [number, number, number, number],
     },
     bounds: { ...pack.bounds },
-    ...(isValidBoundaryPolygon(pack.boundaryPolygon) ? { boundaryPolygon: pack.boundaryPolygon.map(p => ({ ...p })) } : {}),
   };
 }
 
