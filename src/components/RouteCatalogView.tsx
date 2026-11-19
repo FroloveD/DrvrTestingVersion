@@ -160,12 +160,15 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     } : current);
   };
 
-  const handleCheckpointPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
-    const marker = (event.target as Element).closest("[data-checkpoint-id]");
-    const checkpointId = marker?.getAttribute("data-checkpoint-id");
-    if (!checkpointId || !editing) return;
+  const handleCheckpointPointerDown = (
+    event: ReactPointerEvent<SVGCircleElement>,
+    checkpointId: string
+  ) => {
+    if (!editing) return;
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) return;
     dragCheckpointRef.current = checkpointId;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    svg.setPointerCapture(event.pointerId);
     event.preventDefault();
   };
 
@@ -483,7 +486,8 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                           <circle data-checkpoint-id={checkpoint.id} data-testid={`route-checkpoint-marker-${index}`}
                             cx={checkpoint.x} cy={-checkpoint.z} r={Math.max(5, checkpoint.radius)}
                             fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
-                            stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }} />
+                            stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }}
+                            onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)} />
                           <text x={checkpoint.x + Math.max(7, checkpoint.radius)} y={-checkpoint.z - Math.max(7, checkpoint.radius)}
                             fill="#ffffff" fontSize="12" fontWeight="bold" pointerEvents="none">{index + 1}</text>
                         </g>
