@@ -45,7 +45,7 @@ import {
   type JournalBackend,
 } from "./storage/journalStore";
 
-type TabId = "sim" | "custom" | "routes" | "debrief" | "analytics" | "instructor" | "tests" | "audit";
+type TabId = "sim" | "custom" | "debrief" | "analytics" | "instructor" | "tests" | "audit";
 
 const RULES_STORAGE = "cdt.ruleset.v1";
 const CAL_STORAGE = "cdt.calibration.v1";
@@ -100,6 +100,7 @@ function errorText(err: unknown): string {
 
 export default function App() {
   const [tab, setTab] = useState<TabId>("sim");
+  const [scenarioSection, setScenarioSection] = useState<"editor" | "routes">("editor");
   const [scenarioId, setScenarioId] = useState<ScenarioId>("bay_90");
   const [ruleSet, setRuleSet] = useState<RuleSet>(loadStoredRules);
   const [calibration, setCalibration] = useState<CalibrationConfig>(loadStoredCalibration);
@@ -303,8 +304,7 @@ export default function App() {
 
   const navItems: Array<{ id: TabId; label: string; short: string; icon: string; badge?: string; badgeTone?: "ok" | "bad" }> = [
     { id: "sim", label: "3D-Тренажёр", short: "Тренажёр", icon: "car" },
-    { id: "custom", label: "Свой сценарий", short: "Сценарий", icon: "file" },
-    { id: "routes", label: "Каталог маршрутов", short: "Маршруты", icon: "route" },
+    { id: "custom", label: "Сценарии", short: "Сценарии", icon: "file" },
     {
       id: "debrief",
       label: "Разбор и Реплей", short: "Разбор",
@@ -419,7 +419,20 @@ export default function App() {
         </div>
 
         {tab === "custom" && (
-          <CustomScenarioView
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-xl font-extrabold">Сценарии</h2>
+                <p className="text-xs text-[#8fa2ae] mt-1">Создание собственных упражнений и управление маршрутами на OSM-картах.</p>
+              </div>
+              <div className="inline-flex rounded-xl border border-white/10 bg-black/20 p-1 gap-1" role="tablist" aria-label="Разделы сценариев">
+                <button type="button" role="tab" aria-selected={scenarioSection === "editor"} onClick={() => setScenarioSection("editor")}
+                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${scenarioSection === "editor" ? "bg-[#f5b942]/15 text-[#f5b942] border border-[#f5b942]/40" : "text-[#9bafbc] hover:text-white"}`}>Конструктор</button>
+                <button type="button" role="tab" aria-label="Каталог маршрутов" aria-selected={scenarioSection === "routes"} onClick={() => setScenarioSection("routes")}
+                  className={`px-3 py-2 rounded-lg text-xs font-bold transition ${scenarioSection === "routes" ? "bg-[#f5b942]/15 text-[#f5b942] border border-[#f5b942]/40" : "text-[#9bafbc] hover:text-white"}`}><Icon name="route" size={14} /> Каталог маршрутов</button>
+              </div>
+            </div>
+            {scenarioSection === "editor" && <CustomScenarioView
             def={customDef}
             onChange={setCustomDef}
             calibration={calibration}
@@ -429,20 +442,18 @@ export default function App() {
               notify("Свой сценарий открыт в 3D-тренажёре (пункт 4)");
             }}
             onNotify={notify}
-          />
-        )}
-
-        {tab === "routes" && (
-          <RouteCatalogView
-            sourceDef={customDef}
-            onOpenRoute={(scenario) => {
-              setCustomDef(scenario);
-              setScenarioId("custom");
-              setTab("sim");
-              notify(`Маршрут «${scenario.title}» открыт в 3D-тренажёре`);
-            }}
-            onNotify={notify}
-          />
+            />}
+            {scenarioSection === "routes" && <RouteCatalogView
+              sourceDef={customDef}
+              onOpenRoute={(scenario) => {
+                setCustomDef(scenario);
+                setScenarioId("custom");
+                setTab("sim");
+                notify(`Маршрут «${scenario.title}» открыт в 3D-тренажёре`);
+              }}
+              onNotify={notify}
+            />}
+          </>
         )}
 
         {tab === "debrief" && (
