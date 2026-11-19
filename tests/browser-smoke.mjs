@@ -1110,6 +1110,7 @@ try {
     });
     await sleep(350);
     await tab(page, "Каталог маршрутов");
+    await page.getByLabel("Название маршрута").fill("Маршрут P");
     const svg = page.locator('svg[aria-label^="Схема дорожной сети OSM"]');
     await svg.waitFor({ state: "visible" });
     const clicks = await svg.evaluate((element) => {
@@ -1153,7 +1154,7 @@ try {
         await page.getByRole("button", { name: /Открыть/ }).first().click();
         await sleep(600);
         check("P5 сохранённый маршрут открывается в 3D-тренажёре",
-          (await low(page)).includes("маршрут через дорожную сеть") || (await low(page)).includes("улица каталожная"));
+          (await low(page)).includes("маршрут p"));
         await tab(page, "Каталог маршрутов");
         await page.reload();
         await sleep(500);
