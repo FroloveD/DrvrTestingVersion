@@ -283,7 +283,7 @@ requestAnimationFrame(now)
 - `src/maps/osmXml.ts` разбирает XML-узлы, дороги, отношения multipolygon и `<bounds>` без DOMParser.
 - `src/maps/osmDeconflict.ts` содержит геометрию дорожных коридоров и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости.
 - `src/maps/osmLoader.ts` нормализует OSM XML, Overpass JSON и GeoJSON: `oneway=-1`, roundabout, service, lanes/width, мосты/тоннели по `layer`, multipolygon-дома с дворами и WGS84 origin.
-- `src/maps/route.ts` строит кандидаты и граф дорожной сети с учётом направления и уровня дороги; `cropOsmPackToPolygon()` ограничивает импорт произвольным полигоном.
+- `src/maps/route.ts` строит кандидаты и граф дорожной сети с учётом направления и уровня дороги; узлы/сегменты индексируются пространственно, поиск пути выполняется A*; `cropOsmPackToPolygon()` ограничивает импорт произвольным полигоном.
 - `src/maps/routeCatalog.ts` строит сохраняемую запись между двумя точками, валидирует связность и границы, создаёт КТ и snapshot исходной карты.
 - `src/storage/routeCatalogStore.ts` хранит записи каталога в отдельной IndexedDB `cdt-route-catalog`; интерфейс находится в `src/components/RouteCatalogView.tsx`.
 
