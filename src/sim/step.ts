@@ -280,8 +280,9 @@ export function stepSimulation(
 
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
   const throttle = clamp(input.throttle, 0, 1);
+  const throttleMultiplier = clamp(input.throttleMultiplier ?? 1, 1, 2);
   const brake = clamp(input.brake, 0, 1);
-  let accel = computeEngineAccel(throttle, s.gear, s.autoSubGear, s.v, s.engineOn, s.handbrake);
+  let accel = computeEngineAccel(throttle, s.gear, s.autoSubGear, s.v, s.engineOn, s.handbrake) * throttleMultiplier;
 
   if (s.v !== 0) {
     const drag = CAR.rollRes + 0.0018 * s.v * s.v + 0.015 * Math.abs(s.v);
