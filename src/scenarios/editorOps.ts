@@ -231,7 +231,7 @@ export function placeObjectAt(
 
   if (tool === "road") {
     const id = nextRoadId(def);
-    const road = createDefaultRoad(id, x, z, h);
+    const road = { ...createDefaultRoad(id, x, z, h), width: opts.roadWidth ?? 7.5, cornerRadiusM: opts.cornerRadiusM ?? 0 };
     let nextBounds = bounds;
     for (const p of road.points) nextBounds = expandBoundsIfNeeded(nextBounds, p.x, p.z, 10);
     return {
