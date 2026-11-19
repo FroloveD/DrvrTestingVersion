@@ -305,17 +305,13 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           e.preventDefault();
           handleDelete();
         }
-      } else if (tool === "boundary" && e.code === "Enter" && draftBoundary.length >= 3) {
-        e.preventDefault(); handleFinishBoundary(draftBoundary);
-      } else if (tool === "boundary" && e.code === "Escape") {
-        e.preventDefault(); handleCancelBoundary();
       } else if (e.code === "Escape") {
         setTool("select");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [draftBoundary, handleCancelBoundary, handleDelete, handleDuplicate, handleFinishBoundary, handleRedo, handleUndo, selection, tool]);
+  }, [handleDelete, handleDuplicate, handleRedo, handleUndo, selection]);
 
   const applyImportedScenario = (next: CustomScenarioDef, message: string) => {
     commitChange(next, def);
@@ -376,6 +372,18 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     setFitSignal((n) => n + 1); onNotify("Произвольный контур сброшен");
   };
   const handleCancelBoundary = () => { setDraftBoundary([]); setTool("select"); };
+
+  useEffect(() => {
+    if (tool !== "boundary") return;
+    const onBoundaryKey = (e: KeyboardEvent) => {
+      if (isEditableElement(e.target)) return;
+      if (e.code === "Enter" && draftBoundary.length >= 3) { e.preventDefault(); handleFinishBoundary(draftBoundary); }
+      else if (e.code === "Escape") { e.preventDefault(); handleCancelBoundary(); }
+      else if (e.code === "Backspace" && draftBoundary.length > 0) { e.preventDefault(); setDraftBoundary(v => v.slice(0,-1)); }
+    };
+    window.addEventListener("keydown", onBoundaryKey);
+    return () => window.removeEventListener("keydown", onBoundaryKey);
+  }, [draftBoundary, handleCancelBoundary, handleFinishBoundary, tool]);
 
   const handleFitBounds = () => {
     const fitted = fitBoundsToContent(def, 12);
