@@ -251,6 +251,56 @@ export function predictTrajectoryArc(
   return { leftTrack, rightTrack };
 }
 
+/**
+ * Записывает прогнозную траекторию в заранее выделенные XYZ-буферы.
+ * Не создаёт массивов и объектов точек; предназначено для горячего пути 3D-рендера.
+ * Порядок точек и формулы совпадают с predictTrajectoryArc().
+ */
+export function writeTrajectoryArcPositions(
+  x: number,
+  z: number,
+  h: number,
+  steer: number,
+  reverse: boolean,
+  leftPositions: Float32Array,
+  rightPositions: Float32Array,
+  distance = 6.5,
+  steps = 18,
+  y = 0.06
+): void {
+  const requiredLength = (steps + 1) * 3;
+  if (!Number.isInteger(steps) || steps < 1 || leftPositions.length < requiredLength || rightPositions.length < requiredLength) {
+    throw new RangeError("Недостаточная длина буфера траектории Аккермана");
+  }
+
+  const dir = reverse ? -1 : 1;
+  const ds = (distance / steps) * dir;
+  let cx = x;
+  let cz = z;
+  let ch = h;
+  const halfW = CAR.width / 2;
+  const zLocal = reverse ? -(CAR.wheelbase / 2 + CAR.rearOverhang) : CAR.wheelbase / 2 + CAR.frontOverhang;
+
+  for (let i = 0; i <= steps; i++) {
+    const fx = Math.sin(ch);
+    const fz = Math.cos(ch);
+    const lx = Math.cos(ch);
+    const lz = -Math.sin(ch);
+    const offset = i * 3;
+
+    leftPositions[offset] = cx + fx * zLocal + lx * halfW;
+    leftPositions[offset + 1] = y;
+    leftPositions[offset + 2] = cz + fz * zLocal + lz * halfW;
+    rightPositions[offset] = cx + fx * zLocal - lx * halfW;
+    rightPositions[offset + 1] = y;
+    rightPositions[offset + 2] = cz + fz * zLocal - lz * halfW;
+
+    cx += Math.sin(ch) * ds;
+    cz += Math.cos(ch) * ds;
+    ch += (ds / CAR.wheelbase) * Math.tan(steer);
+  }
+}
+
 /** Детерминированный расчёт фазы светофора от модельного времени (с). */
 export function getTrafficLightPhase(
   sig: TrafficSignalDef,
