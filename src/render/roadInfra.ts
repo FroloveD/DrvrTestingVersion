@@ -6,6 +6,7 @@
  * @tests Смоук A, L, O, P (`tests/browser-smoke.mjs`)
  */
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { roadGeometryPoints } from "../maps/route";
 import type { CrosswalkDef, ObstacleBox, RoadSignDef, TrafficSignalDef, WorldData } from "../sim/types";
 import {
@@ -306,6 +307,19 @@ export function buildWorldRoadsAndSidewalks(
     return false;
   };
 
+  // Непрозрачные плоские элементы дороги объединяются по материалу и ячейкам 192×192 м.
+  // Геометрия/UV остаются прежними; трансформы запекаются в вершины, поэтому меняется только число draw calls.
+  const flatBatchCellSize = 192;
+  type FlatMeshBatch = {
+    material: THREE.Material;
+    receiveShadow: boolean;
+    centerX: number;
+    centerZ: number;
+    geometries: THREE.BufferGeometry[];
+  };
+  const flatMeshBatches = new Map<string, FlatMeshBatch>();
+  const flatTransform = new THREE.Object3D();
+
   const addFlatMesh = (
     geo: THREE.BufferGeometry,
     mat: THREE.Material,
@@ -315,13 +329,40 @@ export function buildWorldRoadsAndSidewalks(
     angle: number,
     recvShadow = false
   ) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.rotation.order = "YXZ";
-    m.rotation.y = angle;
-    m.rotation.x = -Math.PI / 2;
-    m.position.set(x, y, z);
-    if (recvShadow) m.receiveShadow = true;
-    group.add(m);
+    // Прозрачные decals оставляем отдельными: у них важна сортировка по глубине.
+    if (mat.transparent || geo.groups.length > 0) {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.order = "YXZ";
+      mesh.rotation.y = angle;
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(x, y, z);
+      if (recvShadow) mesh.receiveShadow = true;
+      group.add(mesh);
+      return;
+    }
+
+    const cellX = Math.floor(x / flatBatchCellSize);
+    const cellZ = Math.floor(z / flatBatchCellSize);
+    const centerX = (cellX + 0.5) * flatBatchCellSize;
+    const centerZ = (cellZ + 0.5) * flatBatchCellSize;
+    const attributeLayout = Object.entries(geo.attributes)
+      .map(([name, attribute]) => `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`)
+      .sort()
+      .join("|");
+    const key = `${mat.uuid}|${recvShadow ? 1 : 0}|${cellX},${cellZ}|${attributeLayout}`;
+    let batch = flatMeshBatches.get(key);
+    if (!batch) {
+      batch = { material: mat, receiveShadow: recvShadow, centerX, centerZ, geometries: [] };
+      flatMeshBatches.set(key, batch);
+    }
+
+    flatTransform.position.set(x - centerX, y, z - centerZ);
+    flatTransform.rotation.order = "YXZ";
+    flatTransform.rotation.y = angle;
+    flatTransform.rotation.x = -Math.PI / 2;
+    flatTransform.scale.set(1, 1, 1);
+    flatTransform.updateMatrix();
+    batch.geometries.push(geo.clone().applyMatrix4(flatTransform.matrix));
   };
 
   let segSerial = 0;
@@ -678,6 +719,30 @@ export function buildWorldRoadsAndSidewalks(
         }
       }
     }
+  }
+
+  for (const batch of flatMeshBatches.values()) {
+    const merged = batch.geometries.length === 1
+      ? batch.geometries[0]
+      : mergeGeometries(batch.geometries, false);
+    if (!merged) {
+      // Консервативный fallback: не теряем геометрию, если конкретная пара атрибутов несовместима.
+      for (const geometry of batch.geometries) {
+        const mesh = new THREE.Mesh(geometry, batch.material);
+        mesh.position.set(batch.centerX, 0, batch.centerZ);
+        mesh.receiveShadow = batch.receiveShadow;
+        group.add(mesh);
+      }
+      continue;
+    }
+    if (batch.geometries.length > 1) {
+      for (const geometry of batch.geometries) geometry.dispose();
+    }
+    const mesh = new THREE.Mesh(merged, batch.material);
+    mesh.position.set(batch.centerX, 0, batch.centerZ);
+    mesh.receiveShadow = batch.receiveShadow;
+    mesh.name = "road-flat-batch";
+    group.add(mesh);
   }
 }
 
