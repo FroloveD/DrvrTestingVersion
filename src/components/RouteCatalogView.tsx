@@ -5,7 +5,7 @@
  * @tests T32–T33 (ядро маршрутизации), Browser Smoke P.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import {
   buildExamRouteRecord,
@@ -64,12 +64,12 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const [routeMapFilter, setRouteMapFilter] = useState("all");
   const [routeLengthFilter, setRouteLengthFilter] = useState("all");
   const [routeManeuverFilter, setRouteManeuverFilter] = useState("all");
-  const dragCheckpointRef = useRef<{ checkpointId: string; pointerId: number | null; svg: SVGSVGElement } | null>(null);
+  const dragCheckpointRef = useRef<{ checkpointId: string; pointerId: number; svg: SVGSVGElement } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Pointer events cover pen/touch; mouse events provide a direct desktop fallback.
-    // Both paths share the same SVG coordinate conversion and update logic.
+    // Pointer Events cover mouse, pen and touch. Keep one event path so compatibility
+    // mouse events cannot overwrite the active pointer id during a drag.
     const moveCheckpoint = (drag: NonNullable<typeof dragCheckpointRef.current>, clientX: number, clientY: number) => {
       const matrix = drag.svg.getScreenCTM();
       if (!matrix) return;
@@ -88,33 +88,20 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     };
     const handlePointerMove = (event: PointerEvent) => {
       const drag = dragCheckpointRef.current;
-      if (!drag || drag.pointerId === null || drag.pointerId !== event.pointerId) return;
-      moveCheckpoint(drag, event.clientX, event.clientY);
-      event.preventDefault();
-    };
-    const handleMouseMove = (event: globalThis.MouseEvent) => {
-      const drag = dragCheckpointRef.current;
-      if (!drag || drag.pointerId !== null) return;
+      if (!drag || drag.pointerId !== event.pointerId) return;
       moveCheckpoint(drag, event.clientX, event.clientY);
       event.preventDefault();
     };
     const handlePointerEnd = (event: PointerEvent) => {
       if (dragCheckpointRef.current?.pointerId === event.pointerId) dragCheckpointRef.current = null;
     };
-    const handleMouseEnd = () => {
-      if (dragCheckpointRef.current?.pointerId === null) dragCheckpointRef.current = null;
-    };
     window.addEventListener("pointermove", handlePointerMove, { passive: false });
     window.addEventListener("pointerup", handlePointerEnd);
     window.addEventListener("pointercancel", handlePointerEnd);
-    window.addEventListener("mousemove", handleMouseMove, { passive: false });
-    window.addEventListener("mouseup", handleMouseEnd);
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseEnd);
       dragCheckpointRef.current = null;
     };
   }, []);
@@ -237,12 +224,6 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     if (!editing || event.button !== 0) return;
     const svg = event.currentTarget.ownerSVGElement;
     if (!svg) return;
-    // Playwright/desktop mouse input is handled through the native mouse event path.
-    dragCheckpointRef.current = { checkpointId, pointerId: null, svg };
-    event.preventDefault();
-    event.stopPropagation();
-  };
-
   const handleSaveEdit = async (route: ExamRouteRecord) => {
     if (!editing || editing.id !== route.id) return;
     const revised = reviseExamRouteRecord(route, editing.title, editing.checkpoints, new Date().toISOString());
