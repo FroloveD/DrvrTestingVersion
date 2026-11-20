@@ -7,7 +7,7 @@
 ## 0. Промпт для вставки в новый чат
 
 ```text
-Продолжаем CityDrivingTraining — офлайн 3D-тренажёр вождения (React 19 + Vite + Three.js 0.187, всё в одном dist/index.html).
+Продолжаем CityDrivingTraining — 3D-тренажёр вождения (React 19 + Vite + Three.js 0.187, всё в одном dist/index.html; симуляция работает офлайн, интернет-радио подключается по действию пользователя).
 
 Прочитай целиком AGENTS.md, HANDOFF.md и WORKLOG.md в корне репозитория (при работе с ядром и рендером — docs/ARCHITECTURE.md и docs/ADR.md).
 
@@ -16,7 +16,7 @@
   ./node_modules/.bin/esbuild src/sim/selfTest.ts --bundle --platform=node --format=esm --outfile=/tmp/st.mjs --log-level=error && node --input-type=module -e "const {runAllSelfTests}=await import('/tmp/st.mjs');const r=runAllSelfTests();console.log(r.filter(t=>!t.passed));if(r.some(t=>!t.passed))process.exit(1)"
   npm run build && node scripts/run-tests.mjs --check-dist
 
-Правила работы: правки точечные; src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy — без импортов three, window и document; ничего не загружаем из сети; правила оценки и размеры боксов не выдаём за норматив ГИБДД (статус unvalidated до подписи инструктора); package.json и vite.config.ts руками не правим; после каждого шага обновляем WORKLOG.md.
+Правила работы: правки точечные; src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy — без импортов three, window и document; ничего не загружаем из сети; правила оценки и размеры боксов не выдаём за норматив ГИБДД (статус unvalidated до подписи инструктора); интернет-радио — единственная штатная функция с внешним сетевым потоком; package.json и vite.config.ts руками не правим; после каждого шага обновляем WORKLOG.md.
 
 Задача: <опиши задачу>
 ```
@@ -31,8 +31,8 @@
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
 | Тесты ядра | 34 автотеста ядра (T01–T34), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
-| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–Q (Playwright + headless Chromium, автозапуск в CI) |
+| Сеть | базовая симуляция локальна; внешние радиопотоки запрашиваются только после запуска радио пользователем; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
 
@@ -110,23 +110,26 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
 | `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
 | `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |
-| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда и raycast 3D-селектора |
+| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда, живые дисплеи и raycast органов салона/селектора |
 | `src/render/cityBuildings.ts` | процедурные фасады зданий РФ/СНГ, деревья и облачное небо |
 | `src/render/roadInfra.ts`, `src/render/roadTextures.ts` | PBR-дороги, тротуары, бордюры, разметка, знаки, светофоры и уличная инфраструктура ГОСТ |
 | `src/render/roadSignTextures.ts` | процедурные отражающие текстуры 12 классов дорожных знаков и дополнительные таблички |
 | `src/render/vehiclesAndPeds.ts` | пять детализированных Kia, салон, 3D-рычаг Shiftronic и hit-зоны органов управления |
+| `src/render/cockpitDisplays.ts` | текстуры приборной панели, ШГУ и камеры заднего вида |
+| `src/audio/engineSound.ts`, `src/audio/radioCatalog.ts`, `src/audio/trackStore.ts` | Web Audio двигатель/шины/клаксон/реле, FM-каталог и IndexedDB-кэш треков |
+| `src/input/keyBindings.ts`, `src/components/KeyBindingsEditor.tsx` | переназначаемая клавиатура с проверкой конфликтов |
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |
 | `src/storage/routeCatalogStore.ts` | IndexedDB `cdt-route-catalog` v2: `routes` хранит маршруты, `maps` — общие OSM snapshot по fingerprint; миграция v1 → v2 |
 | `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, экспорт strategy.md |
 | `src/render/headLook.ts`, `src/render/cockpitFraming.ts` | кадрировка салона по модели Kia, точки внимания зеркал/дороги и инерция головы |
-| `src/components/SimulatorView.tsx` | управление сценой, вид из салона, обзор головы, drag-селектор АКПП, HUD и запись заезда |
+| `src/components/SimulatorView.tsx`, `src/components/HeadUnitPanel.tsx` | управление сценой, интерактивные органы салона, ШГУ/радио, HUD, звук и запись заезда |
 | `src/components/RouteCatalogView.tsx` | выбор начала/конца на SVG-схеме OSM, проверка, сохранение, импорт/экспорт и открытие маршрута |
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–P |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–Q |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
@@ -164,6 +167,12 @@ localStorage:
 
 ```text
 cdt.layout.v1           позиции и размеры плавающих панелей HUD
+cdt.panelState.v1       свёрнутые и закрытые панели HUD
+cdt.layoutOrder.v1      порядок слоёв HUD
+cdt.keybindings.v1      назначения клавиш
+cdt.sound.v1            главный переключатель звука
+cdt.soundLayers.v1      отдельные слои двигателя, клаксона и реле
+cdt.headUnit.v1         настройки режима ШГУ, станции и громкости
 cdt.controls.v1         скорость клавиш A/D, режимы руления мышью и опции мышиного газа
 cdt.calibration.v1      размеры боксов, выворот колёс, табличка «У»
 cdt.ruleset.v1          активный набор правил
