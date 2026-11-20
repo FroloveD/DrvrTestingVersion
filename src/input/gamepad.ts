@@ -119,6 +119,7 @@ function noButtons(): GamepadButtons {
     signalRight: false,
     gearDrive: false,
     gearReverse: false,
+    horn: false,
   };
 }
 
