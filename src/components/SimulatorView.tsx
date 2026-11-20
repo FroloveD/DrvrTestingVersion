@@ -20,7 +20,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
 import { HeadUnitPanel } from "./HeadUnitPanel";
-import { DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "../render/cockpitDisplays";
+import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_MODES, type HeadUnitState } from "../render/cockpitDisplays";
+import { nextStationIndex } from "../audio/radioCatalog";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { EngineSound } from "../audio/engineSound";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
@@ -63,7 +64,7 @@ import { Chip, Icon } from "./Icons";
 import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
@@ -302,6 +303,7 @@ export function SimulatorView({
   headUnitRef.current = headUnit;
   const engineSoundRef = useRef<EngineSound | null>(null);
   const lastEngineSoundAtRef = useRef(0);
+  const hornPulseUntilRef = useRef(0);
   useEffect(() => {
     try {
       localStorage.setItem("cdt.headUnit.v1", JSON.stringify({ ...headUnit, radioPlaying: false, streamStatus: "idle" }));
@@ -543,6 +545,49 @@ export function SimulatorView({
     }));
   }, [onNotify]);
 
+  const pressCockpitControl = useCallback((id: CockpitControlId) => {
+    const inp = inputRef.current;
+    sceneCtrlRef.current?.setCockpitControlInteraction(null, id);
+    switch (id) {
+      case "headunit":
+        setHeadUnit((prev) => {
+          const index = HEAD_UNIT_MODES.findIndex((mode) => mode.id === prev.mode);
+          const mode = HEAD_UNIT_MODES[(index + 1 + HEAD_UNIT_MODES.length) % HEAD_UNIT_MODES.length].id;
+          return { ...prev, mode, radioPlaying: mode === "radio" ? prev.radioPlaying : false };
+        });
+        break;
+      case "vol":
+        setHeadUnit((prev) => ({ ...prev, mode: "radio", source: "stream", savedTrackKey: null, radioPlaying: !prev.radioPlaying }));
+        break;
+      case "tune":
+        setHeadUnit((prev) => ({ ...prev, mode: "radio", source: "stream", savedTrackKey: null, stationIndex: nextStationIndex(prev.stationIndex, 1), radioPlaying: true }));
+        break;
+      case "hazard":
+        setTurnSignal(inp.signal === "hazard" ? null : "hazard");
+        break;
+      case "start":
+        toggleEngine();
+        break;
+      case "headlight":
+        inp.lights = !inp.lights;
+        onNotify(inp.lights ? "Ближний свет включён" : "Ближний свет выключен");
+        break;
+      case "stalk-left":
+        setTurnSignal(inp.signal === null ? "left" : inp.signal === "left" ? "right" : null);
+        break;
+      case "handbrake":
+        inp.handbrake = !inp.handbrake;
+        onNotify(inp.handbrake ? "Стояночный тормоз затянут" : "Стояночный тормоз снят");
+        break;
+      case "horn":
+        if (!engineSoundRef.current) engineSoundRef.current = new EngineSound();
+        engineSoundRef.current.ensureStarted();
+        hornPulseUntilRef.current = performance.now() + 600;
+        onNotify("Короткий звуковой сигнал");
+        break;
+    }
+  }, [onNotify, setTurnSignal, toggleEngine]);
+
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
   useEffect(() => {
     actionsRef.current = { toggleEngine, setGear, setTurnSignal };
@@ -736,6 +781,7 @@ export function SimulatorView({
             rpm: soundState.rpm,
             throttle: inputRef.current.throttle,
             speedKmh: Math.abs(soundState.v) * 3.6,
+            horn: performance.now() < hornPulseUntilRef.current,
           });
         }
       }
@@ -1035,6 +1081,7 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerLeave = () => {
+    sceneCtrlRef.current?.setCockpitControlInteraction(null);
     if (shifterDragRef.current) return;
     shifterHoverRef.current = null;
     sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
@@ -1047,6 +1094,12 @@ export function SimulatorView({
     if (e.button === 0 && cameraMode === "cockpit") {
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
       const ctrl = sceneCtrlRef.current;
+      const control = pos && ctrl ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      if (control && pos && ctrl) {
+        e.preventDefault();
+        pressCockpitControl(control);
+        return;
+      }
       const hit = pos && ctrl ? ctrl.pickCockpitShifter(pos.x, pos.y) : null;
       if (hit && pos && ctrl) {
         e.preventDefault();
@@ -1104,6 +1157,13 @@ export function SimulatorView({
       }
       return;
     }
+    if (!pointerDragRef.current && cameraMode === "cockpit" && ctrl) {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const control = pos ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      ctrl.setCockpitControlInteraction(control);
+      if (control) return;
+    }
+
     if (e.pointerType === "mouse" && mouseSteerEnabled) {
       const prevX = mouseSteerXRef.current;
       const activeDrag = pointerDragRef.current;
