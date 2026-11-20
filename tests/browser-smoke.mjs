@@ -1411,9 +1411,17 @@ try {
     await firstCar.click();
     const carSelected = (await firstCar.getAttribute("aria-pressed")) === "true";
     const radioOptions = await page.locator('[data-testid^="editor-radio-"]').count();
-    check("Q3 редактор сценария показывает выбор автомобиля и список радиостанций",
-      carSelected && radioOptions > 0,
-      JSON.stringify({ carSelected, radioOptions }));
+    await page.getByLabel("Свернуть Автомобиль и радио").click();
+    const editorCollapsed = (await page.getByTestId("editor-car-panel").count()) === 0;
+    await page.getByLabel("Развернуть Автомобиль и радио").click();
+    const editorExpanded = (await page.getByTestId("editor-car-panel").count()) === 1;
+    await page.getByLabel("Закрыть Автомобиль и радио").click();
+    const editorClosed = (await page.getByTestId("editor-car-panel").count()) === 0;
+    await page.getByRole("button", { name: "+ Автомобиль и радио" }).click();
+    const editorRestored = (await page.getByTestId("editor-car-panel").count()) === 1;
+    check("Q3 редактор сценария выбирает машину/радиостанции и сворачивает/закрывает/восстанавливает панели",
+      carSelected && radioOptions > 0 && editorCollapsed && editorExpanded && editorClosed && editorRestored,
+      JSON.stringify({ carSelected, radioOptions, editorCollapsed, editorExpanded, editorClosed, editorRestored }));
 
     await tab(page, "3D-Тренажёр");
     await page.getByRole("button", { name: /Завершить.*Разбор/ }).click();
