@@ -278,7 +278,17 @@ export class SceneController {
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    const skyTex = makeCloudySkyTexture();
+    // Определяем программный WebGL до создания текстуры: на SwiftShader/llvmpipe
+    // используем дешёвый UV-фон и не строим PMREM.
+    let softwareRenderer = false;
+    try {
+      const gl = this.renderer.getContext();
+      const baseRenderer = String(gl.getParameter(gl.RENDERER) ?? "");
+      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+      const unmaskedRenderer = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) ?? "") : "";
+      softwareRenderer = /swiftshader|subzero|llvmpipe|softpipe|software/i.test(`${baseRenderer} ${unmaskedRenderer}`);
+    } catch { softwareRenderer = false; }
+    const skyTex = makeCloudySkyTexture(!softwareRenderer);
     const shadowTex = makeContactShadowTexture();
     const learnerTex = makeLearnerSignTexture();
     const grassTex = makeUrbanGrassTexture();
@@ -291,15 +301,7 @@ export class SceneController {
     this.scene.background = skyTex;
     this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
 
-    // PBR Image-Based Lighting: один PMREM от той же equirectangular sky-текстуры.
-    // На SwiftShader/llvmpipe пропускаем дорогой PMREM и оставляем дневные источники света.
-    let softwareRenderer = false;
-    try {
-      const gl = this.renderer.getContext();
-      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
-      const rendererName = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : "";
-      softwareRenderer = /swiftshader|llvmpipe|softpipe|software/i.test(rendererName);
-    } catch { softwareRenderer = false; }
+    // PBR Image-Based Lighting: один PMREM от 360°-неба на реальном GPU.
     if (!softwareRenderer) {
       let pmrem: THREE.PMREMGenerator | null = null;
       try {
@@ -312,6 +314,8 @@ export class SceneController {
         this.envMapRT = null;
       } finally { pmrem?.dispose(); }
     }
+
+
 
     this.camera = new THREE.PerspectiveCamera(56, 16 / 9, 0.12, 420);
 
