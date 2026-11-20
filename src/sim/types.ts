@@ -249,6 +249,9 @@ export type RoadSegment = {
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
 
+/** Автомобиль игрока из парка Kia; отсутствие поля сохраняет совместимость старых сценариев (Ceed JD). */
+export type PlayerCarId = "picanto" | "rio" | "ceed" | "xceed" | "sorento";
+
 export type CalibrationConfig = {
   /** Предел внутреннего переднего колеса, градусы. Старые записи без поля используют 35°. */
   maxInnerWheelDeg?: number;
@@ -314,6 +317,8 @@ export type WorldBounds = { minX: number; maxX: number; minZ: number; maxZ: numb
 
 export type WorldData = {
   scenarioId: ScenarioId;
+  /** Выбранный автомобиль игрока; старые миры используют Ceed JD. */
+  playerCarId?: PlayerCarId;
   title: string;
   subtitle: string;
   examinerBrief: string;
