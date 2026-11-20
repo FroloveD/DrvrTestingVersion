@@ -1156,6 +1156,14 @@ export function SimulatorView({
           </button>
           <button
             type="button"
+            className="btn btn-mini"
+            onClick={onToggleImmersive}
+            title="Полноэкранный режим без меню и панелей интерфейса"
+          >
+            <Icon name="maximize" size={13} /> Полный экран
+          </button>
+          <button
+            type="button"
             className="btn btn-primary btn-mini"
             onClick={handleFinishAndDebrief}
           >
