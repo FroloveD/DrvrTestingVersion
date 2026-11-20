@@ -18,6 +18,8 @@
  * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
 import { parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
@@ -218,6 +220,8 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [bindings, setBindings] = useState<KeyBindings>(loadKeyBindings);
+  const bindingsRef = useRef(bindings);
   const [showHelp, setShowHelp] = useState(false);
   const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
   const [quickStartUsed, setQuickStartUsed] = useState(false);
@@ -333,6 +337,14 @@ export function SimulatorView({
   }, []);
 
   const keysRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    bindingsRef.current = bindings;
+    keysRef.current = {};
+    inputRef.current.throttle = 0;
+    inputRef.current.brake = 0;
+    try { localStorage.setItem("cdt.keybindings.v1", JSON.stringify(bindings)); }
+    catch { onNotify("Не удалось сохранить клавиши: хранилище браузера недоступно"); }
+  }, [bindings, onNotify]);
   const touchPedalRef = useRef<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
   const pedalOwner = useRef<{ gas: number | null; brake: number | null }>({ gas: null, brake: null });
   const canvasGasHoldTimerRef = useRef<number | null>(null);
@@ -798,7 +810,8 @@ export function SimulatorView({
       // Слайдеру оставляем стрелки, Home и End. Клавиши вождения работают и после настройки.
       const drivingFromSlider = e.target instanceof HTMLInputElement && e.target.type === "range" && /^Key[A-Z]$/.test(e.code);
       if (isEditable(e.target) && !drivingFromSlider) return;
-      const code = e.code;
+      const code = logicalKey(bindingsRef.current, e.code);
+      if (code === "unbound") return;
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
         e.preventDefault();
       }
@@ -893,7 +906,8 @@ export function SimulatorView({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
+      const logical = logicalKey(bindingsRef.current, e.code);
+      if (logical !== "unbound") keysRef.current[logical] = false;
     };
 
     const onBlur = () => {
@@ -1650,6 +1664,7 @@ export function SimulatorView({
               </button>
             </div>
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
+            <KeyBindingsEditor value={bindings} onChange={setBindings} />
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7] mb-2">
