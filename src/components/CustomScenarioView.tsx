@@ -224,6 +224,10 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
 
   const validation = useMemo(() => validateCustomScenario(def), [def]);
   const blocked = validation.errors.length > 0;
+  // Imported OSM geometry may contain editor-only validation warnings (e.g. large
+  // footprints) while still being a valid renderable simulator world. Do not trap
+  // the user in the editor when a parsed road network is available.
+  const canOpenInSimulator = !blocked || Boolean(def.mapMeta && (def.roads?.length ?? 0) > 0);
 
   const commitChange = useCallback(
     (next: CustomScenarioDef, before: CustomScenarioDef = def) => {
@@ -490,8 +494,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           <button
             type="button"
             className="btn btn-primary"
-            disabled={blocked}
-            title={blocked ? "Исправьте ошибки валидации" : "Открыть карту в 3D-тренажёре (пункт 4)"}
+            disabled={!canOpenInSimulator}
+            title={!canOpenInSimulator ? "Исправьте ошибки валидации" : blocked ? "Открыть импортированную OSM-карту в 3D; замечания редактора останутся видны" : "Открыть карту в 3D-тренажёре (пункт 4)"}
             onClick={onOpenInSimulator}
           >
             <Icon name="car" size={15} /> Открыть в тренажёре →
