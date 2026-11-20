@@ -100,7 +100,7 @@ import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt
 import { isCarInsideBay, SpatialGrid } from "./spatialGrid";
 import { radioStationsFor } from "../audio/radioCatalog";
 import { cockpitFramingFor, cockpitWheelBand, projectCockpitPoint } from "../render/cockpitFraming";
-import { HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
+import { dampedHeadStep, HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
 import { DEFAULT_PLAYER_CAR_ID, PLAYER_CARS, getPlayerCar, playerCarPhysics } from "./playerCar";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { Gear, SimEvent } from "./types";
@@ -1808,6 +1808,44 @@ export const extraCases: SelfTestCase[] = [
       assert(
         Math.abs(afterOneFrame) < Math.abs(targetYaw) * 0.5,
         "За один кадр голова не должна телепортироваться в зеркало — только часть пути"
+      );
+
+      // 2b. Довод не должен зависеть от ЧИСЛА КАДРОВ, только от времени: медленный headless-рендер
+      // (из-за него падал смоук K9: голова шагала по фиксированным 1/60 и за 0,4 с почти не двигалась)
+      const target = detentYawRad(1);
+      const settle = (frameDt: number) => {
+        let yaw = 0;
+        let steps = 0;
+        while (Math.abs(target - yaw) > Math.abs(target) * 0.02 && steps < 5000) {
+          yaw = dampedHeadStep(yaw, target, frameDt, HEAD_TURN.TAU_S);
+          steps++;
+        }
+        return { sec: steps * frameDt, steps };
+      };
+      const fast = settle(1 / 60); // 60 FPS
+      const slow = settle(1 / 12); // 12 FPS — тяжёлый рендер или headless без GPU
+      // Разница допустима в пределах дискретизации кадра: на 12 FPS шаг 83 мс, то есть довод
+      // засчитывается не позже чем на один тяжёлый кадр — но НЕ в N раз дольше, как было до фикса.
+      assert(
+        Math.abs(fast.sec - slow.sec) <= 1 / 12 + 0.01,
+        `Довод головы обязан зависеть только от времени: 60 FPS ${fast.sec.toFixed(3)} с vs 12 FPS ${slow.sec.toFixed(3)} с`
+      );
+      assert(
+        slow.sec > 0.05 && slow.sec < 0.32,
+        `На 12 FPS довод тоже 0,05–0,32 с, получено ${slow.sec.toFixed(3)} с`
+      );
+      // За ОДИН стандартный кадр 60 FPS голова не телепортируется: проходит лишь малую часть пути.
+      // (На 12 FPS довод физически укладывается в 1–2 кадра — это и есть смысл зависимости от времени.)
+      const oneFrame = dampedHeadStep(0, target, 1 / 60, HEAD_TURN.TAU_S);
+      assert(
+        Math.abs(oneFrame) < Math.abs(target) * 0.5,
+        "За один кадр 60 FPS голова не должна телепортироваться в зеркало"
+      );
+      // «Взгляд на ШГУ» не должен считаться дорогой: тест K9 мерил −35,5° вместо ~0°
+      const shifterYaw = -HEAD_TURN.SHIFTER_RAD;
+      assert(
+        Math.abs((shifterYaw * 180) / Math.PI) > 30,
+        "Взгляд на консоль ШГУ заведомо дальше порога «дорога» (6°) — смоук обязан сначала выбрать детент"
       );
 
       // 3. Свободный обзор: пределы ±100° и наклон −52…+26°, цель НЕ сбрасывается сама

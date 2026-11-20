@@ -28,7 +28,12 @@ const check = (name, ok, extra = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
+// Chromium: в CI — установленный Playwright; локально/в песочнице — бинарь из npm-пакета
+// (`CDT_CHROMIUM_PATH`), если CDN Playwright недоступен. Оба пути дают тот же headless-движок.
+const browser = await chromium.launch({
+  executablePath: process.env.CDT_CHROMIUM_PATH || undefined,
+  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
+});
 
 async function open(ctx, url) {
   const page = await ctx.newPage();
@@ -917,32 +922,43 @@ try {
       hazardOn && lightsAfter !== lightsBefore && /"mode":"radio"/.test(huStored || ""),
     JSON.stringify({ controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
 
-  // K9: взгляд водителя тремя детентами (левое зеркало → дорога → правое) и сигнал клаксона
+  // K9: взгляд водителя тремя детентами (левое зеркало → дорога → правое) и сигнал клаксона.
+  // Инерция шеи считается по реальному времени кадра, но headless-рендер медленный,
+  // поэтому довод ждём опросом, а не фиксированным sleep.
   await page.keyboard.press("Digit2");
   await sleep(260);
-  const detent0 = await page.evaluate(() => window.__cdtCockpit?.look?.()?.detent ?? 99);
-  const yawRoad = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
-  await page.getByTestId("head-detent-left").click();
-  await sleep(420);
-  const yawLeft = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
-  await page.getByTestId("head-detent-right").click();
-  await sleep(420);
-  const yawRight = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
-  const arrowsLeft = await page.evaluate(() => window.__cdtCockpit?.look?.()?.detent ?? 99);
+  const lookNow = () => page.evaluate(() => window.__cdtCockpit?.look?.() ?? { detent: 99, yawDeg: 0 });
+  // Начинаем с явного «дорога»: предыдущие проверки могли оставить взгляд на ШГУ
   await page.getByTestId("head-detent-road").click();
-  await sleep(420);
-  const backRoad = await page.evaluate(() => window.__cdtCockpit?.look?.()?.yawDeg ?? 0);
-  // Клавиша H — клаксон: в ядре появляется horn, звук не падает с ошибкой
+  await until(async () => Math.abs((await lookNow()).yawDeg) < 6, 12000);
+  const roadState = await lookNow();
+  await page.getByTestId("head-detent-left").click();
+  await until(async () => (await lookNow()).yawDeg > 30, 12000);
+  const leftState = await lookNow();
+  await page.getByTestId("head-detent-right").click();
+  await until(async () => (await lookNow()).yawDeg < -30, 12000);
+  const rightState = await lookNow();
+  await page.getByTestId("head-detent-road").click();
+  await until(async () => Math.abs((await lookNow()).yawDeg) < 6, 12000);
+  const backState = await lookNow();
+  // Клавиша H — клаксон: в кадре состояния появляется horn, после отпускания снимается
   await page.keyboard.down("h");
-  await sleep(220);
-  const hornOn = await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === true);
+  const hornOn = await until(
+    async () => (await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === true)) === true,
+    6000,
+    50
+  );
   await page.keyboard.up("h");
-  await sleep(180);
-  const hornOff = await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === false);
+  const hornOff = await until(
+    async () => (await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === false)) === true,
+    6000,
+    50
+  );
   check("K9 взгляд тремя детентами (левое зеркало → дорога → правое) и сигнал H на руле",
-    detent0 === 0 && Math.abs(yawRoad) < 6 && yawLeft > 30 && yawRight < -30 && backRoad > -6 && backRoad < 6 &&
-      arrowsLeft === -1 && hornOn && hornOff,
-    JSON.stringify({ detent0, yawRoad, yawLeft, yawRight, backRoad, arrowsLeft, hornOn, hornOff }));
+    roadState.detent === 0 && Math.abs(roadState.yawDeg) < 6 && leftState.yawDeg > 30 &&
+      rightState.yawDeg < -30 && rightState.detent === -1 && Math.abs(backState.yawDeg) < 6 &&
+      hornOn === true && hornOff === true,
+    JSON.stringify({ roadState, leftState, rightState, backState, hornOn, hornOff }));
 
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();

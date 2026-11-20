@@ -51,7 +51,7 @@ import {
   type ShifterHitId,
 } from "./vehiclesAndPeds";
 import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
-import { HEAD_TURN, detentYawRad } from "./headLook";
+import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
   CameraMode,
@@ -251,6 +251,8 @@ export class SceneController {
   private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
   private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
   private savedHeadBeforeShifter: { yaw: number; pitch: number; fov: number } | null = null;
+  /** Время предыдущего шага инерции шеи (мс) — для расчёта реального dt кадра. */
+  private lastHeadStepAt = 0;
 
   // Общие текстуры (освобождаются при dispose)
   private readonly sharedTextures: THREE.Texture[] = [];
@@ -476,11 +478,10 @@ export class SceneController {
    * поэтому даже мгновенный клик стрелкой выглядит как живой поворот головы, а не телепорт.
    */
   private stepHeadInertia(dt: number): void {
-    const k = Math.min(1, dt / HEAD_TURN.TAU_S);
-    this.headYaw += (this.headYawTarget - this.headYaw) * k;
-    this.headPitch += (this.headPitchTarget - this.headPitch) * k;
-    if (Math.abs(this.headYawTarget - this.headYaw) < 1e-4) this.headYaw = this.headYawTarget;
-    if (Math.abs(this.headPitchTarget - this.headPitch) < 1e-4) this.headPitch = this.headPitchTarget;
+    // Инерция шеи — по РЕАЛЬНОМУ времени кадра, а не по фиксированным 1/60: на медленной машине
+    // (или в headless без GPU) голова доводится за те же ~0,18 с, а не за 0,18 с × N кадров.
+    this.headYaw = dampedHeadStep(this.headYaw, this.headYawTarget, dt, HEAD_TURN.TAU_S);
+    this.headPitch = dampedHeadStep(this.headPitch, this.headPitchTarget, dt, HEAD_TURN.TAU_S);
   }
 
   adjustZoom(wheelDelta: number): void {
@@ -1392,8 +1393,13 @@ export class SceneController {
       this.savedHeadBeforeShifter = null;
     }
     this.playerRig.chassis.updateWorldMatrix(true, false);
-    // Инерция шеи: голова плавно догоняет цель (детент зеркала/дороги или свободный обзор ПКМ)
-    this.stepHeadInertia(1 / 60);
+    // Инерция шеи: голова плавно догоняет цель (детент зеркала/дороги или свободный обзор ПКМ).
+    // dt берём из реального времени кадра (ограничен 0,1 с, чтобы скачок после сворачивания вкладки
+    // не «телепортировал» голову), иначе на медленном рендере довод растягивается на секунды.
+    const headNow = performance.now();
+    const headDt = Math.min(0.1, Math.max(0, (headNow - this.lastHeadStepAt) / 1000));
+    this.lastHeadStepAt = headNow;
+    this.stepHeadInertia(headDt);
     this.updateCamera(state, opts.cameraMode);
 
     // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели.

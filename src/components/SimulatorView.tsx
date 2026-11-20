@@ -1045,6 +1045,32 @@ export function SimulatorView({
 
   // === [SEC:sim-audio] Процедурный звук ДВС/шин и звук ШГУ: старт по жесту, громкость и пауза ===
   const engineSoundRef = useRef<EngineSound | null>(null);
+  /**
+   * Клаксон как настоящее реле: H (удержание) и клик по накладке руля (короткий «би-бип»)
+   * живут в одном счётчике. Таймер короткого сигнала не должен гасить нажатый H —
+   * раньше он это делал, и звук обрывался сам.
+   */
+  const hornHeldRef = useRef(false);
+  const hornPulseTimerRef = useRef<number | null>(null);
+  const pressHorn = useCallback((pulse: boolean) => {
+    if (!pulse) {
+      hornHeldRef.current = true;
+      return;
+    }
+    hornHeldRef.current = true;
+    if (hornPulseTimerRef.current !== null) window.clearTimeout(hornPulseTimerRef.current);
+    hornPulseTimerRef.current = window.setTimeout(() => {
+      hornPulseTimerRef.current = null;
+      hornHeldRef.current = false;
+    }, 600);
+  }, []);
+  const releaseHorn = useCallback(() => {
+    hornHeldRef.current = false;
+    if (hornPulseTimerRef.current !== null) {
+      window.clearTimeout(hornPulseTimerRef.current);
+      hornPulseTimerRef.current = null;
+    }
+  }, []);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     try {
       return localStorage.getItem("cdt.sound.v1") !== "0";
@@ -1221,16 +1247,13 @@ export function SimulatorView({
           break;
         case "horn": {
           // Клик по накладке руля — короткий сигнал (0,6 с), как «би-бип» в городе
-          inp.horn = true;
-          window.setTimeout(() => {
-            inp.horn = false;
-          }, 600);
+          pressHorn(true);
           onNotify("Сигнал: би-бип!");
           break;
         }
       }
     },
-    [cycleHeadUnitMode, onNotify, setTurnSignal, stepRadioStation, toggleEngine, toggleRadioPlay]
+    [cycleHeadUnitMode, onNotify, setTurnSignal, stepRadioStation, toggleEngine, toggleRadioPlay, pressHorn]
   );
 
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
@@ -1412,8 +1435,9 @@ export function SimulatorView({
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
         // Shift вместе с тормозом = энергичное нажатие: быстрый набор давления и +18 % замедления
         inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.05);
-        // Сигнал: клавиша H, кнопка на руле в кабине или кнопка геймпада (удержание)
-        inp.horn = Boolean(keys.KeyH || pad.buttons.horn);
+        // Сигнал: клавиша H, кнопка на руле в кабине (короткий би-бип) или кнопка геймпада (удержание).
+        // Единый источник — hornHeldRef, чтобы таймер короткого сигнала не гасил нажатый H.
+        inp.horn = Boolean(keys.KeyH || pad.buttons.horn || hornHeldRef.current);
 
         // Руль: отклонённое USB-устройство перехватывает управление у клавиатуры
         // A/D — руль; ←/→ — переключение точек внимания (зеркало/дорога), они не крутят руль
@@ -1669,7 +1693,7 @@ export function SimulatorView({
           break;
         case "KeyH":
           // H — сигнал (клаксон): удерживаем, как настоящий подрулевой штурвал
-          inp.horn = true;
+          pressHorn(false);
           break;
         case "KeyU":
           // U — скрыть/показать интерфейс (раньше жил на H, теперь H — сигнал)
@@ -1715,11 +1739,13 @@ export function SimulatorView({
 
     const onKeyUp = (e: KeyboardEvent) => {
       keysRef.current[e.code] = false;
+      if (e.code === "KeyH") releaseHorn();
     };
 
     const onBlur = () => {
       keysRef.current = {};
       releasePedals();
+      releaseHorn();
       holdingSteerRef.current = false;
     };
 
@@ -1731,7 +1757,18 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, toggleShifterGlance, onNotify]);
+  }, [
+    resetAttempt,
+    releasePedals,
+    setTurnSignal,
+    setGear,
+    shiftGear,
+    toggleEngine,
+    toggleShifterGlance,
+    onNotify,
+    pressHorn,
+    releaseHorn,
+  ]);
 
   // === [SEC:sim-pointer] Мышь на холсте, 3D-рычаг АКПП в салоне, экранный руль, педали и импорт OSM ===
   // Инвариант #12: ЛКМ — руль (вправо уменьшает swDeg; при захвате 3D-рычага АКПП — кулиса), ПКМ — орбита, колесо — зум.

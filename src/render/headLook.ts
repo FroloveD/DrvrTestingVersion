@@ -64,6 +64,26 @@ export function detentYawRad(detent: -1 | 0 | 1): number {
 }
 
 /**
+ * Один шаг инерции шеи: голова подтягивается к цели с постоянной времени `tau`.
+ * `dt` — РЕАЛЬНОЕ время кадра (не фиксированные 1/60): на медленной машине или в headless
+ * без GPU довод обязан занимать те же ~0,18 с, а не растягиваться на секунды.
+ * Возвращает новое значение и флаг «уже на цели» (для снапа без дрожания).
+ */
+export function dampedHeadStep(current: number, target: number, dtSec: number, tauSec: number): number {
+  const dt = Math.max(0, dtSec);
+  const tau = Math.max(1e-4, tauSec);
+  // Дробим длинный кадр на подшаги ≤ τ/2: явная экспонента устойчива и даёт тот же результат,
+  // что и серия коротких кадров (иначе на 12 FPS голова «переезжает» за 2 кадра вместо 3τ).
+  const steps = Math.max(1, Math.ceil(dt / (tau * 0.5)));
+  const sub = dt / steps;
+  let value = current;
+  for (let i = 0; i < steps; i++) {
+    value += (target - value) * Math.min(1, sub / tau);
+  }
+  return Math.abs(target - value) < 1e-4 ? target : value;
+}
+
+/**
  * Детент → подпись для HUD. В массиве `HEAD_DETENTS` порядок «левое − дорога − правое»,
  * то есть индекс = detent + 1, а не сам detent.
  */
