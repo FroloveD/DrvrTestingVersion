@@ -57,7 +57,6 @@ import type {
   WorldData,
 } from "../sim/types";
 import {
-  CAR,
   clamp,
   getPedestrianPose,
   getTrafficLightPhase,
