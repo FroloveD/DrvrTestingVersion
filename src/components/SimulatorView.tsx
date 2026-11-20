@@ -229,7 +229,7 @@ export function SimulatorView({
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
   const [soundVolume, setSoundVolume] = useState(0.5);
   const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
-    try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
+    try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, stationIndex: clamp(Math.round(Number(saved.stationIndex) || 0), 0, RADIO_STATIONS.length - 1), clipIndex: clamp(Math.round(Number(saved.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1), volume: clampVolume(Number(saved.volume ?? DEFAULT_HEAD_UNIT_STATE.volume)), radioPlaying: false, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
     catch { return DEFAULT_HEAD_UNIT_STATE; }
   });
   const headUnitRef = useRef(headUnit);
@@ -1424,6 +1424,8 @@ export function SimulatorView({
         </div>
       </div>}
 
+      <audio ref={radioAudioRef} preload="none" className="hidden" onPlaying={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "live" }))} onWaiting={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "connecting" }))} onError={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "error", radioPlaying: false }))} />
+
       {/* Главная 3D-сцена с зеркалами, статусом экзаменатора и органами управления */}
       <div
         ref={containerRef}
@@ -1727,7 +1729,6 @@ export function SimulatorView({
                   <span className="text-center min-w-0"><b>{RADIO_STATIONS[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{RADIO_STATIONS[headUnit.stationIndex]?.freq} FM</span></span>
                   <button type="button" className="btn btn-mini" aria-label="Следующая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, 1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>TUNE ▶</button>
                 </div>
-                <audio ref={radioAudioRef} preload="none" className="hidden" onPlaying={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "live" }))} onWaiting={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "connecting" }))} onError={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "error", radioPlaying: false }))} />
                 <div className="flex items-center gap-2 mb-2">
                   <button type="button" className="btn btn-mini" onClick={() => {
                     const audio = radioAudioRef.current; if (!audio) return;
