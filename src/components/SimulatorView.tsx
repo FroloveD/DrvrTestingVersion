@@ -290,11 +290,12 @@ export function SimulatorView({
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
   const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
   const [showPanelsMenu, setShowPanelsMenu] = useState(false);
+  const [frontPanelId, setFrontPanelId] = useState("cluster");
   useEffect(() => { savePanelState(panelState); }, [panelState]);
   const togglePanelCollapse = useCallback((id: string) => setPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((x) => x !== id) : [...prev.collapsed, id] })), []);
   const closePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
   const restorePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.filter((x) => x !== id) })), []);
-  const panelProps = useCallback((id: string, label: string) => ({ label, collapsed: panelState.collapsed.includes(id), closed: panelState.closed.includes(id), onToggleCollapse: togglePanelCollapse, onClose: closePanel }), [panelState, togglePanelCollapse, closePanel]);
+  const panelProps = useCallback((id: string, label: string) => ({ label, collapsed: panelState.collapsed.includes(id), closed: panelState.closed.includes(id), onToggleCollapse: togglePanelCollapse, onClose: closePanel, onBringToFront: setFrontPanelId, isFront: frontPanelId === id }), [panelState, togglePanelCollapse, closePanel, frontPanelId]);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
