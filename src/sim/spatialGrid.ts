@@ -142,7 +142,7 @@ export function checkCarCollisionBruteForce(
   obstacles: readonly ObstacleBox[],
   geo?: CarGeometry
 ): ObstacleBox | null {
-  const carCorners = getCarCorners(x, z, h);
+  const carCorners = getCarCorners(x, z, h, geo);
   for (const obs of obstacles) {
     if (obbOverlap(carCorners, h, getBoxCorners(obs), obs.h)) {
       return obs;
@@ -203,7 +203,7 @@ export function findBayUnderCarCenter(x: number, z: number, bays: readonly Parki
  * когда центр автомобиля уже зашёл в глубину бокса.
  */
 export function findBayLineCross(x: number, z: number, h: number, bays: readonly ParkingBay[], geo?: CarGeometry): ParkingBay | null {
-  const corners = getCarCorners(x, z, h);
+  const corners = getCarCorners(x, z, h, geo);
   for (const bay of bays) {
     if (bay.occupied) continue;
     const center = worldToBayLocal({ x, z }, bay);
@@ -235,7 +235,7 @@ export function findBayLineCross(x: number, z: number, h: number, bays: readonly
 
 /** Минимальное расстояние до правого края параллельного бокса (контроль прижатия к бордюру). */
 export function rightCurbClearance(x: number, z: number, h: number, bay: ParkingBay, geo?: CarGeometry): number {
-  const corners = getCarCorners(x, z, h);
+  const corners = getCarCorners(x, z, h, geo);
   let minGap = Infinity;
   for (const c of corners) {
     const p = worldToBayLocal(c, bay);
