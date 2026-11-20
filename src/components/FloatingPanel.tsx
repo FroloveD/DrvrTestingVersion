@@ -198,6 +198,7 @@ export function FloatingPanel({
     if (e.button !== 0 || dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
+    onBringToFront?.(id);
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { mode: kind, pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, ox: current.x, oy: current.y, ow: current.w };
     setArmed(true);
@@ -374,6 +375,7 @@ export function FloatingPanel({
             const dir = delta[e.key];
             if (!dir) return;
             e.preventDefault(); e.stopPropagation();
+            onBringToFront?.(id);
             onChange(id, { ...current, ...clampPos(current.x + dir[0], current.y + dir[1], current.w) });
           }}>
           <svg width="22" height="10" viewBox="0 0 22 10" fill="currentColor" aria-hidden="true">
