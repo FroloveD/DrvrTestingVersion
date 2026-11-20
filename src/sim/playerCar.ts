@@ -3,7 +3,7 @@
  * @layer pure-core
  * @role Парк автомобилей игрока (Picanto, Rio, Ceed, XCeed, Sorento): реальные габариты, база, колея, Vmax и тяга, привязанные к сценарию.
  * @invariants #1 (координаты и единицы СИ), #7 (чистое ядро — без DOM, `window` и Three.js), #10 (руль ±540°, выворот 33–42°).
- * @tests T38 (`src/sim/selfTestExtra.ts`) — пропорции, динамика и различия машин.
+ * @tests T34 (`src/sim/selfTestExtra.ts`) — паспорта, геометрия и различия динамики пяти моделей.
  *
  * До появления выбора автомобиля физика брала единственный паспорт `CAR` (Kia Ceed JD)
  * из `sim/vehicle.ts`. Теперь сценарий задаёт машину игрока (`WorldData.playerCarId`),
