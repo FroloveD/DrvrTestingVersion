@@ -872,10 +872,6 @@ export function buildOsmSignSupportInstances(
       group.add(mesh);
     }
   }
-  baseGeo.dispose();
-  poleGeo.dispose();
-  capGeo.dispose();
-  clampGeo.dispose();
 }
 
 /** Строит дорожный знак ГОСТ Р 52290-2004 на оцинкованной стойке с фигурной подложкой и хомутами. */
