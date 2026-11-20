@@ -792,6 +792,7 @@ export function SimulatorView({
         const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
         inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
+        inp.horn = Boolean(keys.KeyJ || pad.buttons.horn || hornPressedRef.current);
         inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.01);
         const boostTarget = (keys.ShiftLeft || keys.ShiftRight) && inp.throttle > 0 ? 2 : 1;
         throttleBoostRef.current += (boostTarget - throttleBoostRef.current) * Math.min(1, FIXED_DT * 3.5);
@@ -895,7 +896,7 @@ export function SimulatorView({
       if (nowMs - lastHudUpdate > 82) {
         lastHudUpdate = nowMs;
         const s = stateRef.current;
-        engineSoundRef.current?.update({ engineOn: s.engineOn, rpm: s.rpm, throttle: inputRef.current.throttle, speedKmh: Math.abs(s.v) * 3.6, horn: hornPressedRef.current });
+        engineSoundRef.current?.update({ engineOn: s.engineOn, rpm: s.rpm, throttle: inputRef.current.throttle, speedKmh: Math.abs(s.v) * 3.6, horn: s.horn === true || hornPressedRef.current });
         const indicatorPhase = getTurnSignalFlash(s.signal, s.time).blinkOn;
         if (indicatorPhase && !lastIndicatorPhaseRef.current) engineSoundRef.current?.clickIndicator();
         lastIndicatorPhaseRef.current = indicatorPhase;
