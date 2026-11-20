@@ -14,6 +14,7 @@
  * - `[SEC:render-dispose]`  — `getPerfMetrics`, `disposeGroup`, `dispose` (корректная очистка геометрий/материалов/текстур).
  */
 import * as THREE from "three";
+import { CockpitDisplayController, DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "./cockpitDisplays";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
 import { getPlayerCar } from "../sim/playerCar";
 import { carGeometry } from "../sim/vehicle";
@@ -48,7 +49,7 @@ import {
   type DetailedCarRig,
   type DetailedPedestrianVisual,
 } from "./vehiclesAndPeds";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "./vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "./vehiclesAndPeds";
 import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
 import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
@@ -167,6 +168,11 @@ export class SceneController {
   private readonly bayVisuals: BayVisual[] = [];
   private playerRig: CarRig;
   private playerCarId = "ceed";
+  private readonly cockpitDisplays: CockpitDisplayController;
+  private envMapRT: THREE.WebGLRenderTarget | null = null;
+  private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
+  private cockpitControlHover: CockpitControlId | null = null;
+  private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
 
   // Прогнозная траектория Аккермана
   private readonly trajGroup = new THREE.Group();
@@ -232,6 +238,7 @@ export class SceneController {
   private readonly cockpitLookWorld = new THREE.Vector3();
   private readonly shifterRaycaster = new THREE.Raycaster();
   private readonly shifterNdc = new THREE.Vector2();
+  private readonly shifterProjTmp = new THREE.Vector3();
   private readonly shifterInvChassis = new THREE.Matrix4();
   private readonly shifterLocalRay = new THREE.Ray();
   private readonly shifterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -SHIFTER_LAYOUT.knobPlaneY);
@@ -271,17 +278,44 @@ export class SceneController {
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    const skyTex = makeCloudySkyTexture();
+    // Определяем программный WebGL до создания текстуры: на SwiftShader/llvmpipe
+    // используем дешёвый UV-фон и не строим PMREM.
+    let softwareRenderer = false;
+    try {
+      const gl = this.renderer.getContext();
+      const baseRenderer = String(gl.getParameter(gl.RENDERER) ?? "");
+      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+      const unmaskedRenderer = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) ?? "") : "";
+      softwareRenderer = /swiftshader|subzero|llvmpipe|softpipe|software/i.test(`${baseRenderer} ${unmaskedRenderer}`);
+    } catch { softwareRenderer = false; }
+    const skyTex = makeCloudySkyTexture(!softwareRenderer);
     const shadowTex = makeContactShadowTexture();
     const learnerTex = makeLearnerSignTexture();
     const grassTex = makeUrbanGrassTexture();
     const playerPlateTex = makeRussianLicensePlateTexture("У 077 КС");
     const civilPlateTex = makeRussianLicensePlateTexture("А 482 МН");
     const clusterTex = makeInstrumentClusterTexture();
+    this.cockpitDisplays = new CockpitDisplayController();
     grassTex.repeat.set(160, 160);
     this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
     this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
+
+    // PBR Image-Based Lighting: один PMREM от 360°-неба на реальном GPU.
+    if (!softwareRenderer) {
+      let pmrem: THREE.PMREMGenerator | null = null;
+      try {
+        pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envMapRT = pmrem.fromEquirectangular(skyTex);
+        this.scene.environment = this.envMapRT.texture;
+        this.scene.environmentIntensity = 0.56;
+      } catch {
+        this.envMapRT?.dispose();
+        this.envMapRT = null;
+      } finally { pmrem?.dispose(); }
+    }
+
+
 
     this.camera = new THREE.PerspectiveCamera(56, 16 / 9, 0.12, 420);
 
@@ -317,7 +351,8 @@ export class SceneController {
 
     // Детализированный Kia Ceed JD: кузов, оптика, диски, салон и приборная панель.
     this.playerRig = buildDetailedCar(
-      "ceed", 0xd97706, true, shadowTex, learnerTex, playerPlateTex, clusterTex, OWN_MIRROR_HARDWARE_LAYER
+      "ceed", 0xd97706, true, shadowTex, learnerTex, playerPlateTex, this.cockpitDisplays.clusterTex, OWN_MIRROR_HARDWARE_LAYER,
+      { headUnitTex: this.cockpitDisplays.headUnitTex, rearOverlayTex: this.cockpitDisplays.rearOverlayTex }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -549,8 +584,9 @@ export class SceneController {
       this.sharedTextures[1] as THREE.CanvasTexture,
       this.sharedTextures[2] as THREE.CanvasTexture,
       this.sharedTextures[4] as THREE.CanvasTexture,
-      this.sharedTextures[6] as THREE.CanvasTexture,
-      OWN_MIRROR_HARDWARE_LAYER
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      { headUnitTex: this.cockpitDisplays.headUnitTex, rearOverlayTex: this.cockpitDisplays.rearOverlayTex }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -561,6 +597,52 @@ export class SceneController {
     this.playerCarId = carId;
     this.setPlayerCarFraming(carId);
   }
+
+  /** Подсветка наведения и короткий импульс нажатия физического органа салона. */
+  setCockpitControlInteraction(hovered: CockpitControlId | null, pressed: CockpitControlId | null = null): void {
+    this.cockpitControlHover = hovered;
+    if (pressed) this.controlPressAnim[pressed] = 1;
+  }
+
+  /** Raycast по интерактивным органам салона: ШГУ, шайбы, свет, аварийка, стартер, ручник и сигнал. */
+  pickCockpitControl(normX: number, normY: number): CockpitControlId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets?.length) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    const hit = this.shifterRaycaster.intersectObjects(targets, false)[0];
+    return (hit?.object.userData.cockpitControl as CockpitControlId | undefined) ?? null;
+  }
+
+  getCockpitControlScreenPoint(id: CockpitControlId): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const obj = this.playerRig.cockpitPickTargets?.find((target) => target.userData.cockpitControl === id);
+    if (!obj) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    obj.getWorldPosition(this.shifterProjTmp);
+    this.shifterProjTmp.project(this.camera);
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (this.shifterProjTmp.z < -1 || this.shifterProjTmp.z > 1 || normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
+  }
+
+  /** Переводит взгляд на центральную консоль, не меняя орбиту внешней камеры. */
+  lookAtHeadUnit(): boolean {
+    if (this.lastCameraMode !== "cockpit") return false;
+    this.headYawTarget = -0.62;
+    this.headPitchTarget = -0.34;
+    this.cockpitFov = 66;
+    return true;
+  }
+
+  /** Передаёт состояние мультимедиа на живые дисплеи приборной панели и ШГУ. */
+  setHeadUnitState(headUnit: HeadUnitState): void { this.headUnit = headUnit; }
+  getHeadUnitState(): HeadUnitState { return this.headUnit; }
 
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
@@ -1078,6 +1160,22 @@ export class SceneController {
 
     // Поворотники (период 700 мс, как в v8)
     const { blinkOn, leftLit, rightLit } = getTurnSignalFlash(state.signal, state.time);
+    if (opts.cameraMode === "cockpit") this.cockpitDisplays.update(state, world, leftLit, rightLit, this.headUnit, isBraking, now / 1000);
+    const controlDt = Math.min(0.1, Math.max(0, dtMs) / 1000);
+    for (const key of Object.keys(this.controlPressAnim) as CockpitControlId[]) {
+      const value = this.controlPressAnim[key] ?? 0;
+      if (value <= 0) delete this.controlPressAnim[key];
+      else this.controlPressAnim[key] = Math.max(0, value - controlDt * 2.6);
+    }
+    const pressOf = (id: CockpitControlId) => this.controlPressAnim[id] ?? 0;
+    if (rig.headUnitKnobL) { rig.headUnitKnobL.rotation.y = this.headUnit.stationIndex * 0.42 + pressOf("vol") * 0.9; rig.headUnitKnobL.scale.setScalar(1 + (this.cockpitControlHover === "vol" ? 0.16 : 0) + pressOf("vol") * 0.12); }
+    if (rig.headUnitKnobR) { rig.headUnitKnobR.rotation.y = (this.cockpitControlHover === "tune" ? 0.22 : 0) + pressOf("tune") * 0.6; rig.headUnitKnobR.scale.setScalar(1 + (this.cockpitControlHover === "tune" ? 0.16 : 0) + pressOf("tune") * 0.12); }
+    if (rig.headlightSwitchPivot) rig.headlightSwitchPivot.rotation.z = state.lights ? -0.62 - pressOf("headlight") * 0.2 : pressOf("headlight") * -0.18;
+    if (rig.headlightSwitchMat) rig.headlightSwitchMat.color.setHex(state.lights ? 0x22c55e : this.cockpitControlHover === "headlight" ? 0x64748b : 0x334155);
+    if (rig.headUnitScreen) (rig.headUnitScreen.material as THREE.MeshBasicMaterial).color.setHex(this.headUnit.mode === "off" ? 0x51606e : this.cockpitControlHover === "headunit" || this.cockpitControlHover === "vol" || this.cockpitControlHover === "tune" ? 0xa9d4e6 : 0xffffff);
+    if (rig.startBtnMat && pressOf("start") > 0) rig.startBtnMat.color.setHex(0xfef08a);
+    if (rig.hazardBtnMat && (pressOf("hazard") > 0 || this.cockpitControlHover === "hazard") && state.signal !== "hazard") rig.hazardBtnMat.color.setHex(0xb91c1c);
+    if (rig.handbrakePivot) rig.handbrakePivot.rotation.x = state.handbrake ? -0.42 : 0;
     for (const m of rig.blinkLeftMats) m.color.setHex(leftLit ? 0xffb020 : 0x9a621e);
     for (const m of rig.blinkRightMats) m.color.setHex(rightLit ? 0xffb020 : 0x9a621e);
 
@@ -1494,6 +1592,9 @@ export class SceneController {
     (this.groundMesh.material as THREE.Material).dispose();
     this.disposeGroup(this.worldGroup);
     this.disposeGroup(this.playerRig.root);
+    this.cockpitDisplays.dispose();
+    this.envMapRT?.dispose();
+    this.envMapRT = null;
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();

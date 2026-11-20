@@ -100,6 +100,7 @@ function errorText(err: unknown): string {
 }
 
 export default function App() {
+  const [newAttemptRequest, setNewAttemptRequest] = useState(0);
   const [tab, setTab] = useState<TabId>("sim");
   const [immersiveMode, setImmersiveMode] = useState(false);
   const appRootRef = useRef<HTMLDivElement | null>(null);
@@ -456,6 +457,7 @@ export default function App() {
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
             active={tab === "sim"}
+            newAttemptRequest={newAttemptRequest}
             immersive={immersiveMode}
             onToggleImmersive={toggleImmersiveMode}
             scenarioId={scenarioId}
@@ -533,6 +535,7 @@ export default function App() {
             loadAllAttempts={loadAllAttempts}
             onClearJournal={clearJournal}
             onBackToSim={() => setTab("sim")}
+            onNewAttempt={() => { setNewAttemptRequest((request) => request + 1); setTab("sim"); notify("Новый заезд: исходная позиция, двигатель заглушен, КПП P"); }}
             onNotify={notify}
           />
         )}

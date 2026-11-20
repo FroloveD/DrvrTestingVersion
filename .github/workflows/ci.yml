@@ -28,7 +28,7 @@ jobs:
         run: node scripts/run-tests.mjs --check-dist
 
   browser-smoke:
-    name: Browser Smoke A–P (Playwright Chromium)
+    name: Browser Smoke A–Q (Playwright Chromium)
     needs: verify
     runs-on: ubuntu-latest
     steps:

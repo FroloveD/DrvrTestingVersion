@@ -119,6 +119,7 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     belt: readyStart,
     lights: readyStart,
     signal: null,
+    horn: false,
     wheelSpin: 0,
     pitch: 0,
     roll: 0,
@@ -255,6 +256,7 @@ export function stepSimulation(
   s.belt = input.belt;
   s.lights = input.lights;
   s.signal = input.signal;
+  s.horn = input.horn === true;
 
   // Парковочная блокировка P: удерживает автомобиль даже при нажатом газе
   if (s.gear === "P") {

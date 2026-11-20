@@ -44,6 +44,14 @@ type Props = {
   id: string;
   /** Без подписи панель перемещается только за grip-поле или по длительному нажатию */
   title?: string;
+  label?: string;
+  collapsedSummary?: string;
+  collapsed?: boolean;
+  closed?: boolean;
+  onToggleCollapse?: (id: string) => void;
+  onClose?: (id: string) => void;
+  onBringToFront?: (id: string) => void;
+  isFront?: boolean;
   icon?: string;
   layout: PanelLayout | undefined;
   defaults: (containerW: number, containerH: number) => PanelLayout;
@@ -68,6 +76,14 @@ type Props = {
 export function FloatingPanel({
   id,
   title,
+  label,
+  collapsedSummary,
+  collapsed = false,
+  closed = false,
+  onToggleCollapse,
+  onClose,
+  onBringToFront,
+  isFront = false,
   icon = "grid",
   layout,
   defaults,
@@ -144,6 +160,7 @@ export function FloatingPanel({
     if (e.button !== 0 || dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
+    onBringToFront?.(id);
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { mode: kind, pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, ox: current.x, oy: current.y, ow: current.w };
     setArmed(true);
@@ -272,11 +289,13 @@ export function FloatingPanel({
     };
   }, [clampPos, current, id, onChange]);
 
+  if (closed) return null;
+
   return (
     <div
       ref={panelRef}
       data-hud-panel={id}
-      style={{ left: current.x, top: current.y, width: current.w, zIndex }}
+      style={{ left: current.x, top: current.y, width: current.w, zIndex: isFront ? 250 : zIndex }}
       className={`absolute rounded-xl border-2 bg-[#0b1218]/94 shadow-xl overflow-hidden select-none transition-shadow ${
         armed
           ? "border-[#f5b942] shadow-[0_0_24px_rgba(245,185,66,.25)]"
@@ -284,7 +303,7 @@ export function FloatingPanel({
             ? "border-[#1f2c38] hover:border-[#2d414f]"
             : "border-[#1f2c38]"
       }`}
-      onPointerDown={bodyDown}
+      onPointerDown={(e) => { onBringToFront?.(id); bodyDown(e); }}
       onPointerMove={bodyMove}
       onPointerUp={bodyUp}
       onPointerCancel={bodyUp}
@@ -292,7 +311,7 @@ export function FloatingPanel({
       onDoubleClick={(e) => e.stopPropagation()}
       title={mode === "longPress" ? "Удерживайте 0,4 с — панель можно перетащить" : undefined}
     >
-      {title && (
+      {(title || label) && (
         <div
           onPointerDown={beginDrag("move")}
           onPointerMove={moveDrag}
@@ -302,8 +321,13 @@ export function FloatingPanel({
           title="Перетащите, чтобы переместить"
         >
           <Icon name={icon} size={11} />
-          <span className="truncate">{title}</span>
-          <span className="ml-auto text-[#5b6f7d]">⋮⋮</span>
+          <span className="truncate">{title ?? label}</span>
+          {collapsed && collapsedSummary && <span className="truncate text-[#5b6f7d]">{collapsedSummary}</span>}
+          <span className="ml-auto flex items-center gap-1">
+            {onToggleCollapse && <button type="button" data-testid={`panel-collapse-${id}`} aria-label={collapsed ? `Развернуть ${label ?? title}` : `Свернуть ${label ?? title}`} title={collapsed ? "Развернуть" : "Свернуть"} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#d3e0e7]">{collapsed ? "+" : "−"}</button>}
+            {onClose && <button type="button" data-testid={`panel-close-${id}`} aria-label={`Закрыть ${label ?? title}`} title="Закрыть панель" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#ff9b9b]">×</button>}
+            <span className="text-[#5b6f7d]">⋮⋮</span>
+          </span>
         </div>
       )}
       {mode === "grip" && (
@@ -325,7 +349,7 @@ export function FloatingPanel({
           </svg>
         </button>
       )}
-      <div>{children}</div>
+      {!collapsed && <div>{children}</div>}
 
       {/* У педалей ручка находится над рабочей кнопкой и не перекрывает её. */}
       {mode !== "grip" && <div

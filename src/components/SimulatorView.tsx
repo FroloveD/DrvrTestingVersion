@@ -18,6 +18,12 @@
  * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { EngineSound } from "../audio/engineSound";
+import { clampVolume, nextStationIndex, radioStationsFor, renderTrackWav, trackCacheKey, type RadioStation } from "../audio/radioCatalog";
+import * as trackStore from "../audio/trackStore";
+import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_CLIPS, HEAD_UNIT_MODES, setActiveRadioStations, type HeadUnitState } from "../render/cockpitDisplays";
+import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
 import { parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
@@ -58,11 +64,33 @@ import { Chip, Icon } from "./Icons";
 import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
+
+type PanelStateMap = { collapsed: string[]; closed: string[] };
+const PANEL_IDS = [
+  { id: "mirrorRear", label: "Заднее зеркало" }, { id: "mirrorLeft", label: "Левое зеркало" },
+  { id: "mirrorRight", label: "Правое зеркало" }, { id: "steeringWheel", label: "Рулевое колесо" },
+  { id: "scorePanel", label: "Оценка" }, { id: "speedPanel", label: "Скорость" },
+  { id: "statusBar", label: "Статус" }, { id: "camToggles", label: "Камеры" },
+  { id: "cluster", label: "Приборы и селектор" }, { id: "pedalBrake", label: "Педаль тормоза" },
+  { id: "pedalGas", label: "Педаль газа" },
+] as const;
+const PANEL_STATE_KEY = "cdt.panelState.v1";
+function loadPanelState(): PanelStateMap {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null") as Partial<PanelStateMap> | null;
+    const valid = (items: unknown) => Array.isArray(items) ? items.filter((id): id is string => typeof id === "string" && PANEL_IDS.some((p) => p.id === id)) : [];
+    return { collapsed: valid(raw?.collapsed), closed: valid(raw?.closed) };
+  } catch { return { collapsed: [], closed: [] }; }
+}
+function savePanelState(state: PanelStateMap): void {
+  try { localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(state)); } catch { /* storage blocked */ }
+}
 
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  newAttemptRequest: number;
   immersive: boolean;
   onToggleImmersive: () => void;
   scenarioId: ScenarioId;
@@ -181,6 +209,7 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  newAttemptRequest,
   immersive,
   onToggleImmersive,
   scenarioId,
@@ -197,9 +226,10 @@ export function SimulatorView({
   const activeRef = useRef(true);
   const { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth } = calibration;
   // Новое значение выворота не изменяет площадку и не должно сбрасывать двигатель, позу или запись.
-  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
+  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>(scenarioId === "custom" ? customDef.playerCarId ?? "ceed" : "ceed");
+  useEffect(() => { if (scenarioId === "custom" && customDef.playerCarId) setPlayerCarId(customDef.playerCarId); }, [scenarioId, customDef.playerCarId]);
   const world = useMemo(
-    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId }),
+    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId: scenarioId === "custom" ? customDef.playerCarId ?? playerCarId : playerCarId }),
     [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth, playerCarId]
   );
   const wheelLimit = normalizeWheelLock(calibration.maxInnerWheelDeg);
@@ -218,6 +248,24 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [bindings, setBindings] = useState<KeyBindings>(loadKeyBindings);
+  const bindingsRef = useRef(bindings);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
+  const [soundVolume, setSoundVolume] = useState(0.5);
+  const [radioStations, setRadioStations] = useState<RadioStation[]>(() => radioStationsFor(scenarioId === "custom" ? customDef.radioStationIds : undefined));
+  const radioStationsRef = useRef(radioStations);
+  const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
+    try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, stationIndex: clamp(Math.round(Number(saved.stationIndex) || 0), 0, Math.max(0, radioStations.length - 1)), clipIndex: clamp(Math.round(Number(saved.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1), volume: clampVolume(Number(saved.volume ?? DEFAULT_HEAD_UNIT_STATE.volume)), radioPlaying: false, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
+    catch { return DEFAULT_HEAD_UNIT_STATE; }
+  });
+  const headUnitRef = useRef(headUnit);
+  const radioAudioRef = useRef<HTMLAudioElement | null>(null);
+  const savedAudioUrlRef = useRef<string | null>(null);
+  const [savedTracks, setSavedTracks] = useState<Array<Omit<trackStore.SavedTrack, "blob">>>([]);
+  const [radioMessage, setRadioMessage] = useState("");
+  const engineSoundRef = useRef<EngineSound | null>(null);
+  const hornPressedRef = useRef(false);
+  const lastIndicatorPhaseRef = useRef(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
   const [quickStartUsed, setQuickStartUsed] = useState(false);
@@ -240,6 +288,14 @@ export function SimulatorView({
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
+  const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
+  const [showPanelsMenu, setShowPanelsMenu] = useState(false);
+  const [frontPanelId, setFrontPanelId] = useState("cluster");
+  useEffect(() => { savePanelState(panelState); }, [panelState]);
+  const togglePanelCollapse = useCallback((id: string) => setPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((x) => x !== id) : [...prev.collapsed, id] })), []);
+  const closePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
+  const restorePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.filter((x) => x !== id) })), []);
+  const panelProps = useCallback((id: string, label: string) => ({ label, collapsed: panelState.collapsed.includes(id), closed: panelState.closed.includes(id), onToggleCollapse: togglePanelCollapse, onClose: closePanel, onBringToFront: setFrontPanelId, isFront: frontPanelId === id }), [panelState, togglePanelCollapse, closePanel, frontPanelId]);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
@@ -274,6 +330,34 @@ export function SimulatorView({
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
+  useEffect(() => {
+    const stations = radioStationsFor(scenarioId === "custom" ? customDef.radioStationIds : undefined);
+    radioStationsRef.current = stations;
+    setRadioStations(stations);
+    setActiveRadioStations(stations);
+    radioAudioRef.current?.pause();
+    setHeadUnit((prev) => ({ ...prev, stationIndex: Math.min(prev.stationIndex, stations.length - 1), radioPlaying: false, source: "stream", savedTrackKey: null, streamStatus: "idle" }));
+  }, [scenarioId, customDef.radioStationIds]);
+
+  useEffect(() => {
+    radioStationsRef.current = radioStations;
+  }, [radioStations]);
+
+  useEffect(() => {
+    headUnitRef.current = headUnit;
+    sceneCtrlRef.current?.setHeadUnitState(headUnit);
+    try { localStorage.setItem("cdt.headunit.v1", JSON.stringify({ ...headUnit, streamStatus: "idle", savedCount: 0 })); } catch { /* storage blocked */ }
+  }, [headUnit]);
+  useEffect(() => {
+    void trackStore.listTracks().then((items) => {
+      setSavedTracks(items);
+      setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
+    });
+    return () => {
+      radioAudioRef.current?.pause();
+      if (savedAudioUrlRef.current) URL.revokeObjectURL(savedAudioUrlRef.current);
+    };
+  }, []);
   const worldRef = useRef<WorldData>(world);
   const gridRef = useRef<SpatialGrid>(new SpatialGrid(world.obstacles, 10));
   const calRef = useRef<CalibrationConfig>(calibration);
@@ -333,6 +417,24 @@ export function SimulatorView({
   }, []);
 
   const keysRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    const sound = new EngineSound();
+    engineSoundRef.current = sound;
+    return () => { sound.dispose(); engineSoundRef.current = null; };
+  }, []);
+  useEffect(() => {
+    engineSoundRef.current?.setEnabled(soundEnabled);
+    engineSoundRef.current?.setVolume(soundVolume);
+    try { localStorage.setItem("cdt.sound.v1", soundEnabled ? "1" : "0"); } catch { /* storage blocked */ }
+  }, [soundEnabled, soundVolume]);
+  useEffect(() => {
+    bindingsRef.current = bindings;
+    keysRef.current = {};
+    inputRef.current.throttle = 0;
+    inputRef.current.brake = 0;
+    try { localStorage.setItem("cdt.keybindings.v1", JSON.stringify(bindings)); }
+    catch { onNotify("Не удалось сохранить клавиши: хранилище браузера недоступно"); }
+  }, [bindings, onNotify]);
   const touchPedalRef = useRef<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
   const pedalOwner = useRef<{ gas: number | null; brake: number | null }>({ gas: null, brake: null });
   const canvasGasHoldTimerRef = useRef<number | null>(null);
@@ -404,6 +506,8 @@ export function SimulatorView({
   // === [SEC:sim-actions] Команды поворотников, АКПП, стартера и сброса попытки ===
   const setTurnSignal = useCallback((signal: InputState["signal"]) => {
     inputRef.current.signal = signal;
+    engineSoundRef.current?.ensureStarted();
+    if (signal) engineSoundRef.current?.clickIndicator();
     // Reflect a signal button/key press immediately instead of waiting for the next HUD tick.
     setHud((current) => ({ ...current, state: { ...current.state, signal } }));
   }, []);
@@ -491,6 +595,7 @@ export function SimulatorView({
 
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
+    engineSoundRef.current?.ensureStarted();
     const inp = inputRef.current;
     const err = checkEngineToggle(inp);
     if (err) {
@@ -503,6 +608,55 @@ export function SimulatorView({
       state: { ...current.state, engineOn: inp.engineOn },
     }));
   }, [onNotify]);
+
+  const stepRadioStation = useCallback((dir: 1 | -1) => {
+    const next = nextStationIndex(headUnitRef.current.stationIndex, dir, radioStationsRef.current);
+    radioAudioRef.current?.pause();
+    setHeadUnit((prev) => ({ ...prev, stationIndex: next, mode: "radio", radioPlaying: false, source: "stream", savedTrackKey: null, streamStatus: "idle" }));
+  }, []);
+
+  const toggleRadioPlayback = useCallback(() => {
+    const audio = radioAudioRef.current;
+    if (!audio) return;
+    if (headUnitRef.current.radioPlaying) {
+      audio.pause();
+      setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "idle" }));
+      return;
+    }
+    const station = radioStationsRef.current[headUnitRef.current.stationIndex];
+    audio.src = station.streamUrl;
+    audio.volume = headUnitRef.current.volume;
+    engineSoundRef.current?.ensureStarted();
+    void audio.play().then(() => setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "stream", streamStatus: "live" }))).catch(() => setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "error" })));
+  }, []);
+
+  const cycleHeadUnitMode = useCallback(() => {
+    const index = HEAD_UNIT_MODES.findIndex((mode) => mode.id === headUnitRef.current.mode);
+    const mode = HEAD_UNIT_MODES[(index + 1) % HEAD_UNIT_MODES.length].id;
+    if (mode !== "radio") radioAudioRef.current?.pause();
+    setHeadUnit((prev) => ({ ...prev, mode, radioPlaying: mode === "radio" ? prev.radioPlaying : false }));
+  }, []);
+
+  const pressCockpitControl = useCallback((id: CockpitControlId) => {
+    const inp = inputRef.current;
+    sceneCtrlRef.current?.setCockpitControlInteraction(null, id);
+    switch (id) {
+      case "headunit": cycleHeadUnitMode(); break;
+      case "vol": toggleRadioPlayback(); break;
+      case "tune": stepRadioStation(1); break;
+      case "stalk-left": setTurnSignal(inp.signal === null ? "left" : inp.signal === "left" ? "right" : null); break;
+      case "headlight": inp.lights = !inp.lights; break;
+      case "hazard": setTurnSignal(inp.signal === "hazard" ? null : "hazard"); break;
+      case "start": toggleEngine(); break;
+      case "handbrake": inp.handbrake = !inp.handbrake; break;
+      case "horn":
+        engineSoundRef.current?.ensureStarted();
+        hornPressedRef.current = true;
+        window.setTimeout(() => { hornPressedRef.current = false; }, 420);
+        break;
+    }
+    setHud((current) => ({ ...current, state: { ...current.state, lights: inp.lights, handbrake: inp.handbrake } }));
+  }, [cycleHeadUnitMode, toggleRadioPlayback, stepRadioStation, setTurnSignal, toggleEngine]);
 
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
   useEffect(() => {
@@ -541,6 +695,13 @@ export function SimulatorView({
     [releasePedals]
   );
 
+  const lastNewAttemptRequestRef = useRef(newAttemptRequest);
+  useEffect(() => {
+    if (lastNewAttemptRequestRef.current === newAttemptRequest) return;
+    lastNewAttemptRequestRef.current = newAttemptRequest;
+    resetAttempt(worldRef.current, COLD_START);
+  }, [newAttemptRequest, resetAttempt]);
+
   // Перезагрузка мира при смене сценария, калибровки или OSM-файла
   useEffect(() => {
     worldRef.current = world;
@@ -557,6 +718,7 @@ export function SimulatorView({
     let ctrl: SceneController | null = null;
     try {
       ctrl = new SceneController(canvas);
+      ctrl.setHeadUnitState(headUnitRef.current);
       ctrl.applyQuality(optsRef.current.quality);
       ctrl.loadWorld(worldRef.current);
       ctrl.resize(box.clientWidth, box.clientHeight);
@@ -631,6 +793,7 @@ export function SimulatorView({
         const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
         inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
+        inp.horn = Boolean(keys.KeyJ || pad.buttons.horn || hornPressedRef.current);
         inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.01);
         const boostTarget = (keys.ShiftLeft || keys.ShiftRight) && inp.throttle > 0 ? 2 : 1;
         throttleBoostRef.current += (boostTarget - throttleBoostRef.current) * Math.min(1, FIXED_DT * 3.5);
@@ -734,6 +897,10 @@ export function SimulatorView({
       if (nowMs - lastHudUpdate > 82) {
         lastHudUpdate = nowMs;
         const s = stateRef.current;
+        engineSoundRef.current?.update({ engineOn: s.engineOn, rpm: s.rpm, throttle: inputRef.current.throttle, speedKmh: Math.abs(s.v) * 3.6, horn: s.horn === true || hornPressedRef.current });
+        const indicatorPhase = getTurnSignalFlash(s.signal, s.time).blinkOn;
+        if (indicatorPhase && !lastIndicatorPhaseRef.current) engineSoundRef.current?.clickIndicator();
+        lastIndicatorPhaseRef.current = indicatorPhase;
         const w = worldRef.current;
         const evalRes = evaluateAttempt(recorderRef.current.getEvents(), s.collisions, ruleRef.current);
 
@@ -798,7 +965,9 @@ export function SimulatorView({
       // Слайдеру оставляем стрелки, Home и End. Клавиши вождения работают и после настройки.
       const drivingFromSlider = e.target instanceof HTMLInputElement && e.target.type === "range" && /^Key[A-Z]$/.test(e.code);
       if (isEditable(e.target) && !drivingFromSlider) return;
-      const code = e.code;
+      const code = logicalKey(bindingsRef.current, e.code);
+      if (code === "unbound") return;
+      engineSoundRef.current?.ensureStarted();
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
         e.preventDefault();
       }
@@ -843,6 +1012,9 @@ export function SimulatorView({
           break;
         case "KeyF":
           setGear("D");
+          break;
+        case "KeyJ":
+          hornPressedRef.current = true;
           break;
         case "KeyH":
           setShowHelp(false);
@@ -893,11 +1065,14 @@ export function SimulatorView({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
+      const logical = logicalKey(bindingsRef.current, e.code);
+      if (logical !== "unbound") keysRef.current[logical] = false;
+      if (logical === "KeyJ") hornPressedRef.current = false;
     };
 
     const onBlur = () => {
       keysRef.current = {};
+      hornPressedRef.current = false;
       releasePedals();
     };
 
@@ -978,6 +1153,7 @@ export function SimulatorView({
     if (shifterDragRef.current) return;
     shifterHoverRef.current = null;
     sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
+    sceneCtrlRef.current?.setCockpitControlInteraction(null);
     if (pointerDragRef.current?.btn === 0) return;
     mouseSteerXRef.current = null;
     holdingSteerRef.current = false;
@@ -996,6 +1172,8 @@ export function SimulatorView({
         ctrl.setShifterInteraction(hit, true, 0);
         return;
       }
+      const control = pos && ctrl ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      if (control && ctrl) { e.preventDefault(); ctrl.setCockpitControlInteraction(control, control); pressCockpitControl(control); return; }
     }
     if (e.button === 1) {
       e.preventDefault();
@@ -1030,6 +1208,11 @@ export function SimulatorView({
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const sDrag = shifterDragRef.current;
     const ctrl = sceneCtrlRef.current;
+    if (!sDrag && cameraMode === "cockpit" && e.pointerType === "mouse" && ctrl) {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const control = pos ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      ctrl.setCockpitControlInteraction(control);
+    }
     if (sDrag && sDrag.id === e.pointerId && ctrl) {
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
       if (!pos) return;
@@ -1359,6 +1542,8 @@ export function SimulatorView({
         </div>
       </div>}
 
+      <audio ref={radioAudioRef} preload="none" className="hidden" onPlaying={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "live" }))} onWaiting={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "connecting" }))} onError={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "error", radioPlaying: false }))} />
+
       {/* Главная 3D-сцена с зеркалами, статусом экзаменатора и органами управления */}
       <div
         ref={containerRef}
@@ -1389,10 +1574,23 @@ export function SimulatorView({
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
 
+        {!uiHidden && <div className="absolute left-3 top-3 z-[58]">
+          <button type="button" data-testid="hud-panels-menu" className="btn btn-mini shadow-lg" aria-expanded={showPanelsMenu} onClick={() => setShowPanelsMenu((v) => !v)}>Окна HUD ▾</button>
+          {showPanelsMenu && <div className="mt-1 w-60 rounded-xl border hairline bg-[#0b1218]/98 p-2 shadow-2xl backdrop-blur">
+            <div className="text-[10px] mono text-[#8fa2ae] px-2 pb-1">ПАНЕЛИ ТРЕНАЖЁРА</div>
+            {PANEL_IDS.map((item) => <div key={item.id} className="flex items-center gap-1 px-1 py-1 text-[11px]">
+              <span className="flex-1 truncate text-[#d3e0e7]">{item.label}</span>
+              <button type="button" data-testid={`panel-collapse-toggle-${item.id}`} className="btn btn-mini" onClick={() => togglePanelCollapse(item.id)}>{panelState.collapsed.includes(item.id) ? "Развернуть" : "Свернуть"}</button>
+              {panelState.closed.includes(item.id) ? <button type="button" data-testid={`panel-restore-${item.id}`} className="btn btn-mini" onClick={() => restorePanel(item.id)}>Вернуть</button> : <button type="button" className="btn btn-mini" onClick={() => closePanel(item.id)}>×</button>}
+            </div>)}
+            <button type="button" className="w-full mt-1 text-[10px] text-[#f5b942] py-1" onClick={() => { setPanelState({ collapsed: [], closed: [] }); }}>Восстановить все панели</button>
+          </div>}
+        </div>}
+
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
         {!webglFallback && showRearMirror && (
           <FloatingPanel
-            id="mirrorRear"
+            id="mirrorRear" {...panelProps("mirrorRear", "Заднее зеркало")}
             title="Зеркало заднего вида"
             icon="eye"
             layout={layout.mirrorRear}
@@ -1408,7 +1606,7 @@ export function SimulatorView({
         )}
         {!immersive && !webglFallback && showMirrors && (
           <FloatingPanel
-            id="mirrorLeft"
+            id="mirrorLeft" {...panelProps("mirrorLeft", "Левое зеркало")}
             layout={layout.mirrorLeft}
             defaults={(_cw, ch) => ({ x: 12, y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1422,7 +1620,7 @@ export function SimulatorView({
         )}
         {!webglFallback && showMirrors && (
           <FloatingPanel
-            id="mirrorRight"
+            id="mirrorRight" {...panelProps("mirrorRight", "Правое зеркало")}
             layout={layout.mirrorRight}
             defaults={(cw, ch) => ({ x: Math.max(0, cw - 182), y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1438,7 +1636,7 @@ export function SimulatorView({
         {/* Рулевое колесо: перетаскивается и масштабируется; поворот мышью/тачем и клавишами A/D */}
         {!immersive && !uiHidden && !webglFallback && (
           <FloatingPanel
-            id="steeringWheel"
+            id="steeringWheel" {...panelProps("steeringWheel", "Рулевое колесо")}
             layout={layout.steeringWheel}
             defaults={(cw, ch) => cw < 720
               ? {x: 8, y: ch - 162, w: 106}
@@ -1499,7 +1697,7 @@ export function SimulatorView({
         {/* [SEC:sim-hud] Штрафы, знаки/светофор/FPS, статус экзаменатора, настройки, справка и камера */}
         {!immersive && !uiHidden && (
           <FloatingPanel
-            id="scorePanel"
+            id="scorePanel" {...panelProps("scorePanel", "Оценка")}
             layout={layout.scorePanel}
             defaults={() => ({ x: 12, y: 12, w: 232 })}
             minW={190}
@@ -1537,7 +1735,7 @@ export function SimulatorView({
         {/* Правый верхний блок: знак скорости + светофор + FPS (перенос долгим нажатием) */}
         {!uiHidden && (
           <FloatingPanel
-            id="speedPanel"
+            id="speedPanel" {...panelProps("speedPanel", "Скорость")}
             layout={layout.speedPanel}
             defaults={(cw) => ({ x: Math.max(0, cw - 236), y: 12, w: 232 })}
             minW={150}
@@ -1588,7 +1786,7 @@ export function SimulatorView({
         {/* Строка статуса / задания экзаменатора (#status) */}
         {!uiHidden && (
           <FloatingPanel
-            id="statusBar"
+            id="statusBar" {...panelProps("statusBar", "Статус")}
             layout={layout.statusBar}
             defaults={(cw) => ({ x: Math.max(0, (cw - 540) / 2), y: 148, w: 540 })}
             minW={300}
@@ -1650,6 +1848,58 @@ export function SimulatorView({
               </button>
             </div>
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
+            <KeyBindingsEditor value={bindings} onChange={setBindings} />
+            <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3" data-testid="head-unit-settings">
+              <div className="mono text-[10px] text-[#f5b942] mb-2">7″ ШГУ · МУЛЬТИМЕДИА</div>
+              <div className="grid grid-cols-4 gap-1 mb-2">
+                {HEAD_UNIT_MODES.map((mode) => <button key={mode.id} type="button" className={`btn btn-mini ${headUnit.mode === mode.id ? "btn-primary" : ""}`} onClick={() => { if (mode.id !== "radio") radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, mode: mode.id, radioPlaying: mode.id === "radio" ? prev.radioPlaying : false })); }}>{mode.short}</button>)}
+              </div>
+              {headUnit.mode === "radio" && <>
+                <div className="flex items-center justify-between gap-2 text-[11px] mb-2">
+                  <button type="button" className="btn btn-mini" aria-label="Предыдущая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, -1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>◀ TUNE</button>
+                  <span className="text-center min-w-0"><b>{radioStations[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{radioStations[headUnit.stationIndex]?.freq} FM</span></span>
+                  <button type="button" className="btn btn-mini" aria-label="Следующая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, 1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>TUNE ▶</button>
+                </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <button type="button" className="btn btn-mini" onClick={() => {
+                    const audio = radioAudioRef.current; if (!audio) return;
+                    if (headUnit.radioPlaying) { audio.pause(); setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "idle" })); }
+                    else { const station = radioStations[headUnit.stationIndex]; audio.src = station.streamUrl; audio.volume = headUnit.volume; engineSoundRef.current?.ensureStarted(); void audio.play().then(() => setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "stream", streamStatus: "live" }))).catch(() => setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "error" }))); }
+                  }}>{headUnit.radioPlaying ? "Пауза" : "▶ Эфир"}</button>
+                  <span className="text-[10px] text-[#8fa2ae]">{headUnit.streamStatus === "live" ? "ЖИВОЙ ЭФИР" : headUnit.streamStatus === "connecting" ? "ПОДКЛЮЧЕНИЕ…" : headUnit.streamStatus === "error" ? "ЭФИР НЕДОСТУПЕН" : "ГОТОВ"}</span>
+                </div>
+                <label className="block text-[10px] text-[#9bafbc]">VOL · {Math.round(headUnit.volume * 100)}%
+                  <input type="range" min={0} max={1} step={0.05} value={headUnit.volume} onChange={(e) => { const volume = clampVolume(Number(e.target.value)); setHeadUnit((prev) => ({ ...prev, volume })); if (radioAudioRef.current) radioAudioRef.current.volume = volume; }} className="w-full" />
+                </label>
+                <button type="button" data-testid="radio-save-track" className="btn btn-mini mt-2 w-full" onClick={async () => {
+                  const station = radioStations[headUnit.stationIndex]; const seconds = 32; const key = trackCacheKey(station.id, seconds);
+                  const wav = renderTrackWav(station, seconds);
+                  const persistent = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, blob: new Blob([wav], { type: "audio/wav" }) });
+                  const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
+                  setRadioMessage(persistent ? "Демо-фрагмент сохранён офлайн" : "Демо-фрагмент сохранён в памяти вкладки");
+                }}>⤓ Сохранить демо-фрагмент (32 с)</button>
+                {savedTracks.length > 0 && <div className="mt-2 space-y-1"><div className="text-[10px] text-[#8fa2ae]">СОХРАНЁННЫЕ ТРЕКИ</div>{savedTracks.map((track) => <div key={track.key} className="flex items-center gap-1 text-[10px]"><button type="button" className="text-left text-[#52d6bd] flex-1 truncate" onClick={async () => {
+                  const saved = await trackStore.loadTrack(track.key); const audio = radioAudioRef.current; if (!saved || !audio) return;
+                  if (savedAudioUrlRef.current) URL.revokeObjectURL(savedAudioUrlRef.current);
+                  const url = URL.createObjectURL(saved.blob); savedAudioUrlRef.current = url; audio.src = url; audio.volume = headUnit.volume;
+                  try { await audio.play(); setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "saved", savedTrackKey: track.key, streamStatus: "live" })); } catch { setRadioMessage("Не удалось воспроизвести сохранённый трек"); }
+                }}>▶ {track.freq} · {track.stationName}</button><button type="button" className="text-[#ff8585] px-1" aria-label={`Удалить ${track.stationName}`} onClick={async () => { await trackStore.deleteTrack(track.key); const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length })); }}>×</button></div>)}</div>}
+                {radioMessage && <p className="text-[10px] text-[#f5b942] mt-1" role="status">{radioMessage}</p>}
+              </>}
+              {headUnit.mode === "clip" && <button type="button" className="btn btn-mini w-full" onClick={() => setHeadUnit((prev) => ({ ...prev, clipIndex: (prev.clipIndex + 1) % HEAD_UNIT_CLIPS.length }))}>Следующий клип: {HEAD_UNIT_CLIPS[headUnit.clipIndex]?.title}</button>}
+              <p className="text-[10px] text-[#7c909d] mt-2">Состояние экрана отображается на 3D-панели в салоне. Живой поток требует интернета. Офлайн WAV — синтезированный демо-фрагмент станции, не запись эфира.</p>
+            </div>
+            <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
+              <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7]">
+                <span>Процедурный звук автомобиля</span>
+                <input type="checkbox" checked={soundEnabled} onChange={(e) => setSoundEnabled(e.target.checked)} className="accent-[#f5b942]" />
+              </label>
+              <label className="block text-[11px] text-[#d3e0e7] mt-2">
+                <span className="flex justify-between mb-1"><span>Громкость</span><b className="mono text-[#f5b942]">{Math.round(soundVolume * 100)}%</b></span>
+                <input type="range" min={0} max={1} step={0.05} value={soundVolume} onChange={(e) => setSoundVolume(Number(e.target.value))} className="w-full" />
+              </label>
+              <p className="text-[10px] text-[#7c909d] mt-1">Звук запускается после первого нажатия клавиши. J — сигнал, H — показать/скрыть интерфейс.</p>
+            </div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7] mb-2">
@@ -1798,7 +2048,7 @@ export function SimulatorView({
         {/* Переключатели камеры, траектории, зеркал и качества (перенос долгим нажатием) */}
         {!uiHidden && (
           <FloatingPanel
-            id="camToggles"
+            id="camToggles" {...panelProps("camToggles", "Камеры")}
             layout={layout.camToggles}
             defaults={(cw, ch) => {
               const w = Math.min(660, cw - 16);
@@ -1894,7 +2144,7 @@ export function SimulatorView({
         {/* [SEC:sim-cluster] Приборная панель, селектор АКПП, кнопки I/РН/B/L и раздельные педали */}
         {!uiHidden && (
           <FloatingPanel
-            id="cluster"
+            id="cluster" {...panelProps("cluster", "Приборы и селектор")}
             layout={layout.cluster}
             defaults={(cw, ch) => {
               const w = Math.min(620, cw - 16);
@@ -2080,7 +2330,7 @@ export function SimulatorView({
           const id = gas ? "pedalGas" : "pedalBrake";
           const width = gas ? 76 : 84;
           return (
-            <FloatingPanel key={id} id={id} activation="grip" resizable={false}
+            <FloatingPanel key={id} id={id} {...panelProps(id, gas ? "Педаль газа" : "Педаль тормоза")} activation="grip" resizable={false}
               gripLabel={gas ? "Переместить педаль газа" : "Переместить педаль тормоза"}
               layout={layout[id]} defaults={(cw, ch) => ({
                 x: Math.max(0, cw - 12 - width - (gas ? 0 : 86)), y: Math.max(0, ch - 98), w: width,
