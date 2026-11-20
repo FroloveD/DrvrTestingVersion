@@ -504,6 +504,7 @@ export function SimulatorView({
   // === [SEC:sim-actions] Команды поворотников, АКПП, стартера и сброса попытки ===
   const setTurnSignal = useCallback((signal: InputState["signal"]) => {
     inputRef.current.signal = signal;
+    engineSoundRef.current?.ensureStarted();
     if (signal) engineSoundRef.current?.clickIndicator();
     // Reflect a signal button/key press immediately instead of waiting for the next HUD tick.
     setHud((current) => ({ ...current, state: { ...current.state, signal } }));
@@ -592,6 +593,7 @@ export function SimulatorView({
 
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
+    engineSoundRef.current?.ensureStarted();
     const inp = inputRef.current;
     const err = checkEngineToggle(inp);
     if (err) {
