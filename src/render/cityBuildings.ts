@@ -622,7 +622,7 @@ export function buildOsmTreeInstances(
       trunkBucket.push(tree);
       trunkGroups.set(trunkMat, trunkBucket);
       const foliageIndex = tree.seed % env.foliageMats.length;
-      const crownKey = isSpruce ? `spruce:${foliageIndex}` : `leaf:${foliageIndex}`;
+      const crownKey = isSpruce ? "spruce" : `leaf:${foliageIndex}`;
       const crownBucket = crownGroups.get(crownKey) ?? [];
       crownBucket.push(tree);
       crownGroups.set(crownKey, crownBucket);
