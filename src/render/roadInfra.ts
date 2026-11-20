@@ -1218,11 +1218,6 @@ export function buildOsmStreetLightInstances(
       group.add(mesh);
     }
   }
-  unit.plinth.dispose();
-  unit.shaft.dispose();
-  unit.arm.dispose();
-  unit.lamp.dispose();
-  unit.diffuser.dispose();
 }
 
 /**
