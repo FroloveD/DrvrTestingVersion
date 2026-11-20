@@ -33,6 +33,8 @@
 │  src/analytics/*  summary · calibration (ДИ Уилсона)                    │
 │  src/storage/*    journalStore · routeCatalogStore (две локальные IndexedDB)          │
 │  src/strategy/*   plan (фазы, принципы, приоритеты, решения)            │
+│  src/audio/*      radioCatalog (чистый каталог/WAV), trackStore (IDB),   │
+│                   engineSound (WebAudio, браузерный слой)               │
 │  src/handoff.ts   генератор HANDOFF.md и блока передачи контекста       │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -41,7 +43,7 @@
 
 ---
 
-## 2. Жизненный цикл одного кадра и фиксированный шаг `1/60 с`
+## 2. Аудио и живые дисплеи салона\n\n- `src/audio/radioCatalog.ts` — чистый каталог HTTPS-радиостанций, переход по станциям, громкость и детерминированный WAV-рендер для офлайн-кэша.\n- `src/audio/trackStore.ts` — IndexedDB `cdt-audio` для сохранённых треков; при недоступности IndexedDB используется память текущей вкладки.\n- `src/audio/engineSound.ts` — WebAudio-синтез двигателя, шин, сигнала и реле; аудиограф создаётся после пользовательского жеста.\n- `src/render/cockpitDisplays.ts` — CanvasTexture приборной панели, 7-дюймового ШГУ и камеры заднего вида. `SceneController` обновляет их только в режиме салона и передаёт состояние через `setHeadUnitState`.\n- Физические органы консоли выбираются raycast-ом по компактному набору `cockpitPickTargets`; управление остаётся в `SimulatorView`, а рендерер отвечает за подсветку и анимацию.\n\n## 2. Жизненный цикл одного кадра и фиксированный шаг `1/60 с`
 
 Главный цикл находится в `src/components/SimulatorView.tsx` (`[SEC:sim-loop]`):
 
