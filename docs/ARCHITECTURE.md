@@ -12,6 +12,7 @@
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  UI-слой (React 19 + Tailwind 4): src/App.tsx, src/components/*         │
 │  Вкладки, плавающие панели HUD, SVG-схемы, импорт/экспорт файлов        │
+│  audio: radioCatalog (pure), trackStore (IndexedDB), engineSound (WebAudio)│
 └──────────────┬──────────────────────────┬───────────────────────────────┘
                │                          │
                ▼                          ▼
@@ -33,8 +34,6 @@
 │  src/analytics/*  summary · calibration (ДИ Уилсона)                    │
 │  src/storage/*    journalStore · routeCatalogStore (две локальные IndexedDB)          │
 │  src/strategy/*   plan (фазы, принципы, приоритеты, решения)            │
-│  src/audio/*      radioCatalog (чистый каталог/WAV), trackStore (IDB),   │
-│                   engineSound (WebAudio, браузерный слой)               │
 │  src/handoff.ts   генератор HANDOFF.md и блока передачи контекста       │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
