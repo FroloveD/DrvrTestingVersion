@@ -246,6 +246,10 @@ export function stepSimulation(
   // Синхронизируем органы управления из InputState
   s.prevGear = s.gear;
   s.gear = input.gear;
+  if (isManualGear(s.gear)) {
+    if (s.prevGear !== s.gear) s.shiftTimer = MANUAL_SHIFT_DURATION_S;
+    s.autoSubGear = Number(s.gear);
+  }
   s.engineOn = input.engineOn;
   s.handbrake = input.handbrake;
   s.belt = input.belt;
