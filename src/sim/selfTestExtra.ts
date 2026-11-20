@@ -1066,7 +1066,7 @@ export const extraCases: SelfTestCase[] = [
         "Селектор не должен включать R на скорости вперёд");
       return "5 моделей · габариты, 6 ступеней, Shiftronic и engine braking OK";
     },
-  },,
+  },
 
   {
     id: "T36",
