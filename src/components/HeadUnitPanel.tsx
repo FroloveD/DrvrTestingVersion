@@ -70,7 +70,7 @@ export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATI
       cancelled = true;
       audio.pause();
     };
-  }, [value.mode, value.radioPlaying, value.stationIndex, value.source, value.savedTrackKey]);
+  }, [value.mode, value.radioPlaying, value.stationIndex, value.source, value.savedTrackKey, station.id]);
 
   useEffect(() => {
     const audio = audioRef.current;
