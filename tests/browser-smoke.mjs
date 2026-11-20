@@ -1376,6 +1376,61 @@ try {
   await ctx.close();
 }
 
+// ───────── Q. Переносимые настройки автомобиля, радио и HUD-панелей ─────────
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  try {
+    await tab(page, "Свой сценарий");
+    await page.getByTestId("editor-vehicle-radio-panel").waitFor({ timeout: 5000 });
+    await page.getByTestId("editor-car-rio").click();
+    await page.getByTestId("editor-radio-europa-plus").uncheck();
+    await page.getByTestId("editor-radio-all").click();
+    check("Q1 редактор сохраняет выбор автомобиля и FM-список", await page.getByTestId("editor-car-rio").getAttribute("aria-pressed") === "true");
+    await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
+    const selectedCar = await until(async () => {
+      const select = page.locator('select[aria-label="Выбор автомобиля"]');
+      return await select.count() ? await select.inputValue() : "";
+    }, 7000, 100);
+    check("Q2 выбранный в сценарии автомобиль применяется в симуляторе", selectedCar === "rio", selectedCar);
+
+    await page.getByRole("button", { name: /Управление/ }).click();
+    const settings = page.getByTestId("head-unit-settings");
+    await settings.waitFor({ timeout: 5000 });
+    await settings.getByRole("button", { name: "РАДИО" }).click();
+    await page.getByTestId("radio-save-track").click();
+    const saved = await until(async () => await settings.getByText("СОХРАНЁННЫЕ ТРЕКИ").count() > 0, 7000, 150);
+    check("Q3 ШГУ создаёт офлайн WAV и показывает список сохранённых треков", saved);
+    const tracks = await page.evaluate(() => new Promise((resolve, reject) => {
+      const request = indexedDB.open("cdt-audio", 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction("tracks", "readonly");
+        const all = tx.objectStore("tracks").getAll();
+        tx.oncomplete = () => { resolve(all.result.length); db.close(); };
+        tx.onerror = () => reject(tx.error);
+      };
+    }));
+    check("Q4 WAV-трек сохранён в IndexedDB", Number(tracks) >= 1, String(tracks));
+
+    await page.getByTestId("hud-panels-menu").click();
+    const cluster = page.locator('[data-hud-panel="cluster"]');
+    await cluster.waitFor({ timeout: 5000 });
+    await page.getByTestId("panel-collapse-cluster").click();
+    check("Q5 HUD-панель сворачивается", await page.getByTestId("panel-collapse-cluster").innerText() === "+");
+    await page.getByTestId("panel-close-cluster").click();
+    check("Q6 HUD-панель закрывается", await cluster.count() === 0);
+    await page.getByTestId("panel-restore-cluster").click();
+    check("Q7 закрытую HUD-панель можно восстановить", await cluster.count() === 1);
+    check("Q8 ошибок JavaScript в новых функциях нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.screenshot({ path: `${shotDir}/v1-audio-cockpit-panels.png` });
+  } catch (e) {
+    check("Q сценарий выполнен без исключений", false, String(e.message).slice(-500));
+  }
+  await ctx.close();
+}
+
 await browser.close();
 console.log(failed === 0 ? "SMOKE: все проверки пройдены" : `SMOKE: не пройдено ${failed}`);
 process.exit(failed === 0 ? 0 : 1);
