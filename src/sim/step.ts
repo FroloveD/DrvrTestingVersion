@@ -119,6 +119,7 @@ export function createInitialState(world: WorldData, readyStart = false, innerLi
     belt: readyStart,
     lights: readyStart,
     signal: null,
+    horn: false,
     wheelSpin: 0,
     pitch: 0,
     roll: 0,
