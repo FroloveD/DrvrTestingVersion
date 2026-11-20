@@ -319,8 +319,8 @@ export function FloatingPanel({
           <span className="truncate">{title ?? label}</span>
           {collapsed && collapsedSummary && <span className="truncate text-[#5b6f7d]">{collapsedSummary}</span>}
           <span className="ml-auto flex items-center gap-1">
-            {onToggleCollapse && <button type="button" aria-label={collapsed ? `Развернуть ${label ?? title}` : `Свернуть ${label ?? title}`} title={collapsed ? "Развернуть" : "Свернуть"} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#d3e0e7]">{collapsed ? "+" : "−"}</button>}
-            {onClose && <button type="button" aria-label={`Закрыть ${label ?? title}`} title="Закрыть панель" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#ff9b9b]">×</button>}
+            {onToggleCollapse && <button type="button" data-testid={`panel-collapse-${id}`} aria-label={collapsed ? `Развернуть ${label ?? title}` : `Свернуть ${label ?? title}`} title={collapsed ? "Развернуть" : "Свернуть"} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#d3e0e7]">{collapsed ? "+" : "−"}</button>}
+            {onClose && <button type="button" data-testid={`panel-close-${id}`} aria-label={`Закрыть ${label ?? title}`} title="Закрыть панель" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#ff9b9b]">×</button>}
             <span className="text-[#5b6f7d]">⋮⋮</span>
           </span>
         </div>
