@@ -49,7 +49,7 @@ import {
   type DetailedCarRig,
   type DetailedPedestrianVisual,
 } from "./vehiclesAndPeds";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "./vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "./vehiclesAndPeds";
 import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
 import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
@@ -168,6 +168,8 @@ export class SceneController {
   private readonly bayVisuals: BayVisual[] = [];
   private readonly cockpitDisplays: CockpitDisplayController;
   private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
+  private cockpitControlHover: CockpitControlId | null = null;
+  private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
   private playerRig: CarRig;
   private playerCarId = "ceed";
 
@@ -1099,6 +1101,37 @@ export class SceneController {
       rig.headSpotL.intensity = inten;
       rig.headSpotR.intensity = inten;
     }
+    if (rig.handbrakePivot) rig.handbrakePivot.rotation.x = state.handbrake ? -0.44 : -0.05;
+    if (rig.leftStalkPivot) rig.leftStalkPivot.rotation.z = state.signal === "left" ? -0.17 : state.signal === "right" ? 0.17 : 0;
+    if (rig.hazardBtnMat) rig.hazardBtnMat.color.setHex(state.signal === "hazard" && blinkOn ? 0xff2e2e : 0x8a1c1c);
+    if (rig.startBtnMat) rig.startBtnMat.color.setHex(state.engineOn ? 0x22c55e : 0xd97706);
+
+    const dtSec = Math.min(0.1, Math.max(0, dtMs) / 1000);
+    for (const key of Object.keys(this.controlPressAnim) as CockpitControlId[]) {
+      const v = this.controlPressAnim[key] ?? 0;
+      if (v <= 0) delete this.controlPressAnim[key];
+      else this.controlPressAnim[key] = Math.max(0, v - dtSec * 2.6);
+    }
+    const pressOf = (id: CockpitControlId) => this.controlPressAnim[id] ?? 0;
+    if (rig.headUnitKnobL) {
+      rig.headUnitKnobL.rotation.y = this.headUnit.stationIndex * 0.42 + pressOf("vol") * 0.9;
+      rig.headUnitKnobL.scale.setScalar(1 + (this.cockpitControlHover === "vol" ? 0.16 : 0) + pressOf("vol") * 0.12);
+    }
+    if (rig.headUnitKnobR) {
+      rig.headUnitKnobR.rotation.y = (this.cockpitControlHover === "tune" ? 0.22 : 0) + pressOf("tune") * 0.6;
+      rig.headUnitKnobR.scale.setScalar(1 + (this.cockpitControlHover === "tune" ? 0.16 : 0) + pressOf("tune") * 0.12);
+    }
+    if (rig.headlightSwitchPivot) rig.headlightSwitchPivot.rotation.z = state.lights ? -0.62 - pressOf("headlight") * 0.2 : pressOf("headlight") * -0.18;
+    if (rig.headlightSwitchMat) rig.headlightSwitchMat.color.setHex(state.lights ? 0x22c55e : this.cockpitControlHover === "headlight" ? 0x64748b : 0x334155);
+    if (rig.headUnitScreen) {
+      const mat = rig.headUnitScreen.material as THREE.MeshBasicMaterial;
+      const hover = this.cockpitControlHover === "headunit" || this.cockpitControlHover === "vol" || this.cockpitControlHover === "tune";
+      mat.color.setHex(this.headUnit.mode === "off" ? 0x51606e : hover ? 0xa9d4e6 : 0xffffff);
+    }
+    if (rig.startBtnMat && pressOf("start") > 0) rig.startBtnMat.color.setHex(0xfef08a);
+    if (rig.hazardBtnMat && (pressOf("hazard") > 0 || this.cockpitControlHover === "hazard") && state.signal !== "hazard") {
+      rig.hazardBtnMat.color.setHex(0xb91c1c);
+    }
 
     // Подвижная тень солнца вокруг автомобиля
     this.sun.position.set(state.x + 26, 44, state.z - 20);
@@ -1283,6 +1316,23 @@ export class SceneController {
 
   getHeadUnitState(): HeadUnitState {
     return this.headUnit;
+  }
+
+  setCockpitControlInteraction(hovered: CockpitControlId | null, pressed: CockpitControlId | null = null): void {
+    this.cockpitControlHover = hovered;
+    if (pressed) this.controlPressAnim[pressed] = 1;
+  }
+
+  pickCockpitControl(normX: number, normY: number): CockpitControlId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets?.length) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    const hits = this.shifterRaycaster.intersectObjects(targets, false);
+    return (hits[0]?.object.userData.cockpitControl as CockpitControlId | undefined) ?? null;
   }
 
   /** Переключает материал физических 3D-полотeн между живым отражением и амальгамным стеклом покоя. */
