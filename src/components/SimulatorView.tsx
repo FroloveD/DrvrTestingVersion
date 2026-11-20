@@ -273,7 +273,8 @@ export function SimulatorView({
   const recordingActiveRef = useRef(true);
   // A cold-start idle screen is not an attempt until the learner explicitly starts it.
   const rideStartedRef = useRef(false);
-  const lastAutoSaveRef = useRef(0);
+  // Give a newly mounted/reset attempt a full autosave interval before its first draft write.
+  const lastAutoSaveRef = useRef(Date.now());
 
   useEffect(() => {
     attemptSavedRef.current = onAttemptSaved;
@@ -441,6 +442,7 @@ export function SimulatorView({
       rideDirtyRef.current = false;
       recordingActiveRef.current = true;
       rideStartedRef.current = false;
+      lastAutoSaveRef.current = Date.now();
       keysRef.current = {};
       releasePedals();
       sceneCtrlRef.current?.resetOrbit();
