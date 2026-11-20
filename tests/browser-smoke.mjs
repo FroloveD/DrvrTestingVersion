@@ -30,8 +30,13 @@ async function open(ctx, url) {
   const errors = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("console", (m) => { if (m.type() === "error") errors.push("console.error: " + m.text().slice(0, 200)); });
-  await page.goto(url);
-  await page.waitForSelector("canvas");
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  try {
+    await page.waitForSelector("canvas", { state: "visible", timeout: 30000 });
+  } catch (error) {
+    const body = (await page.locator("body").innerText().catch(() => "")).slice(0, 1200);
+    throw new Error(`${error.message}\nPage/console errors: ${errors.slice(0, 8).join(" | ")}\nBody: ${body}`);
+  }
   await sleep(1200);
   return { page, errors };
 }
