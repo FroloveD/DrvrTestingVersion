@@ -64,7 +64,7 @@ import { Chip, Icon } from "./Icons";
 import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
@@ -559,6 +559,56 @@ export function SimulatorView({
     }));
   }, [onNotify]);
 
+  const stepRadioStation = useCallback((dir: 1 | -1) => {
+    const next = nextStationIndex(headUnitRef.current.stationIndex, dir);
+    radioAudioRef.current?.pause();
+    setHeadUnit((prev) => ({ ...prev, stationIndex: next, mode: "radio", radioPlaying: false, source: "stream", savedTrackKey: null, streamStatus: "idle" }));
+  }, []);
+
+  const toggleRadioPlayback = useCallback(() => {
+    const audio = radioAudioRef.current;
+    if (!audio) return;
+    if (headUnitRef.current.radioPlaying) {
+      audio.pause();
+      setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "idle" }));
+      return;
+    }
+    const station = RADIO_STATIONS[headUnitRef.current.stationIndex];
+    audio.src = station.streamUrl;
+    audio.volume = headUnitRef.current.volume;
+    engineSoundRef.current?.ensureStarted();
+    void audio.play().then(() => setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "stream", streamStatus: "live" }))).catch(() => setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "error" })));
+  }, []);
+
+  const cycleHeadUnitMode = useCallback(() => {
+    setHeadUnit((prev) => {
+      const index = HEAD_UNIT_MODES.findIndex((mode) => mode.id === prev.mode);
+      const mode = HEAD_UNIT_MODES[(index + 1) % HEAD_UNIT_MODES.length].id;
+      return { ...prev, mode, radioPlaying: mode === "radio" ? prev.radioPlaying : false };
+    });
+  }, []);
+
+  const pressCockpitControl = useCallback((id: CockpitControlId) => {
+    const inp = inputRef.current;
+    sceneCtrlRef.current?.setCockpitControlInteraction(null, id);
+    switch (id) {
+      case "headunit": cycleHeadUnitMode(); break;
+      case "vol": toggleRadioPlayback(); break;
+      case "tune": stepRadioStation(1); break;
+      case "stalk-left": setTurnSignal(inp.signal === null ? "left" : inp.signal === "left" ? "right" : null); break;
+      case "headlight": inp.lights = !inp.lights; break;
+      case "hazard": setTurnSignal(inp.signal === "hazard" ? null : "hazard"); break;
+      case "start": toggleEngine(); break;
+      case "handbrake": inp.handbrake = !inp.handbrake; break;
+      case "horn":
+        engineSoundRef.current?.ensureStarted();
+        hornPressedRef.current = true;
+        window.setTimeout(() => { hornPressedRef.current = false; }, 420);
+        break;
+    }
+    setHud((current) => ({ ...current, state: { ...current.state, lights: inp.lights, handbrake: inp.handbrake } }));
+  }, [cycleHeadUnitMode, toggleRadioPlayback, stepRadioStation, setTurnSignal, toggleEngine]);
+
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
   useEffect(() => {
     actionsRef.current = { toggleEngine, setGear, setTurnSignal };
@@ -1043,6 +1093,7 @@ export function SimulatorView({
     if (shifterDragRef.current) return;
     shifterHoverRef.current = null;
     sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
+    sceneCtrlRef.current?.setCockpitControlInteraction(null);
     if (pointerDragRef.current?.btn === 0) return;
     mouseSteerXRef.current = null;
     holdingSteerRef.current = false;
@@ -1061,6 +1112,8 @@ export function SimulatorView({
         ctrl.setShifterInteraction(hit, true, 0);
         return;
       }
+      const control = pos && ctrl ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      if (control && ctrl) { e.preventDefault(); ctrl.setCockpitControlInteraction(control, control); pressCockpitControl(control); return; }
     }
     if (e.button === 1) {
       e.preventDefault();
