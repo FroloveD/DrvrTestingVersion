@@ -11,6 +11,10 @@ assert not descriptor.startswith((b'\xff\xfe', b'\xfe\xff', b'\xef\xbb\xbf'))
 assert json.loads(descriptor.decode('utf-8'))['EngineAssociation'] == '5.7'
 for target in ['UEDev.Target.cs', 'UEDevEditor.Target.cs']:
     assert 'BuildSettingsVersion.V6' in (project / 'Source' / target).read_text(encoding='utf-8')
+# Регрессия C1083 из пользовательской сборки UE 5.7: актор лежит в Atmosphere/.
+scene = (project / 'Source/UEDev/Private/UEDevGameMode.cpp').read_text(encoding='utf-8')
+assert '#include "Atmosphere/SkyAtmosphere.h"' in scene
+assert '#include "Engine/SkyAtmosphere.h"' not in scene
 out = root / 'deliverables' / 'UEDev-menu-starter.zip'
 out.parent.mkdir(exist_ok=True)
 skip = {'Binaries', 'DerivedDataCache', 'Intermediate', 'Saved', '.vs', '__pycache__'}
