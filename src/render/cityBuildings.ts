@@ -641,12 +641,13 @@ export function buildOsmTreeInstances(
       const mesh = makeMesh(trunkGeometry, material, instances.length);
       instances.forEach((tree, index) => {
         const rand = makeRng(tree.seed);
+        const yaw = rand() * Math.PI * 2;
         const h = tree.height * (0.94 + rand() * 0.22);
         const isBirch = tree.seed % 9 === 1 || tree.seed % 9 === 2;
         const trunkH = h * (isBirch ? 0.54 : 0.45);
         const radius = isBirch ? 0.14 : 0.2;
         dummy.position.set(tree.x - centerX, trunkH * 0.5, tree.z - centerZ);
-        dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+        dummy.rotation.set(0, yaw, 0);
         dummy.scale.set(radius, trunkH, radius);
         dummy.updateMatrix();
         mesh.setMatrixAt(index, dummy.matrix);
@@ -664,6 +665,7 @@ export function buildOsmTreeInstances(
       const mesh = makeMesh(geometry, material, instances.length);
       instances.forEach((tree, index) => {
         const rand = makeRng(tree.seed);
+        const yaw = rand() * Math.PI * 2;
         const h = tree.height * (0.94 + rand() * 0.22);
         const isBirch = tree.seed % 9 === 1 || tree.seed % 9 === 2;
         if (isSpruce) {
@@ -675,7 +677,7 @@ export function buildOsmTreeInstances(
           dummy.position.set(tree.x - centerX, trunkH + crownR * 0.62, tree.z - centerZ);
           dummy.scale.set(crownR * 1.05, crownR * 0.95, crownR);
         }
-        dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+        dummy.rotation.set(0, yaw, 0);
         dummy.updateMatrix();
         mesh.setMatrixAt(index, dummy.matrix);
       });
@@ -686,9 +688,6 @@ export function buildOsmTreeInstances(
   }
 
   // Геометрии разделяются между ячейками и освобождаются при очистке worldGroup.
-  void trunkGeometry;
-  void foliageGeometry;
-  void spruceGeometry;
 }
 
 export function buildRealisticTree(
