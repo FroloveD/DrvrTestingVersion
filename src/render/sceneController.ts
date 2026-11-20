@@ -15,6 +15,8 @@
  */
 import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
+import { getPlayerCar } from "../sim/playerCar";
+import { carGeometry } from "../sim/vehicle";
 import {
   buildRealisticTree,
   buildOsmTreeInstances,
@@ -406,9 +408,33 @@ export class SceneController {
     this.sun.shadow.map = null;
   }
 
+  /** Пересоздаёт только риг игрока при смене выбранной модели; OSM-мир и его чанки не затрагиваются. */
+  private rebuildPlayerRig(carId: string): void {
+    this.scene.remove(this.playerRig.root);
+    this.disposeGroup(this.playerRig.root);
+    const car = getPlayerCar(carId);
+    this.playerRig = buildDetailedCar(
+      car.id, car.color, true,
+      this.sharedTextures[1] as THREE.CanvasTexture,
+      this.sharedTextures[2] as THREE.CanvasTexture,
+      this.sharedTextures[4] as THREE.CanvasTexture,
+      this.sharedTextures[6] as THREE.CanvasTexture,
+      OWN_MIRROR_HARDWARE_LAYER
+    );
+    this.playerRig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
+        obj.layers.set(PLAYER_EXTERIOR_LAYER);
+      }
+    });
+    this.scene.add(this.playerRig.root);
+    this.playerCarId = carId;
+  }
+
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
+    const requestedCarId = world.playerCarId ?? "ceed";
+    if (requestedCarId !== this.playerCarId) this.rebuildPlayerRig(requestedCarId);
     const osmBuildingCount = world.scenarioId === "city_osm"
       ? world.obstacles.filter((obs) => obs.kind === "building").length
       : 0;
@@ -1034,7 +1060,7 @@ export class SceneController {
           this.cockpitRearPrimed = true;
         }
         // Боковые зеркала настроены по методике автошколы: внутренняя кромка показывает борт своего авто, остальное — полосу и бордюр
-        const mountX = CAR.width / 2 + 0.13;
+        const mountX = carGeometry(state.carId).width / 2 + 0.13;
         if (opts.showMirrors) {
           const prime = !this.cockpitSidePrimed;
           if (prime || this.frameCounter % stride === 0) {
@@ -1056,7 +1082,7 @@ export class SceneController {
           this.renderInto(this.rearRT, this.rearCam, this.rearBuf, 0, 1.24, 0.25, 0, -0.08, 38, mirrors.rear);
         }
         // Камеры направлены назад и наружу: +X слева, −X справа. Не «смотрят» сквозь дверь.
-        const mountX = CAR.width / 2 + 0.14;
+        const mountX = carGeometry(state.carId).width / 2 + 0.14;
         if (opts.showMirrors && mirrors.left && this.frameCounter % 3 === 0) {
           this.renderInto(this.sideRT, this.sideCam, this.sideBuf, mountX, 0.92, 0.49, -0.53, -0.10, 44, mirrors.left);
         }
@@ -1194,9 +1220,9 @@ export class SceneController {
       // Это исключает влияние локальной ориентации/смещения 3D-модели кузова.
       const lx = Math.cos(s.h);
       const lz = -Math.sin(s.h);
-      const eyeX = s.x + lx * (CAR.width * 0.23) - fx * 0.02;
+      const eyeX = s.x + lx * (carGeometry(s.carId).width * 0.23) - fx * 0.02;
       const eyeY = 1.19;
-      const eyeZ = s.z + lz * (CAR.width * 0.23) - fz * 0.02;
+      const eyeZ = s.z + lz * (carGeometry(s.carId).width * 0.23) - fz * 0.02;
       const lookYaw = s.h + this.orbitYaw * 0.65;
       const lookPitch = clamp(-0.12 - (this.orbitPitch - 0.36) * 6, -0.8, 0.55);
 
