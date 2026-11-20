@@ -5,7 +5,7 @@
  * @tests T32–T33 (ядро маршрутизации), Browser Smoke P.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import {
   buildExamRouteRecord,
