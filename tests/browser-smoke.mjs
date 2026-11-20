@@ -1107,8 +1107,8 @@ try {
 /* P · Каталог маршрутов OSM: импорт карты, построение по графу, сохранение и повторное открытие. */
 {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const { page, errors } = await open(ctx, httpUrl);
   try {
+    const { page, errors } = await open(ctx, httpUrl);
     await tab(page, "Свой сценарий");
     const routeOsm = `<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6">
@@ -1435,8 +1435,9 @@ try {
     await page.screenshot({ path: `${shotDir}/v1-audio-cockpit-panels.png` });
   } catch (e) {
     check("Q сценарий выполнен без исключений", false, String(e.message).slice(-500));
+  } finally {
+    await ctx.close();
   }
-  await ctx.close();
 }
 
 await browser.close();
