@@ -161,6 +161,7 @@ export class SceneController {
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
   private readonly bayVisuals: BayVisual[] = [];
   private playerRig: CarRig;
+  private playerCarId = "ceed";
 
   // Прогнозная траектория Аккермана
   private readonly trajGroup = new THREE.Group();
