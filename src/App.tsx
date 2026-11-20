@@ -119,6 +119,7 @@ export default function App() {
   const [journal, setJournal] = useState<AttemptMeta[]>([]);
   const journalRef = useRef<AttemptMeta[]>([]);
   const [currentAttempt, setCurrentAttempt] = useState<RecordedAttempt | null>(null);
+  const [newAttemptRequest, setNewAttemptRequest] = useState(0);
   const [storage, setStorage] = useState<{ ready: boolean; backend: JournalBackend; error: string | null }>({
     ready: false,
     backend: "indexeddb",
@@ -456,6 +457,7 @@ export default function App() {
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
             active={tab === "sim"}
+            newAttemptRequest={newAttemptRequest}
             immersive={immersiveMode}
             onToggleImmersive={toggleImmersiveMode}
             scenarioId={scenarioId}
@@ -532,6 +534,11 @@ export default function App() {
             onGenerateDemoAttempt={(att) => handleAttemptSaved({ ...att, student: DEMO_STUDENT }, true)}
             loadAllAttempts={loadAllAttempts}
             onClearJournal={clearJournal}
+            onNewAttempt={() => {
+              setNewAttemptRequest((request) => request + 1);
+              setTab("sim");
+              notify("Новый заезд: исходная позиция, двигатель заглушен, КПП P");
+            }}
             onBackToSim={() => setTab("sim")}
             onNotify={notify}
           />
