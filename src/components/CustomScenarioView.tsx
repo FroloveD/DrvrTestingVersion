@@ -64,6 +64,8 @@ import type {
   Vec2,
 } from "../sim/types";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
+import { DEFAULT_PLAYER_CAR_ID, getPlayerCar, PLAYER_CARS } from "../sim/playerCar";
+import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
 import { Chip, downloadJson, Icon } from "./Icons";
 import { DEFAULT_LAYERS, MapCanvasEditor, type LayerVisibility } from "./MapCanvasEditor";
 
@@ -384,6 +386,11 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     [commitChange, def]
   );
 
+  const radioList = useMemo(() => {
+    const ids = (def.radioStationIds ?? []).filter((id) => INTERNET_RADIO_STATIONS.some((station) => station.id === id));
+    return ids.length > 0 ? ids : INTERNET_RADIO_STATIONS.map((station) => station.id);
+  }, [def.radioStationIds]);
+
   const handleUndo = useCallback(() => {
     const res = undoEditorHistory(history, def);
     if (!res) return;
@@ -670,6 +677,52 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           >
             <Icon name="car" size={15} /> Открыть в тренажёре →
           </button>
+        </div>
+      </div>
+
+      <div className="panel p-4 space-y-3" data-testid="editor-vehicle-radio-panel">
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-xs font-extrabold">Автомобиль заезда</span>
+            <span className="mono text-[10px] text-[#9bafbc]">{getPlayerCar(def.playerCarId ?? DEFAULT_PLAYER_CAR_ID).name} · {getPlayerCar(def.playerCarId ?? DEFAULT_PLAYER_CAR_ID).gearbox}</span>
+          </div>
+          <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+            {PLAYER_CARS.map((car) => {
+              const active = (def.playerCarId ?? DEFAULT_PLAYER_CAR_ID) === car.id;
+              return <button key={car.id} type="button" data-testid={`editor-car-${car.id}`} aria-pressed={active}
+                onClick={() => { patchDef({ playerCarId: car.id }); onNotify(`Автомобиль сценария: ${car.name}`); }}
+                className={`text-left rounded-lg p-2 border transition ${active ? "bg-[#f5b942]/12 border-[#f5b942]/70 text-white" : "bg-[#091017] border-white/10 text-[#c3d2dc] hover:border-white/25"}`}>
+                <span className="text-[11px] font-extrabold">{car.shortName}</span>
+                <span className="mono block text-[10px] text-[#8fa2ae]">{car.vmaxKmh} км/ч · {car.gearbox}</span>
+                <span className="block text-[10px] text-[#a9bcc8] mt-0.5">{car.blurb}</span>
+              </button>;
+            })}
+          </div>
+        </div>
+        <div className="border-t border-white/10 pt-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-extrabold">Радиостанции и подключения</span>
+            <span className="mono text-[10px] text-[#9bafbc]">{radioList.length} из {INTERNET_RADIO_STATIONS.length} в тюнере сценария</span>
+          </div>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {INTERNET_RADIO_STATIONS.map((station) => {
+              const enabled = radioList.includes(station.id);
+              return <label key={station.id} className={`flex items-start gap-2 rounded-lg px-2 py-1.5 border cursor-pointer ${enabled ? "bg-[#0f1a24] border-[#52d6bd]/45" : "bg-[#091017] border-white/10"}`}>
+                <input type="checkbox" data-testid={`editor-radio-${station.id}`} checked={enabled}
+                  onChange={() => {
+                    const next = enabled ? radioList.filter((id) => id !== station.id) : [...radioList, station.id];
+                    if (next.length === 0) { onNotify("В тюнере должна остаться хотя бы одна станция"); return; }
+                    patchDef({ radioStationIds: next });
+                  }} className="mt-0.5 accent-[#52d6bd]" />
+                <span className="min-w-0">
+                  <span className="mono text-[11px] text-white">FM {station.freq} · {station.name}</span>
+                  <span className="mono block text-[10px] text-[#8fa2ae]">{station.genre}</span>
+                </span>
+              </label>;
+            })}
+          </div>
+          <button type="button" className="btn btn-mini" data-testid="editor-radio-all" onClick={() => patchDef({ radioStationIds: INTERNET_RADIO_STATIONS.map((station) => station.id) })}>Все станции</button>
+          <p className="mono text-[10px] text-[#7c909d]">Выбранные автомобиль и станции применяются только к этому сценарию. Старые сценарии используют Ceed JD и весь каталог.</p>
         </div>
       </div>
 
