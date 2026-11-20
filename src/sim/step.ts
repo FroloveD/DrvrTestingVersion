@@ -263,7 +263,7 @@ export function stepSimulation(
   const carGeo = carGeometry(s.carId);
   const carPhysics = playerCarPhysics(s.carId);
   s.maxInnerWheelDeg = normalizeWheelLock(calibration.maxInnerWheelDeg ?? carPhysics.maxInnerDeg);
-  s.steer = wheelDegToSteerRad(s.swDeg, s.maxInnerWheelDeg);
+  s.steer = wheelDegToSteerRad(s.swDeg, s.maxInnerWheelDeg, carGeo);
   s.steerLeft = ackermannAngle(1, s.steer, carGeo);
   s.steerRight = ackermannAngle(-1, s.steer, carGeo);
 
@@ -329,7 +329,7 @@ export function stepSimulation(
 
   const activeForwardGear = s.gear === "D" || isManualGear(s.gear) ? s.autoSubGear : 0;
   const creepAccel = computeIdleCreepAccel(s.gear, s.autoSubGear, s.v, s.throttlePos, s.brakePos, s.engineOn, s.handbrake, carPhysics.creepKmh);
-  let accel = computeEngineAccel(s.throttlePos, s.gear, s.autoSubGear, s.v, s.engineOn, s.handbrake, s.shiftTimer) + creepAccel;
+  let accel = computeEngineAccel(s.throttlePos, s.gear, s.autoSubGear, s.v, s.engineOn, s.handbrake, s.shiftTimer, carPhysics.accelScale, carPhysics.vmaxKmh) + creepAccel;
   const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear, s.engineOn, carPhysics.accelScale);
   if (s.v !== 0) accel -= Math.sign(s.v) * drag;
   else if (accel !== 0) accel = Math.abs(accel) <= drag ? 0 : accel - Math.sign(accel) * drag;
