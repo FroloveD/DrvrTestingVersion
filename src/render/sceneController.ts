@@ -40,6 +40,7 @@ import {
   type RoadMaterialPack,
 } from "./roadInfra";
 import { makeGostBayStencilTexture, makeUrbanGrassTexture } from "./roadTextures";
+import { CockpitDisplayController, DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "./cockpitDisplays";
 import {
   buildDetailedCar,
   buildDetailedPedestrian,
@@ -165,6 +166,8 @@ export class SceneController {
   private readonly pedVisuals: PedestrianVisual[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
   private readonly bayVisuals: BayVisual[] = [];
+  private readonly cockpitDisplays: CockpitDisplayController;
+  private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
   private playerRig: CarRig;
   private playerCarId = "ceed";
 
@@ -278,6 +281,7 @@ export class SceneController {
     const playerPlateTex = makeRussianLicensePlateTexture("У 077 КС");
     const civilPlateTex = makeRussianLicensePlateTexture("А 482 МН");
     const clusterTex = makeInstrumentClusterTexture();
+    this.cockpitDisplays = new CockpitDisplayController();
     grassTex.repeat.set(160, 160);
     this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
@@ -317,7 +321,9 @@ export class SceneController {
 
     // Детализированный Kia Ceed JD: кузов, оптика, диски, салон и приборная панель.
     this.playerRig = buildDetailedCar(
-      "ceed", 0xd97706, true, shadowTex, learnerTex, playerPlateTex, clusterTex, OWN_MIRROR_HARDWARE_LAYER
+      "ceed", 0xd97706, true, shadowTex, learnerTex, playerPlateTex,
+      this.cockpitDisplays.clusterTex, OWN_MIRROR_HARDWARE_LAYER,
+      { headUnitTex: this.cockpitDisplays.headUnitTex, rearOverlayTex: this.cockpitDisplays.rearOverlayTex }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -549,8 +555,9 @@ export class SceneController {
       this.sharedTextures[1] as THREE.CanvasTexture,
       this.sharedTextures[2] as THREE.CanvasTexture,
       this.sharedTextures[4] as THREE.CanvasTexture,
-      this.sharedTextures[6] as THREE.CanvasTexture,
-      OWN_MIRROR_HARDWARE_LAYER
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      { headUnitTex: this.cockpitDisplays.headUnitTex, rearOverlayTex: this.cockpitDisplays.rearOverlayTex }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -1078,6 +1085,9 @@ export class SceneController {
 
     // Поворотники (период 700 мс, как в v8)
     const { blinkOn, leftLit, rightLit } = getTurnSignalFlash(state.signal, state.time);
+    if (opts.cameraMode === "cockpit") {
+      this.cockpitDisplays.update(state, world, leftLit, rightLit, this.headUnit, isBraking, now / 1000);
+    }
     for (const m of rig.blinkLeftMats) m.color.setHex(leftLit ? 0xffb020 : 0x9a621e);
     for (const m of rig.blinkRightMats) m.color.setHex(rightLit ? 0xffb020 : 0x9a621e);
 
@@ -1264,6 +1274,15 @@ export class SceneController {
     }
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Сохраняет состояние мультимедийного блока для 3D-экрана салона. */
+  setHeadUnitState(headUnit: HeadUnitState): void {
+    this.headUnit = headUnit;
+  }
+
+  getHeadUnitState(): HeadUnitState {
+    return this.headUnit;
   }
 
   /** Переключает материал физических 3D-полотeн между живым отражением и амальгамным стеклом покоя. */
@@ -1494,6 +1513,7 @@ export class SceneController {
     (this.groundMesh.material as THREE.Material).dispose();
     this.disposeGroup(this.worldGroup);
     this.disposeGroup(this.playerRig.root);
+    this.cockpitDisplays.dispose();
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();
