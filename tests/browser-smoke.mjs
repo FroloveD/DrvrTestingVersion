@@ -1425,8 +1425,10 @@ try {
     await page.getByTestId("panel-collapse-cluster").click();
     check("Q5 HUD-панель сворачивается", await page.getByTestId("panel-collapse-cluster").innerText() === "+");
     await page.getByTestId("panel-close-cluster").click();
+    await cluster.waitFor({ state: "detached", timeout: 3000 });
     check("Q6 HUD-панель закрывается", await cluster.count() === 0);
     await page.getByTestId("panel-restore-cluster").click();
+    await cluster.waitFor({ state: "visible", timeout: 3000 });
     check("Q7 закрытую HUD-панель можно восстановить", await cluster.count() === 1);
     check("Q8 ошибок JavaScript в новых функциях нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/v1-audio-cockpit-panels.png` });
