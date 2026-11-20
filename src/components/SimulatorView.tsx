@@ -19,6 +19,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { HeadUnitPanel } from "./HeadUnitPanel";
+import { DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "../render/cockpitDisplays";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { EngineSound } from "../audio/engineSound";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
@@ -221,6 +223,14 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("cdt.headUnit.v1") || "null") as Partial<HeadUnitState> | null;
+      return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, radioPlaying: false, streamStatus: "idle" } : DEFAULT_HEAD_UNIT_STATE;
+    } catch {
+      return DEFAULT_HEAD_UNIT_STATE;
+    }
+  });
   const [bindings, setBindings] = useState<KeyBindings>(loadKeyBindings);
   const bindingsRef = useRef(bindings);
   bindingsRef.current = bindings;
@@ -288,8 +298,19 @@ export function SimulatorView({
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
+  const headUnitRef = useRef(headUnit);
+  headUnitRef.current = headUnit;
   const engineSoundRef = useRef<EngineSound | null>(null);
   const lastEngineSoundAtRef = useRef(0);
+  useEffect(() => {
+    try {
+      localStorage.setItem("cdt.headUnit.v1", JSON.stringify({ ...headUnit, radioPlaying: false, streamStatus: "idle" }));
+    } catch {
+      // Настройки мультимедиа остаются активными до закрытия вкладки.
+    }
+    sceneCtrlRef.current?.setHeadUnitState(headUnit);
+  }, [headUnit]);
+
   const worldRef = useRef<WorldData>(world);
   const gridRef = useRef<SpatialGrid>(new SpatialGrid(world.obstacles, 10));
   const calRef = useRef<CalibrationConfig>(calibration);
@@ -575,6 +596,7 @@ export function SimulatorView({
     let ctrl: SceneController | null = null;
     try {
       ctrl = new SceneController(canvas);
+      ctrl.setHeadUnitState(headUnitRef.current);
       ctrl.applyQuality(optsRef.current.quality);
       ctrl.loadWorld(worldRef.current);
       ctrl.resize(box.clientWidth, box.clientHeight);
@@ -1690,6 +1712,7 @@ export function SimulatorView({
               </button>
             </div>
             <KeyBindingsEditor value={bindings} onChange={setBindings} />
+            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
