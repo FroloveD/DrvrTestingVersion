@@ -1143,6 +1143,89 @@ function findAimAngleToNearestRoad(x: number, z: number, world: WorldData): numb
 }
 
 /**
+ * Инстансинг городских мачт освещения для больших OSM-сцен.
+ * Каждая ячейка 96×96 м получает отдельные InstancedMesh по компонентам/материалам.
+ * Геометрия и ориентация соответствуют обычной мачте из buildGostStreetProp.
+ */
+export function buildOsmStreetLightInstances(
+  group: THREE.Group,
+  poles: ObstacleBox[],
+  world: WorldData,
+  mats: RoadMaterialPack
+): void {
+  const cellSize = 96;
+  const cells = new Map<string, ObstacleBox[]>();
+  for (const pole of poles) {
+    if (pole.height < 2.2) continue;
+    const gx = Math.floor(pole.cx / cellSize);
+    const gz = Math.floor(pole.cz / cellSize);
+    const key = `${gx},${gz}`;
+    const bucket = cells.get(key) ?? [];
+    bucket.push(pole);
+    cells.set(key, bucket);
+  }
+
+  const unit = {
+    plinth: new THREE.CylinderGeometry(0.13, 0.17, 0.85, 8),
+    shaft: new THREE.CylinderGeometry(0.055, 0.105, 1, 8),
+    arm: new THREE.CylinderGeometry(0.032, 0.045, 1, 7),
+    lamp: new THREE.BoxGeometry(0.28, 0.09, 0.62),
+    diffuser: new THREE.PlaneGeometry(0.22, 0.48),
+  };
+  const dummy = new THREE.Object3D();
+
+  for (const [key, bucket] of cells) {
+    const [gx, gz] = key.split(",").map(Number);
+    const centerX = (gx + 0.5) * cellSize;
+    const centerZ = (gz + 0.5) * cellSize;
+    const makeBatch = (geometry: THREE.BufferGeometry, material: THREE.Material, castShadow = false) => {
+      const mesh = new THREE.InstancedMesh(geometry, material, bucket.length);
+      mesh.position.set(centerX, 0, centerZ);
+      mesh.castShadow = castShadow;
+      mesh.receiveShadow = false;
+      mesh.frustumCulled = true;
+      return mesh;
+    };
+    const plinths = makeBatch(unit.plinth, mats.darkIronMat);
+    const shafts = makeBatch(unit.shaft, mats.galvPoleMat);
+    const arms = makeBatch(unit.arm, mats.galvPoleMat);
+    const lamps = makeBatch(unit.lamp, mats.darkIronMat);
+    const diffusers = makeBatch(unit.diffuser, mats.luminaireGlowMat);
+
+    bucket.forEach((pole, index) => {
+      const yaw = findAimAngleToNearestRoad(pole.cx, pole.cz, world);
+      const x = pole.cx - centerX;
+      const z = pole.cz - centerZ;
+      const h = Math.max(4.6, pole.height * 1.45);
+      const place = (mesh: THREE.InstancedMesh, px: number, py: number, pz: number, rx = 0, ry = yaw, rz = 0, sx = 1, sy = 1, sz = 1) => {
+        dummy.position.set(x + px * Math.cos(yaw) + pz * Math.sin(yaw), py, z - px * Math.sin(yaw) + pz * Math.cos(yaw));
+        dummy.rotation.set(rx, ry, rz);
+        dummy.scale.set(sx, sy, sz);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+      };
+
+      place(plinths, 0, 0.425, 0);
+      place(shafts, 0, 0.7 + (h - 0.7) * 0.5, 0, 0, yaw, 0, 1, h - 0.7, 1);
+      place(arms, 0, h + 0.18, 0.58, Math.PI * 0.37);
+      place(lamps, 0, h + 0.42, 1.28);
+      place(diffusers, 0, h + 0.372, 1.28, Math.PI / 2);
+    });
+
+    for (const mesh of [plinths, shafts, arms, lamps, diffusers]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
+  }
+  unit.plinth.dispose();
+  unit.shaft.dispose();
+  unit.arm.dispose();
+  unit.lamp.dispose();
+  unit.diffuser.dispose();
+}
+
+/**
  * Строит элементы дорожной инфраструктуры РФ/СНГ (`cone`, `pole`, `fence`, `island`, `curb`).
  * Возвращает `true`, если препятствие отрисовано (здания, деревья и авто остаются за `SceneController`).
  */
