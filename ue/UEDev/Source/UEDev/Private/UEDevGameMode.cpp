@@ -34,7 +34,7 @@ void AUEDevGameMode::BeginPlay() {
         Box(FVector(1500 + Index * 700, 1200, 50), FVector(0.5, 0.5, 1));
     }
     for (int Index = -5; Index <= 5; ++Index) {
-        DrawDebugLine(World, FVector(-5500, Index * 600, 2), FVector(5500, Index * 600, 2), FColor::Gray, true, -1, 0, 3);
+        DrawDebugLine(World, FVector(-5500, Index * 600, 2), FVector(5500, Index * 600, 2), FColor(128, 128, 128), true, -1, 0, 3);
     }
     World->SpawnActor<ADirectionalLight>(FVector(0, 0, 1500), FRotator(-55, -30, 0));
     // Нет PlayerStart-ассета: машину ставим вручную над плоскостью.

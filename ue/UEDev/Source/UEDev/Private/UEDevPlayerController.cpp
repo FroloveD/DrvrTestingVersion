@@ -28,15 +28,15 @@ void AUEDevPlayerController::Escape() {
 }
 void AUEDevPlayerController::Apply(uedev::Action Action) {
     if (!Flow.Apply(Action)) return;
-    if (auto* Pawn = Cast<AUEDevPawn>(GetPawn())) {
-        if (Action == uedev::Action::Start || Action == uedev::Action::Restart) Pawn->ResetRide();
+    if (auto* DrivingPawn = Cast<AUEDevPawn>(GetPawn())) {
+        if (Action == uedev::Action::Start || Action == uedev::Action::Restart) DrivingPawn->ResetRide();
         if (Action == uedev::Action::Finish) {
-            const auto& State = Pawn->GetDrivingState();
+            const auto& State = DrivingPawn->GetDrivingState();
             Result = FString::Printf(TEXT("Заезд завершён вручную. Последняя скорость: %.1f км/ч, КПП: %s.\nОценка, запись и журнал пока не перенесены. Это не экзаменационный протокол."),
                 FMath::Abs(State.Speed) * 3.6, UTF8_TO_TCHAR(uedev::Label(State.Selector)));
         }
         // Возврат в меню отбрасывает текущий стендовый заезд, журнал пока отсутствует.
-        if (Action == uedev::Action::Home) Pawn->ResetRide();
+        if (Action == uedev::Action::Home) DrivingPawn->ResetRide();
     }
     Section = TEXT("Заезд");
     SyncScreen();
@@ -51,10 +51,10 @@ void AUEDevPlayerController::SyncScreen() {
     RemoveScreen();
     FlushPressedKeys();
     const bool Driving = Flow.CanDrive();
-    if (auto* Pawn = Cast<AUEDevPawn>(GetPawn())) {
-        Pawn->SetActorTickEnabled(Driving);
-        Pawn->SetActorHiddenInGame(Flow.Current == uedev::Screen::Menu);
-        if (Driving) Pawn->EnableInput(this); else Pawn->DisableInput(this);
+    if (auto* DrivingPawn = Cast<AUEDevPawn>(GetPawn())) {
+        DrivingPawn->SetActorTickEnabled(Driving);
+        DrivingPawn->SetActorHiddenInGame(Flow.Current == uedev::Screen::Menu);
+        if (Driving) DrivingPawn->EnableInput(this); else DrivingPawn->DisableInput(this);
     }
     bShowMouseCursor = !Driving;
     if (Driving) {
