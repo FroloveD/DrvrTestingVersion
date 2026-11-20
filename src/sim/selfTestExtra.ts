@@ -1108,6 +1108,7 @@ export const extraCases: SelfTestCase[] = [
       const configured = normalizeCustomScenario({ ...base, playerCarId: "rio", radioStationIds: ["record"] });
       assert(configured.playerCarId === "rio", "Выбранный автомобиль должен сохраняться в сценарии");
       assert(configured.radioStationIds?.length === 1 && configured.radioStationIds[0] === "record", "Список FM-станций должен сохраняться");
+      assert(radioStationsFor(configured.radioStationIds).map((station) => station.id).join() === "record", "Тюнер должен ограничиваться станциями выбранного сценария");
       const sanitized = normalizeCustomScenario({ ...base, playerCarId: "invalid" as never, radioStationIds: ["invalid"] });
       assert(sanitized.playerCarId === undefined && sanitized.radioStationIds === undefined, "Неизвестные ID не должны попадать в нормализованный сценарий");
       return "Kia Rio · RECORD FM · неверные ID отфильтрованы";
