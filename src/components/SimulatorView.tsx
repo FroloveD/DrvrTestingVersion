@@ -26,7 +26,7 @@ import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange } from "../sim/controls";
+import { checkEngineToggle, checkGearChange, stepGearSequential } from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
@@ -36,11 +36,13 @@ import type {
   Gear,
   InputState,
   QualityPreset,
+  PlayerCarId,
   ScenarioId,
   SimEvent,
   SimState,
   WorldData,
 } from "../sim/types";
+import { getPlayerCar, PLAYER_CARS } from "../sim/playerCar";
 import {
   CAR,
   clamp,
@@ -193,9 +195,10 @@ export function SimulatorView({
   const activeRef = useRef(true);
   const { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth } = calibration;
   // Новое значение выворота не изменяет площадку и не должно сбрасывать двигатель, позу или запись.
+  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
   const world = useMemo(
-    () => buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef),
-    [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth]
+    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId }),
+    [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth, playerCarId]
   );
   const wheelLimit = normalizeWheelLock(calibration.maxInnerWheelDeg);
 
@@ -409,6 +412,20 @@ export function SimulatorView({
     },
     [onNotify]
   );
+
+  /** Ручное секвентальное переключение M1–M6; Shift+↑ повышает, Shift+↓ понижает ступень. */
+  const shiftGear = useCallback((dir: 1 | -1) => {
+    const inp = inputRef.current;
+    const st = stateRef.current;
+    const { next, blockedReason } = stepGearSequential(inp, st.v, st.autoSubGear, dir);
+    if (blockedReason) { onNotify(blockedReason); return; }
+    if (!next) return;
+    inp.gear = next;
+    const nextSub = /^[1-6]$/.test(next) ? Number(next) : st.autoSubGear;
+    setHud((current) => ({ ...current, state: { ...current.state, gear: next, autoSubGear: nextSub } }));
+  }, [onNotify]);
+
+
 
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
@@ -725,6 +742,8 @@ export function SimulatorView({
       if (e.repeat) return;
 
       const inp = inputRef.current;
+      if (e.shiftKey && code === "ArrowUp") { shiftGear(1); return; }
+      if (e.shiftKey && code === "ArrowDown") { shiftGear(-1); return; }
       switch (code) {
         case "KeyI":
           toggleEngine();
@@ -816,7 +835,7 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, toggleEngine, onNotify]);
+  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
   // Управление мышью включается отдельно в панели «Управление»; по умолчанию выключено.
@@ -1072,7 +1091,7 @@ export function SimulatorView({
     [s.x, s.z, world.roads]
   );
   const kmh = Math.round(Math.abs(s.v) * 3.6);
-  const gearDisplay = s.gear === "D" ? `D${s.autoSubGear}` : s.gear;
+  const gearDisplay = s.gear === "D" ? `D${s.autoSubGear}` : /^[1-6]$/.test(s.gear) ? `M${s.gear}` : s.gear;
   const { leftLit: leftBlink, rightLit: rightBlink } = getTurnSignalFlash(s.signal, s.time);
   const needsPrep = !s.engineOn || s.handbrake || !s.belt || s.gear === "P";
 
@@ -1097,6 +1116,18 @@ export function SimulatorView({
             </button>
           ))}
         </div>
+
+        <label className="flex items-center gap-2 rounded-lg border hairline px-2.5 py-1.5 text-[11px] text-[#9bafbc]">
+          Автомобиль
+          <select
+            value={playerCarId}
+            onChange={(e) => setPlayerCarId(e.target.value as PlayerCarId)}
+            className="bg-[#111d28] text-[#e4edf3] rounded px-2 py-1 border border-white/10"
+            aria-label="Выбор автомобиля"
+          >
+            {PLAYER_CARS.map((car) => <option key={car.id} value={car.id}>{car.name}</option>)}
+          </select>
+        </label>
 
         <input
           ref={fileInputRef}
@@ -1809,6 +1840,8 @@ export function SimulatorView({
                     </button>
                   );
                 })}
+                <button type="button" onClick={() => shiftGear(-1)} className="mono h-8 min-w-[28px] px-2 rounded-lg text-xs font-bold border hairline" title="Понизить передачу (Shift + ↓)">−</button>
+                <button type="button" onClick={() => shiftGear(1)} className="mono h-8 min-w-[28px] px-2 rounded-lg text-xs font-bold border hairline" title="Повысить передачу (Shift + ↑)">+</button>
               </div>
 
               {/* Индикаторы-кнопки I / РН / B / L */}
