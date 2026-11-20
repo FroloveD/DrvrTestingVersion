@@ -1877,7 +1877,7 @@ export function SimulatorView({
                   const persistent = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, blob: new Blob([wav], { type: "audio/wav" }) });
                   const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
                   setRadioMessage(persistent ? "Трек сохранён офлайн" : "Сохранено в памяти текущей вкладки");
-                }}>⤓ Сохранить 32-секундный трек офлайн</button>
+                }}>⤓ Сохранить демо-фрагмент (32 с)</button>
                 {savedTracks.length > 0 && <div className="mt-2 space-y-1"><div className="text-[10px] text-[#8fa2ae]">СОХРАНЁННЫЕ ТРЕКИ</div>{savedTracks.map((track) => <div key={track.key} className="flex items-center gap-1 text-[10px]"><button type="button" className="text-left text-[#52d6bd] flex-1 truncate" onClick={async () => {
                   const saved = await trackStore.loadTrack(track.key); const audio = radioAudioRef.current; if (!saved || !audio) return;
                   if (savedAudioUrlRef.current) URL.revokeObjectURL(savedAudioUrlRef.current);
@@ -1887,7 +1887,7 @@ export function SimulatorView({
                 {radioMessage && <p className="text-[10px] text-[#f5b942] mt-1" role="status">{radioMessage}</p>}
               </>}
               {headUnit.mode === "clip" && <button type="button" className="btn btn-mini w-full" onClick={() => setHeadUnit((prev) => ({ ...prev, clipIndex: (prev.clipIndex + 1) % HEAD_UNIT_CLIPS.length }))}>Следующий клип: {HEAD_UNIT_CLIPS[headUnit.clipIndex]?.title}</button>}
-              <p className="text-[10px] text-[#7c909d] mt-2">Состояние экрана отображается на 3D-панели в салоне. Радиопоток требует интернета; сохранённый WAV доступен офлайн.</p>
+              <p className="text-[10px] text-[#7c909d] mt-2">Состояние экрана отображается на 3D-панели в салоне. Живой поток требует интернета. Офлайн WAV — синтезированный демо-фрагмент станции, не запись эфира.</p>
             </div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7]">
