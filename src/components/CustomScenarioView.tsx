@@ -234,9 +234,6 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   // хрупких индексов массива: после исправления состава карты ID остаётся стабильным.
   const focusValidationIssue = (message: string) => {
     let target: EditorSelection | null = null;
-    const byLabel = (label: string) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\  const canOpenInSimulator = !blocked || Boolean(def.mapMeta && (def.roads?.length ?? 0) > 0);
-
-  const commitChange");
     const quoted = message.match(/[«"]([^»"]+)[»"]/);
     const idMatch = message.match(/(?:№|#)\s*(\d+)/);
 
