@@ -65,6 +65,7 @@ async function until(fn, timeout = 20000, step = 250) {
     await sleep(step);
   }
 }
+// Keep the locator/action that timed out, not just the tail of Playwright's retry log.
 const tab = (page, name) => page.getByRole("button", { name: new RegExp(name) }).first().click();
 const low = async (page) => (await page.evaluate(() => document.body.innerText)).toLowerCase();
 const panelArtifacts = (page) => page.evaluate(() => {
@@ -354,7 +355,7 @@ try {
   check("A15 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("A   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("A   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── B. Перенос журнала прежней версии ─────────
@@ -381,7 +382,7 @@ try {
   check("B4  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("B   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("B   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── C. Адаптер руля на подставном геймпаде ─────────
@@ -429,7 +430,7 @@ try {
   check("C7  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("C   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("C   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── D. Открытие файла напрямую (file://) ─────────
@@ -450,7 +451,7 @@ try {
   check("D2  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("D   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("D   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── F. Мастер калибровки руля с нестандартной раскладкой ─────────
@@ -499,7 +500,7 @@ try {
   check("F7  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("F   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("F   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── G. Реплей по своему сценарию и по импортированной карте ─────────
@@ -544,7 +545,7 @@ try {
   check("G5  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("G   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("G   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── E. Небольшой экран ─────────
@@ -559,7 +560,7 @@ try {
   await page.screenshot({ path: `${shotDir}/small.png` });
   await ctx.close();
 } catch (e) {
-  check("E   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("E   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── H. Типичный школьный экран 1366×768 ─────────
@@ -574,7 +575,7 @@ try {
   await page.screenshot({ path: `${shotDir}/school.png` });
   await ctx.close();
 } catch (e) {
-  check("H   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("H   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── I. Заезд переживает переключение вкладок и закрытие страницы ─────────
@@ -625,7 +626,7 @@ try {
   check("I6 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("I   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("I   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── J. Политика данных, атрибуция, выгрузка и удаление ─────────
@@ -679,7 +680,7 @@ try {
   check("J5 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("J   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("J   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── K. Перенос панелей HUD долгим нажатием ─────────
@@ -1091,7 +1092,7 @@ try {
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("K   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("K   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── L. Настраиваемый выворот и раздельные отражения ─────────
@@ -1170,7 +1171,7 @@ try {
   check("L12 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch(e) {
-  check("L сценарий выполнен без исключений",false,String(e.message).slice(-460));
+  check("L сценарий выполнен без исключений",false,String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── M. Два пальца: газ удерживается независимо от перемещения тормоза ─────────
@@ -1209,7 +1210,7 @@ try {
   check("M5 ошибок в консоли нет",errors.length===0,errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("M сценарий выполнен без исключений",false,String(e.message).slice(-460));
+  check("M сценарий выполнен без исключений",false,String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── N. Передача контекста: документ в UI не расходится с HANDOFF.md ─────────
@@ -1247,7 +1248,7 @@ try {
   check("N6 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("N сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("N сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── O. Редактор карт: импорт .osm XML, размещение и перенос знаков/объектов, открытие в 3D ─────────
@@ -1350,7 +1351,7 @@ try {
   check("O7 ошибок в консоли и WebGL нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("O сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("O сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── P. Проверка маршрута OSM, неквадратные и произвольные границы, обрезка и фиксы редактора ─────────
@@ -1570,7 +1571,7 @@ try {
     `notes=${deconfNotes.slice(0, 110)} | ok=${deconfRouteOk} | owBlock=${revBlockedUnchecked} | err=${errors.slice(0, 2).join(" | ")}`);
   await ctx.close();
 } catch (e) {
-  check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("P сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 await browser.close();
