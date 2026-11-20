@@ -216,6 +216,35 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     event.stopPropagation();
   };
 
+  // Обрабатываем движение также непосредственно на захватившем указатель маркере.
+  // Это надёжнее одного window-listener в браузерах, которые ретаргетируют события
+  // pointer capture на SVG-элемент.
+  const handleCheckpointPointerMove = (event: ReactPointerEvent<SVGCircleElement>) => {
+    const drag = dragCheckpointRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const matrix = drag.svg.getScreenCTM();
+    if (!matrix) return;
+    const point = drag.svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const local = point.matrixTransform(matrix.inverse());
+    const x = Number(local.x.toFixed(2));
+    const z = Number((-local.y).toFixed(2));
+    setEditing((current) => current ? {
+      ...current,
+      checkpoints: current.checkpoints.map((checkpoint) =>
+        checkpoint.id === drag.checkpointId ? { ...checkpoint, x, z } : checkpoint
+      ),
+    } : current);
+    event.preventDefault();
+  };
+
+  const handleCheckpointPointerEnd = (event: ReactPointerEvent<SVGCircleElement>) => {
+    if (dragCheckpointRef.current?.pointerId === event.pointerId) {
+      dragCheckpointRef.current = null;
+    }
+  };
+
   const handleSaveEdit = async (route: ExamRouteRecord) => {
     if (!editing || editing.id !== route.id) return;
     const revised = reviseExamRouteRecord(route, editing.title, editing.checkpoints, new Date().toISOString());
@@ -506,6 +535,9 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                             fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
                             stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }}
                             onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)}
+                            onPointerMove={handleCheckpointPointerMove}
+                            onPointerUp={handleCheckpointPointerEnd}
+                            onPointerCancel={handleCheckpointPointerEnd}
                             />
                           <text x={checkpoint.x + Math.max(7, checkpoint.radius)} y={-checkpoint.z - Math.max(7, checkpoint.radius)}
                             fill="#ffffff" fontSize="12" fontWeight="bold" pointerEvents="none">{index + 1}</text>
