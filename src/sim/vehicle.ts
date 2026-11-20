@@ -43,6 +43,7 @@ import type {
   TrafficSignalDef,
   Vec2,
 } from "./types";
+import { getPlayerCar } from "./playerCar";
 
 // Параметры автомобиля игрока Kia Ceed JD (DEV_PROMPTS, п. 2.1):
 // база L = 2.65 м, свес передний 0.88 м, задний 0.78 м (общая длина 4.31 м),
@@ -87,8 +88,28 @@ export const VEHICLE_DIMS: Record<
 };
 
 // Пороги переключения 5-ступенчатой АКПП с гистерезисом (км/ч)
-export const AUTO_UP = [0, 18, 34, 52, 74, 999] as const;
-export const AUTO_DOWN = [0, 0, 12, 26, 43, 62] as const;
+export const MAX_FORWARD_GEAR = 6;
+export const MAX_SPEED_KMH = 180;
+export const MAX_SPEED_MS = MAX_SPEED_KMH / 3.6;
+export const MAX_REVERSE_KMH = 14;
+export const ENGINE_IDLE_RPM = 800;
+export const ENGINE_REDLINE_RPM = 6500;
+export const ENGINE_REV_LIMIT_RPM = 6450;
+export const SHIFT_HINT_RPM = 5500;
+export const GEAR_MAX_KMH = [0, 48, 84, 122, 154, 175, MAX_SPEED_KMH] as const;
+export const GEAR_RPM_PER_KMH = [0, 133, 76, 52.5, 41.6, 35.4, 29.0] as const;
+export const GEAR_PEAK_ACCEL = [0, 4.08, 3.04, 2.32, 1.88, 1.62, 1.48] as const;
+export const AUTO_UP = [0, 21, 38, 56, 76, 102, 999] as const;
+export const AUTO_UP_SPORT = [0, 45.5, 80.5, 117.5, 149, 170.5, 999] as const;
+export const AUTO_DOWN = [0, 0, 13, 27, 43, 60, 80] as const;
+export const AUTO_DOWN_KICK = [0, 0, 36, 68, 102, 132, 154] as const;
+export const MANUAL_STALL_DOWN_KMH = [0, 0, 7, 15, 25, 36, 48] as const;
+export const AUTO_SHIFT_DURATION_S = 0.24;
+export const MANUAL_SHIFT_DURATION_S = 0.18;
+export const IDLE_CREEP_MAX_KMH = 5;
+export const BRAKE_BUILD_UP_TAU_S = 0.34;
+export const BRAKE_RELEASE_TAU_S = 0.13;
+export const SERVICE_BRAKE_MAX_DECEL = 8.4;
 
 export const FIXED_DT = 1 / 60;
 
@@ -116,12 +137,28 @@ export function clamp(v: number, min: number, max: number): number {
  * delta — центральный угол (рад): > 0 поворот влево, < 0 поворот вправо.
  * При повороте влево (delta > 0) левое колесо (+1) внутреннее => |угол| больше.
  */
-export function ackermannAngle(side: 1 | -1, delta: number): number {
+export type CarGeometry = {
+  length: number; width: number; wheelbase: number; frontOverhang: number;
+  rearOverhang: number; wheelRadius: number; track: number;
+};
+const BASE_GEOMETRY: CarGeometry = {
+  length: CAR.length, width: CAR.width, wheelbase: CAR.wheelbase,
+  frontOverhang: CAR.frontOverhang, rearOverhang: CAR.rearOverhang,
+  wheelRadius: CAR.wheelRadius, track: CAR.track,
+};
+export function carGeometry(carId?: string | null): CarGeometry {
+  const c = getPlayerCar(carId);
+  return { length:c.length, width:c.width, wheelbase:c.wheelbase, frontOverhang:c.frontOverhang,
+    rearOverhang:c.rearOverhang, wheelRadius:c.wheelRadius, track:c.track };
+}
+export function carGeometryFor(carId?: string | null): CarGeometry {
+  return carId ? carGeometry(carId) : BASE_GEOMETRY;
+}
+export function ackermannAngle(side: 1 | -1, delta: number, geo: CarGeometry = BASE_GEOMETRY): number {
   if (Math.abs(delta) < 1e-6) return 0;
-  const turnSign = Math.sign(delta); // +1 влево, -1 вправо
+  const turnSign = Math.sign(delta);
   const cotCenter = 1 / Math.tan(Math.abs(delta));
-  const halfTrackOverBase = CAR.track / (2 * CAR.wheelbase);
-  // Если side === turnSign, колесо внутреннее (cot меньше -> угол больше)
+  const halfTrackOverBase = geo.track / (2 * geo.wheelbase);
   const cotWheel = side === turnSign ? cotCenter - halfTrackOverBase : cotCenter + halfTrackOverBase;
   return turnSign * Math.atan(1 / Math.max(0.15, cotWheel));
 }
@@ -163,43 +200,107 @@ export function outerTurningRadius(delta: number): number {
 }
 
 /** Продольное ускорение от двигателя (м/с²) в текущей передаче. */
-export function computeEngineAccel(
-  throttle: number,
-  gear: Gear,
-  autoSubGear: number,
-  v: number,
-  engineOn: boolean,
-  handbrake: boolean
-): number {
-  // P (Parking) и N не передают тягу на колёса
-  if (!engineOn || handbrake || gear === "N" || gear === "P" || throttle <= 0) return 0;
-  const kmh = Math.abs(v) * 3.6;
-  if (gear === "R") {
-    // Плавный и контролируемый задний ход до ~14 км/ч
-    if (v < -14 / 3.6) return 0;
-    const factor = clamp(1 - Math.max(0, -v * 3.6) / 15, 0.12, 1);
-    return -1.95 * throttle * factor;
-  }
-  const activeGear = gear === "D" ? autoSubGear : Number(gear);
-  const maxSpeedByGear = [0, 22, 40, 62, 85, 115];
-  const baseAccelByGear = [0, 2.75, 2.25, 1.85, 1.45, 1.1];
-  const cap = maxSpeedByGear[activeGear] ?? 60;
-  if (v > 0 && kmh >= cap) return 0;
-  const taper = clamp(1 - Math.max(0, kmh) / (cap * 1.12), 0.18, 1);
-  return (baseAccelByGear[activeGear] ?? 2.0) * throttle * taper;
+export function isManualGear(gear: Gear): gear is "1" | "2" | "3" | "4" | "5" | "6" {
+  return gear === "1" || gear === "2" || gear === "3" || gear === "4" || gear === "5" || gear === "6";
 }
-
+export function formatGearLabel(gear: Gear, autoSubGear: number, engineOn: boolean): string {
+  if (gear === "D") return engineOn ? `D${clamp(Math.round(autoSubGear || 1), 1, MAX_FORWARD_GEAR)}` : "D";
+  if (isManualGear(gear)) return `M${gear}`;
+  return gear;
+}
+export function engineTorqueFactor(rpm: number): number {
+  if (rpm <= 1200) return 0.72 + 0.1 * clamp((rpm - ENGINE_IDLE_RPM) / 400, 0, 1);
+  if (rpm <= 2800) return 0.82 + 0.11 * ((rpm - 1200) / 1600);
+  if (rpm <= 4850) return 0.93 + 0.07 * ((rpm - 2800) / 2050);
+  if (rpm <= 6250) return 1 - 0.1 * ((rpm - 4850) / 1400);
+  if (rpm <= ENGINE_REV_LIMIT_RPM + 80) return 0.9 * clamp(1 - (rpm - 6250) / 260, 0, 1);
+  return 0;
+}
+export const ENGINE_BRAKE_GEAR_RATIO = [0, 5.6, 3.1, 1.95, 1.4, 1.08, 0.86] as const;
+export function computeRoadDragDecel(absV:number, throttlePos=0, activeForwardGear=0, gear:Gear="D", engineOn=true, carAccelScale=1):number {
+  const aeroAndRoll = 0.148 + 0.000331 * absV * absV + 0.0029 * absV;
+  if (gear === "N") return aeroAndRoll;
+  const coast = Math.pow(clamp(1-throttlePos,0,1),1.3);
+  const lowSpeedRollSettle = 0.095 * (1-clamp(absV/0.72,0,1));
+  if (gear === "R") return 0.24 + 0.018*absV + coast*(0.36+0.055*absV+lowSpeedRollSettle);
+  if (activeForwardGear>=1 && activeForwardGear<=MAX_FORWARD_GEAR) {
+    if(!engineOn) return aeroAndRoll+0.22+lowSpeedRollSettle;
+    const kmh=absV*3.6, wheelRpm=kmh*GEAR_RPM_PER_KMH[activeForwardGear];
+    const gearLoss=(0.16+0.19*ENGINE_BRAKE_GEAR_RATIO[activeForwardGear])*clamp(carAccelScale,0.7,1.35);
+    const rpmFactor=0.58+0.82*clamp((wheelRpm-1050)/3600,0,1);
+    const dfcoFade=activeForwardGear===1?clamp((kmh-IDLE_CREEP_MAX_KMH)/6.5,0,1):clamp((kmh-3.5)/6,0,1);
+    return aeroAndRoll+coast*gearLoss*rpmFactor*dfcoFade;
+  }
+  return aeroAndRoll+coast*(0.045+lowSpeedRollSettle);
+}
+export function computeServiceBrakeDecel(brakePos:number,absV:number,shiftBoost=0,brakeScale=1):number {
+  const b=clamp(brakePos,0,1); if(b<=0.001)return 0;
+  const kmh=absV*3.6, pedalCurve=0.06+0.94*Math.pow(b,1.9);
+  const highSpeedFactor=1-0.06*clamp((kmh-90)/90,0,1);
+  const finalStopSettle=0.58+0.42*clamp(absV/0.6,0,1);
+  const boost=1+0.18*clamp(shiftBoost,0,1);
+  return SERVICE_BRAKE_MAX_DECEL*pedalCurve*highSpeedFactor*finalStopSettle*boost*clamp(brakeScale,0.75,1.4);
+}
+export function computeIdleCreepAccel(gear:Gear,autoSubGear:number,v:number,throttlePos:number,brakePos:number,engineOn:boolean,handbrake:boolean,creepKmh=IDLE_CREEP_MAX_KMH):number {
+  if(!engineOn||handbrake)return 0;
+  const first=(gear==="D"&&autoSubGear===1)||gear==="1"; if(!first||v<-.05)return 0;
+  const brakeRelease=clamp(1-brakePos/0.16,0,1); if(brakeRelease<=0)return 0;
+  const throttleHandoff=1-clamp(throttlePos*2.6,0,1); if(throttleHandoff<=0)return 0;
+  const fwdKmh=Math.max(0,v*3.6), target=clamp(creepKmh,3.5,7); if(fwdKmh>=target)return 0;
+  const reserve=Math.pow(1-fwdKmh/target,0.62), base=0.153+(target-5)*0.022;
+  return brakeRelease*throttleHandoff*(base+0.09*reserve);
+}
+function smoothSlewRpm(rpm:number,target:number,rate:number,maxSlewPerSec:number,dt:number):number {
+  const expDelta=(target-rpm)*Math.min(1,dt*rate), maxStep=maxSlewPerSec*dt;
+  return rpm+clamp(expDelta,-maxStep,maxStep);
+}
+export function stepEngineRpm(prevRpm:number,throttlePos:number,gear:Gear,autoSubGear:number,v:number,engineOn:boolean,shiftTimer:number,dt:number,brakePos=0,handbrake=false):number {
+  if(!engineOn){const n=smoothSlewRpm(prevRpm,0,4.6,3600,dt);return n<8?0:n;}
+  const th=clamp(throttlePos,0,1);
+  if(gear==="P"||gear==="N"){
+    const target=clamp(ENGINE_IDLE_RPM+Math.pow(th,0.92)*(ENGINE_REV_LIMIT_RPM-ENGINE_IDLE_RPM),ENGINE_IDLE_RPM,ENGINE_REV_LIMIT_RPM);
+    const rising=target>prevRpm;
+    return clamp(smoothSlewRpm(prevRpm,target,rising?4.2:8,rising?5400:7000,dt),0,ENGINE_REDLINE_RPM);
+  }
+  const kmh=Math.abs(v)*3.6, held=kmh<0.35&&th<0.02&&(brakePos>0.16||handbrake), idle=held?ENGINE_IDLE_RPM-35:ENGINE_IDLE_RPM;
+  if(gear==="R"){
+    const target=clamp(idle+kmh*118+th*780,idle,3600), rising=target>prevRpm;
+    return clamp(smoothSlewRpm(prevRpm,target,rising?4.8:5.2,rising?3800:4200,dt),0,ENGINE_REDLINE_RPM);
+  }
+  const active=clamp(gear==="D"?autoSubGear:Number(gear)||1,1,MAX_FORWARD_GEAR);
+  const coupled=kmh*GEAR_RPM_PER_KMH[active], lock=clamp((coupled-700)/1700,0,1);
+  const target=clamp(Math.max(idle,coupled+th*1050*(1-lock*0.92)*(shiftTimer>0?0.2:1)),idle,ENGINE_REV_LIMIT_RPM);
+  const rising=target>prevRpm, rate=shiftTimer>0?7.2:rising?5.6:6, slew=shiftTimer>0?7800:rising?5000:6200;
+  return clamp(smoothSlewRpm(prevRpm,target,rate,slew,dt),0,ENGINE_REDLINE_RPM);
+}
+export function computeEngineAccel(throttle:number,gear:Gear,autoSubGear:number,v:number,engineOn:boolean,handbrake:boolean,shiftTimer=0):number {
+  if(!engineOn||handbrake||gear==="N"||gear==="P"||throttle<=0)return 0;
+  const th=clamp(throttle,0,1);
+  if(gear==="R"){
+    const kmh=Math.max(0,-v*3.6); if(kmh>=MAX_REVERSE_KMH)return 0;
+    return -2.45*Math.pow(th,0.65)*clamp(1-kmh/(MAX_REVERSE_KMH+1.2),0.14,1);
+  }
+  const active=clamp(gear==="D"?autoSubGear:Number(gear)||1,1,MAX_FORWARD_GEAR), fwdKmh=Math.max(0,v*3.6);
+  if(fwdKmh>=MAX_SPEED_KMH)return 0;
+  const cap=GEAR_MAX_KMH[active]; let limit=1;
+  if(active<MAX_FORWARD_GEAR){if(fwdKmh>=cap)return 0;if(fwdKmh>cap-1.2)limit=(cap-fwdKmh)/1.2;}
+  if(fwdKmh>MAX_SPEED_KMH-0.8)limit=Math.min(limit,0.78+0.22*((MAX_SPEED_KMH-fwdKmh)/0.8));
+  const wheelRpm=fwdKmh*GEAR_RPM_PER_KMH[active], lock=clamp((wheelRpm-700)/1700,0,1);
+  const effRpm=Math.max(ENGINE_IDLE_RPM,wheelRpm+th*1050*(1-lock*0.92)), torque=engineTorqueFactor(effRpm);
+  const launch=active===1?1+0.1*(1-clamp(fwdKmh/18,0,1)):1;
+  return th*GEAR_PEAK_ACCEL[active]*torque*launch*(shiftTimer>0?0.14:1)*limit;
+}
 /** Четыре угла кузова автомобиля в мировых координатах: [FL, FR, RR, RL]. */
-export function getCarCorners(x: number, z: number, h: number): [Vec2, Vec2, Vec2, Vec2] {
+export function getCarCorners(x: number, z: number, h: number, geo: CarGeometry = BASE_GEOMETRY): [Vec2, Vec2, Vec2, Vec2] {
   // x, z — середина колёсной базы. Смещение геометрического центра кузова вперёд:
-  const centerShiftZ = (CAR.frontOverhang - CAR.rearOverhang) / 2; // +0.05 м
+  const centerShiftZ = (geo.frontOverhang - geo.rearOverhang) / 2;
   const fx = Math.sin(h);
   const fz = Math.cos(h);
   const lx = Math.cos(h);
   const lz = -Math.sin(h);
 
-  const halfL = CAR.length / 2;
-  const halfW = CAR.width / 2;
+  const halfL = geo.length / 2;
+  const halfW = geo.width / 2;
   const bodyX = x + fx * centerShiftZ;
   const bodyZ = z + fz * centerShiftZ;
 
