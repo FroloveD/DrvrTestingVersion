@@ -1271,11 +1271,17 @@ export function SimulatorView({
       controlPoint: (id: CockpitControlId) =>
         sceneCtrlRef.current?.getCockpitControlScreenPoint(id) ?? null,
       shifterPoint: (id: ShifterHitId) => sceneCtrlRef.current?.getShifterTargetScreenPoint(id) ?? null,
+      pickAt: (normX: number, normY: number) => ({
+        control: sceneCtrlRef.current?.pickCockpitControl(normX, normY) ?? null,
+        shifter: sceneCtrlRef.current?.pickCockpitShifter(normX, normY) ?? null,
+      }),
       pressControl: (id: CockpitControlId) => pressCockpitControl(id),
       cameraMode: () => optsRef.current.cameraMode,
       gear: () => inputRef.current.gear,
       engineOn: () => inputRef.current.engineOn,
       signal: () => inputRef.current.signal,
+      /** Досела ли шея: смоук ждёт этого вместо пауз — иначе экранные точки органов «плывут». */
+      headSettled: () => sceneCtrlRef.current?.isHeadSettled() ?? true,
       /** Взгляд водителя: текущий детент и фактический угол головы (с инерцией шеи). */
       look: () => ({
         detent: sceneCtrlRef.current?.getHeadDetent() ?? 0,

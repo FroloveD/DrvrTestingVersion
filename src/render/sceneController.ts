@@ -522,6 +522,15 @@ export class SceneController {
     return true;
   }
 
+  /**
+   * Досела ли шея водителя к цели (взгляд, детент). Смоук ждёт этого вместо фиксированных пауз:
+   * инерция шеи идёт по реальному времени, и на медленной машине точка органа ещё «плывёт» по экрану.
+   * FOV меняется мгновенно (это зум, а не шея), поэтому проверяются только углы.
+   */
+  isHeadSettled(epsRad = 0.004): boolean {
+    return Math.abs(this.headYaw - this.headYawTarget) < epsRad && Math.abs(this.headPitch - this.headPitchTarget) < epsRad;
+  }
+
   /** Смотрит ли сейчас камера салона вниз-вправо на консоль рычага АКПП. */
   isCockpitShifterView(): boolean {
     return this.headPitchTarget < -0.5 && this.headYawTarget < -0.4;

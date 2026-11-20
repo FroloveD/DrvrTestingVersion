@@ -591,17 +591,21 @@ try {
   const before = await statusBox();
   check("K1 панель статуса найдена и плавающая", Boolean(before), JSON.stringify(before));
 
-  // Длительное удержание 420 мс → панель переносится
+  // Длительное удержание 420 мс → панель переносится.
+  // Ждём фактического «взведения» (data-front=true), а не фиксированные 700 мс: под SwiftShader
+  // первый кадр после pointerdown может занять несколько сотен мс, и шаг мыши отменял нажатие (K2 падал).
+  const statusPanel = page.locator('[data-hud-panel="statusBar"]');
   await page.mouse.move(before.x + before.w / 2, before.y + before.h - 10);
   await page.mouse.down();
-  await sleep(700);
+  const statusArmed = await until(async () => (await statusPanel.getAttribute("data-front")) === "true", 5000);
   await page.mouse.move(before.x + before.w / 2 + 170, before.y + before.h / 2 - 95, { steps: 10 });
+  await sleep(120);
   await page.mouse.up();
   await sleep(400);
   const after = await statusBox();
   const moved = Boolean(after) && (Math.abs(after.x - before.x) > 60 || Math.abs(after.y - before.y) > 60);
-  check("K2 долгое нажатие переносит панель", moved,
-    `было ${before.x},${before.y} → стало ${after ? after.x + "," + after.y : "н/д"}`);
+  check("K2 долгое нажатие переносит панель", statusArmed === true && moved,
+    `взведена: ${statusArmed}, было ${before.x},${before.y} → стало ${after ? after.x + "," + after.y : "н/д"}`);
 
   // Длительное нажатие выводит панель на передний план/слой поверх всех остальных HUD-панелей (даже без переноса)
   const frontAfterDrag = await page.evaluate(() => {
@@ -617,8 +621,11 @@ try {
   // Раскладка и передний слой сохраняются после перезагрузки
   await page.reload();
   await page.waitForSelector("canvas");
-  await sleep(1300);
-  const restored = await statusBox();
+  // Панель обязана вернуться на сохранённое место: ждём совпадения, а не фиксированную паузу.
+  const restored = await until(async () => {
+    const box = await statusBox();
+    return box && after && Math.abs(box.x - after.x) < 4 && Math.abs(box.y - after.y) < 4 ? box : null;
+  }, 8000) ?? (await statusBox());
   const frontRestored = await page.evaluate(() => {
     const el = document.querySelector('[data-hud-panel="statusBar"]');
     return { z: Number(el?.style.zIndex || 0), front: el?.getAttribute("data-front") };
@@ -751,9 +758,21 @@ try {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await sleep(160);
   const cvBox = await canvasEl.boundingBox();
-  const knobPx = { x: cvBox.x + cvBox.width * 0.486, y: cvBox.y + cvBox.height * 0.486 };
-  const slotDPx = { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
+  // Точки органов берём из отладочного моста (реальный raycast/проекция), а не долями экрана:
+  // кадр салона меняется вместе с компоновкой (image-6.png), и фиксированные доли перестают попадать.
+  const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
+  const settleHead = () => until(() => page.evaluate(() => window.__cdtCockpit?.headSettled?.() ?? true), 6000, 120);
+  const shifterPx = async (id) => {
+    const p = await page.evaluate((sid) => window.__cdtCockpit?.shifterPoint?.(sid) ?? null, id);
+    return p ? toPx(p) : null;
+  };
+  const shifterSettled = await settleHead();
+  const knobPx = (await shifterPx("lever")) ?? { x: cvBox.x + cvBox.width * 0.486, y: cvBox.y + cvBox.height * 0.486 };
+  const slotDPx = (await shifterPx("D")) ?? { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
   const topTag = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName || "NONE", knobPx);
+  const knobPick = await page.evaluate(({ x, y }) => window.__cdtCockpit?.pickAt?.(x, y), {
+    x: (knobPx.x - cvBox.x) / cvBox.width, y: (knobPx.y - cvBox.y) / cvBox.height,
+  });
   await page.mouse.move(knobPx.x, knobPx.y);
   await sleep(140);
   const cabinHintText = (await page.locator('[data-testid="cockpit-shifter-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
@@ -776,11 +795,12 @@ try {
   await page.keyboard.up("KeyS");
   await sleep(900);
   // Тянем рычаг влево (к водителю) в ручной паз M, затем качаем вверх к + (M2)
-  const slotMPx = { x: slotDPx.x - 28, y: slotDPx.y };
+  const slotMPx = (await shifterPx("M")) ?? { x: slotDPx.x - 28, y: slotDPx.y };
+  const plusPx = (await shifterPx("M+")) ?? { x: slotMPx.x, y: slotMPx.y - 26 };
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 5 });
   await sleep(80);
   const afterDragM1 = (await hudDriveBtn.innerText()).trim();
-  await page.mouse.move(slotMPx.x, slotMPx.y - 26, { steps: 5 });
+  await page.mouse.move(plusPx.x, plusPx.y, { steps: 5 });
   await sleep(80);
   let afterDragM2 = (await hudDriveBtn.innerText()).trim();
   if (afterDragM2 === "M1") {
@@ -803,7 +823,7 @@ try {
   check("K7c подсказки КПП, BTSI-блокировка P без тормоза и рычаг в салоне P→D1→M1→M2→D",
     hudHintOk && cabinHintOk && gearNoBrake === "P" && /тормоз/i.test(interlockNotice) &&
       afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && /^D[12]$/.test(afterBackD),
-    JSON.stringify({ topTag, hudHintOk, cabinHintOk, gearNoBrake, afterDragD, afterDragM1, afterDragM2, afterBackD }));
+    JSON.stringify({ shifterSettled, knobPick, topTag, hudHintOk, cabinHintOk, gearNoBrake, afterDragD, afterDragM1, afterDragM2, afterBackD }));
 
   // 3D-органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, свет и ENGINE START/STOP доступны кликом
   // (координаты берём из отладочного моста __cdtCockpit — реальный raycast по 3D-мешам).
@@ -811,8 +831,8 @@ try {
   await page.keyboard.press("Digit2");
   await sleep(260);
   await page.getByTestId("cockpit-look-headunit").click();
-  await sleep(320);
-  const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
+  const headSettled = await settleHead();
+  await sleep(120);
   const controlPx = async (id) => {
     const p = await page.evaluate((cid) => window.__cdtCockpit?.controlPoint?.(cid) ?? null, id);
     return p ? toPx(p) : null;
@@ -833,7 +853,7 @@ try {
       (await hint.getAttribute("data-control")) === "headunit" &&
       /ШГУ/.test(await hint.innerText());
     await page.mouse.click(headPx.x, headPx.y);
-    await sleep(200);
+    await until(() => page.evaluate((previous) => window.__cdtCockpit?.headUnit?.().mode !== previous, headMode0), 5000, 120);
   }
   const headMode1 = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode);
   if (tunePx) { await page.mouse.click(tunePx.x, tunePx.y); await sleep(180); }
@@ -921,7 +941,7 @@ try {
     controlsFound && headHintOk && headMode0 === "assist" && headMode1 === "radio" &&
       radioState?.mode === "radio" && radioState?.radioPlaying === true && radioPaused &&
       hazardOn && lightsAfter !== lightsBefore && /"mode":"radio"/.test(huStored || ""),
-    JSON.stringify({ controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
+    JSON.stringify({ headSettled, controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
 
   // K9: взгляд водителя тремя детентами (левое зеркало → дорога → правое) и сигнал клаксона.
   // Инерция шеи считается по реальному времени кадра, но headless-рендер медленный,
