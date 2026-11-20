@@ -55,7 +55,8 @@ import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { RoadSegment, SimEvent } from "./types";
-import { ackermannAngle, CAR, centralSteerLimit, clamp, FIXED_DT, normalizeWheelLock, outerTurningRadius, predictTrajectoryArc, STEER_WHEEL, wheelDegToSteerRad, writeTrajectoryArcPositions } from "./vehicle";
+import { ackermannAngle, CAR, carGeometry, centralSteerLimit, clamp, computeEngineAccel, FIXED_DT, getCarCorners, normalizeWheelLock, outerTurningRadius, predictTrajectoryArc, STEER_WHEEL, wheelDegToSteerRad, writeTrajectoryArcPositions } from "./vehicle";
+import { PLAYER_CARS, playerCarPhysics } from "./playerCar";
 
 export type SelfTestCase = { id: string; suite: string; name: string; fn: () => string };
 
@@ -1024,6 +1025,30 @@ export const extraCases: SelfTestCase[] = [
         "A* должен сохранить названия обеих улиц");
       assert(result.lengthM > 6800 && result.lengthM < 7000, `Неверная длина пути: ${result.lengthM}`);
       return `${result.path.length} узлов · ${Math.round(result.lengthM)} м · A* и пространственные индексы OK`;
+    },
+  },
+  {
+    id: "T34",
+    suite: "vehicle",
+    name: "Автопарк Kia: паспорта, габариты, геометрия и индивидуальная динамика",
+    fn: () => {
+      const expected = ["picanto", "rio", "ceed", "xceed", "sorento"];
+      assert(PLAYER_CARS.map((car) => car.id).join(",") === expected.join(","), "В парке должны быть ровно пять моделей Kia");
+      for (const car of PLAYER_CARS) {
+        const geo = carGeometry(car.id);
+        const corners = getCarCorners(0, 0, 0, geo);
+        const length = Math.hypot(corners[0].x - corners[2].x, corners[0].z - corners[2].z);
+        const width = Math.hypot(corners[0].x - corners[1].x, corners[0].z - corners[1].z);
+        assert(Math.abs(length - car.length) < 1e-6, `${car.name}: длина кузова не совпадает с паспортом`);
+        assert(Math.abs(width - car.width) < 1e-6, `${car.name}: ширина кузова не совпадает с паспортом`);
+        const physics = playerCarPhysics(car.id);
+        assert(physics.vmaxKmh === car.vmaxKmh && physics.wheelbase === car.wheelbase, `${car.name}: физика не связана с паспортом`);
+        assert(computeEngineAccel(1, "D", 1, 0, true, false, 0, physics.accelScale, physics.vmaxKmh) > 0,
+          `${car.name}: двигатель не развивает тягу`);
+      }
+      assert(playerCarPhysics("picanto").vmaxKmh < playerCarPhysics("sorento").vmaxKmh,
+        "Ограничитель скорости должен различаться между моделями");
+      return "5 моделей · габариты и коэффициенты динамики соответствуют паспортам";
     },
   },
 ];
