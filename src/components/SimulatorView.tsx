@@ -66,6 +66,27 @@ import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
 import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 
+type PanelStateMap = { collapsed: string[]; closed: string[] };
+const PANEL_IDS = [
+  { id: "mirrorRear", label: "Заднее зеркало" }, { id: "mirrorLeft", label: "Левое зеркало" },
+  { id: "mirrorRight", label: "Правое зеркало" }, { id: "steeringWheel", label: "Рулевое колесо" },
+  { id: "scorePanel", label: "Оценка" }, { id: "speedPanel", label: "Скорость" },
+  { id: "statusBar", label: "Статус" }, { id: "camToggles", label: "Камеры" },
+  { id: "cluster", label: "Приборы и селектор" }, { id: "pedalBrake", label: "Педаль тормоза" },
+  { id: "pedalGas", label: "Педаль газа" },
+] as const;
+const PANEL_STATE_KEY = "cdt.panelState.v1";
+function loadPanelState(): PanelStateMap {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null") as Partial<PanelStateMap> | null;
+    const valid = (items: unknown) => Array.isArray(items) ? items.filter((id): id is string => typeof id === "string" && PANEL_IDS.some((p) => p.id === id)) : [];
+    return { collapsed: valid(raw?.collapsed), closed: valid(raw?.closed) };
+  } catch { return { collapsed: [], closed: [] }; }
+}
+function savePanelState(state: PanelStateMap): void {
+  try { localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(state)); } catch { /* storage blocked */ }
+}
+
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
@@ -263,6 +284,13 @@ export function SimulatorView({
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
+  const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
+  const [showPanelsMenu, setShowPanelsMenu] = useState(false);
+  useEffect(() => { savePanelState(panelState); }, [panelState]);
+  const togglePanelCollapse = useCallback((id: string) => setPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((x) => x !== id) : [...prev.collapsed, id] })), []);
+  const closePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
+  const restorePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.filter((x) => x !== id) })), []);
+  const panelProps = useCallback((id: string, label: string) => ({ label, collapsed: panelState.collapsed.includes(id), closed: panelState.closed.includes(id), onToggleCollapse: togglePanelCollapse, onClose: closePanel }), [panelState, togglePanelCollapse, closePanel]);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
@@ -1522,6 +1550,19 @@ export function SimulatorView({
           onLostPointerCapture={handleCanvasPointerEnd}
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
+
+        {!uiHidden && <div className="absolute left-3 top-3 z-[58]">
+          <button type="button" className="btn btn-mini shadow-lg" aria-expanded={showPanelsMenu} onClick={() => setShowPanelsMenu((v) => !v)}>Окна HUD ▾</button>
+          {showPanelsMenu && <div className="mt-1 w-60 rounded-xl border hairline bg-[#0b1218]/98 p-2 shadow-2xl backdrop-blur">
+            <div className="text-[10px] mono text-[#8fa2ae] px-2 pb-1">ПАНЕЛИ ТРЕНАЖЁРА</div>
+            {PANEL_IDS.map((item) => <div key={item.id} className="flex items-center gap-1 px-1 py-1 text-[11px]">
+              <span className="flex-1 truncate text-[#d3e0e7]">{item.label}</span>
+              <button type="button" className="btn btn-mini" onClick={() => togglePanelCollapse(item.id)}>{panelState.collapsed.includes(item.id) ? "Развернуть" : "Свернуть"}</button>
+              {panelState.closed.includes(item.id) ? <button type="button" className="btn btn-mini" onClick={() => restorePanel(item.id)}>Вернуть</button> : <button type="button" className="btn btn-mini" onClick={() => closePanel(item.id)}>×</button>}
+            </div>)}
+            <button type="button" className="w-full mt-1 text-[10px] text-[#f5b942] py-1" onClick={() => { setPanelState({ collapsed: [], closed: [] }); }}>Восстановить все панели</button>
+          </div>}
+        </div>}
 
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
         {!webglFallback && showRearMirror && (
