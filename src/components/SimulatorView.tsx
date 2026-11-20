@@ -42,9 +42,9 @@ import type {
   SimState,
   WorldData,
 } from "../sim/types";
-import { PLAYER_CARS } from "../sim/playerCar";
+import { getPlayerCar, PLAYER_CARS } from "../sim/playerCar";
 import {
-  CAR,
+  carGeometry,
   clamp,
   FIXED_DT,
   getCarCorners,
@@ -167,7 +167,7 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
   }
 
   // Автомобиль игрока
-  const corners = getCarCorners(s.x, s.z, s.h);
+  const corners = getCarCorners(s.x, s.z, s.h, carGeometry(s.carId));
   ctx.fillStyle = "#f5b942";
   ctx.beginPath();
   corners.forEach((c, i) => (i === 0 ? ctx.moveTo(c.x, c.z) : ctx.lineTo(c.x, c.z)));
@@ -1940,7 +1940,7 @@ export function SimulatorView({
       {/* Компактная нижняя строка метаданных: габариты, версия правил, обязательная атрибуция ODbL */}
       {!immersive && <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#7c909d] px-1">
         <div className="flex flex-wrap items-center gap-2">
-          <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°</Chip>
+          <Chip tone="neutral">{getPlayerCar(s.carId).shortName} · {getPlayerCar(s.carId).length}×{getPlayerCar(s.carId).width} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°</Chip>
           <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
             Правила: {ruleSet.version} ({ruleSet.status === "instructor_signed" ? "подписано" : "демо"})
           </Chip>
