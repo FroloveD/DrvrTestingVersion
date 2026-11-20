@@ -61,7 +61,7 @@ import {
   STEER_WHEEL,
 } from "../sim/vehicle";
 import { Chip, Icon } from "./Icons";
-import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
+import { FloatingPanel, loadLayout, saveLayout, loadPanelState, savePanelState, loadLayerOrder, saveLayerOrder, promotePanelToFront, resolvePanelZIndex, type LayoutMap, type PanelLayout, type PanelStateMap } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
 import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
@@ -268,6 +268,8 @@ export function SimulatorView({
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
+  const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
+  const [layerOrder, setLayerOrder] = useState<string[]>(loadLayerOrder);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
@@ -295,6 +297,9 @@ export function SimulatorView({
     saveLayout(layout);
   }, [layout]);
 
+  useEffect(() => savePanelState(panelState), [panelState]);
+  useEffect(() => saveLayerOrder(layerOrder), [layerOrder]);
+
   useEffect(() => {
     try {
       localStorage.setItem("cdt.keybindings.v1", JSON.stringify(bindings));
@@ -306,6 +311,10 @@ export function SimulatorView({
   const handleLayoutChange = useCallback((id: string, next: PanelLayout) => {
     setLayout((prev) => ({ ...prev, [id]: next }));
   }, []);
+  const togglePanelCollapse = useCallback((id: string) => setPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((item) => item !== id) : [...prev.collapsed, id] })), []);
+  const closePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
+  const restorePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.filter((item) => item !== id) })), []);
+  const bringPanelToFront = useCallback((id: string) => setLayerOrder((prev) => promotePanelToFront(prev, id)), []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
