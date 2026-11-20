@@ -1097,7 +1097,7 @@ export const extraCases: SelfTestCase[] = [
       assert(peak > 3000, "Офлайн-рендер не должен быть тишиной");
       return `Станций: ${ids.size} · WAV: ${wav.length} байт · пик: ${peak}`;
     },
-  },,
+  },
 
   {
     id: "T37",
