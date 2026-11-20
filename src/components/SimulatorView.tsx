@@ -206,6 +206,13 @@ export function SimulatorView({
 
   const [cameraMode, setCameraMode] = useState<CameraMode>("chase");
   const [shifterGlance, setShifterGlance] = useState(false);
+  useEffect(() => {
+    if (cameraMode !== "cockpit") {
+      setShifterGlance(false);
+      sceneCtrlRef.current?.resetHeadLook();
+      sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
+    }
+  }, [cameraMode]);
   const [quality, setQuality] = useState<QualityPreset>("medium");
   const [showTrajectory, setShowTrajectory] = useState(true);
   const [showMirrors, setShowMirrors] = useState(true);
@@ -1772,6 +1779,9 @@ export function SimulatorView({
                 ["I / Space / B", "Двигатель / Ручник / Ремень"],
                 ["L · H", "Фары · Скрыть/показать HUD"],
                 ["1–4 / C", "Вид: сзади, салон, сверху, орбита"],
+                ["G", "Взгляд на селектор АКПП и обратно на дорогу"],
+                ["← / →", "Взгляд на левое / правое зеркало в режиме салона"],
+                ["3D-рычаг", "Перетащите селектор по кулисе P–R–N–D или в паз M+/M−"],
               ].map(([k, d]) => (
                 <div key={k} className="contents">
                   <span className="mono text-[#f5b942] font-semibold">{k}</span>
