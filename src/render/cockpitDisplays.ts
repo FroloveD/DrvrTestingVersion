@@ -9,6 +9,7 @@ import * as THREE from "three";
 import type { Gear, SimState, WorldData } from "../sim/types";
 import type { RadioStation } from "../audio/radioCatalog";
 import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
+import { getActiveSpeedLimit } from "../sim/step";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import { clamp, formatGearLabel, isManualGear, MAX_FORWARD_GEAR, SHIFT_HINT_RPM } from "../sim/vehicle";
 
@@ -138,16 +139,7 @@ function wrapAngle(a: number): number {
 
 /** Вычисляет действующее ограничение скорости (км/ч) в текущей точке автомобиля. */
 export function resolveActiveSpeedLimit(state: SimState, world: WorldData): number {
-  let limit = world.defaultSpeedLimitKmh || 60;
-  for (let i = 0; i < world.speedZones.length; i++) {
-    const sz = world.speedZones[i];
-    const dx = state.x - sz.x;
-    const dz = state.z - sz.z;
-    if (dx * dx + dz * dz <= sz.radius * sz.radius) {
-      limit = Math.min(limit, sz.limitKmh);
-    }
-  }
-  return Math.round(limit);
+  return Math.round(getActiveSpeedLimit(state.x, state.z, world) || world.defaultSpeedLimitKmh || 60);
 }
 
 /** Контроллер живых CanvasTexture салона с dirty-кешем (0 мс в покое и вне камеры «Салон»). */
