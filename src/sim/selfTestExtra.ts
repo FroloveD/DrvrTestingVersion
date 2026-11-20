@@ -121,6 +121,7 @@ import {
   carGeometry,
   getCarCorners,
   centralSteerLimit,
+  computeRoadDragDecel,
   clamp,
   ENGINE_IDLE_RPM,
   FIXED_DT,
@@ -1410,9 +1411,13 @@ export const extraCases: SelfTestCase[] = [
       }
       assert(soft > 0.08 && soft < 0.10 && kick === 1, "Газ нарастает плавно; Shift+газ быстро до пола");
       assert(advanceKeyboardThrottle(kick, false, true, FIXED_DT) === 0, "Отпускание сразу снимает команду газа");
-      for (const gear of ["P", "N", "R", "1", "3", "6"] as const) {
+      for (const gear of ["P", "N", "R"] as const) {
         assert(advanceKeyboardThrottle(0, true, true, FIXED_DT, gear) === advanceKeyboardThrottle(0, true, false, FIXED_DT, gear),
-          `Shift не ускоряет нажатие газа вне D: ${gear}`);
+          `Shift не ускоряет нажатие газа в P/N/R: ${gear}`);
+      }
+      for (const gear of ["1", "2", "3", "4", "5", "6"] as const) {
+        assert(advanceKeyboardThrottle(0, true, true, FIXED_DT, gear) === advanceKeyboardThrottle(0, true, true, FIXED_DT, "D"),
+          `M${gear}+Shift должен давать такой же быстрый ход педали, как D+Shift`);
       }
       let fine = 0;
       for (let i = 0; i < 24; i++) fine = advanceKeyboardThrottle(fine, true, false, FIXED_DT / 2);
@@ -1519,6 +1524,25 @@ export const extraCases: SelfTestCase[] = [
       assert(releaseState.rpm < ENGINE_IDLE_RPM + 300, `Обороты зависли через секунду без газа: ${releaseState.rpm}`);
       assert(idleState.rpm < ENGINE_IDLE_RPM + 80, `Обороты не вернулись к ХХ: ${idleState.rpm.toFixed(0)}`);
 
+      const keyboard100 = (boosted: boolean) => {
+        let st = createInitialState(track, true), pedal = 0;
+        for (let i = 0; i < 40 * 60; i++) {
+          pedal = advanceKeyboardThrottle(pedal, true, boosted, FIXED_DT, "D");
+          st = stepSimulation(st, { ...createReadyInput("D"), throttle: pedal }, track, grid,
+            DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+          if (st.v * 3.6 >= 100) return st.time;
+        }
+        return 40;
+      };
+      const normalKeyboard100 = keyboard100(false), fastKeyboard100 = keyboard100(true);
+      assert(normalKeyboard100 > 17 && normalKeyboard100 < 35 && normalKeyboard100 > fastKeyboard100 * 1.5,
+        `Обычный газ должен разгонять умеренно: ${normalKeyboard100.toFixed(2)} с; Shift ${fastKeyboard100.toFixed(2)} с`);
+      assert(fastKeyboard100 > 10 && fastKeyboard100 < 12, "Shift сохраняет паспортный полный разгон");
+      let heldPedal = 0;
+      for (let i = 0; i < 300; i++) heldPedal = advanceKeyboardThrottle(heldPedal, true, false, FIXED_DT);
+      assert(heldPedal === 0.6, "Удержание обычного газа не превращается в газ в пол");
+      assert(advanceKeyboardThrottle(1, true, false, 0.1) === 0.6, "Отпускание Shift возвращает умеренный газ");
+
       // 3. Разгон 0–100 км/ч и максимальная скорость 180 км/ч в режиме D (6АКПП)
       let autoS = createInitialState(track, true);
       let t100Auto: number | null = null;
@@ -1587,7 +1611,7 @@ export const extraCases: SelfTestCase[] = [
         "Реплей заезда с переключениями Shift разошёлся с оригиналом"
       );
 
-      return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
+      return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · клавиатура: обычный=${normalKeyboard100.toFixed(2)} с, Shift=${fastKeyboard100.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
     },
   },
   {
@@ -1699,6 +1723,15 @@ export const extraCases: SelfTestCase[] = [
         `Гидропривод обязан набирать давление плавно: за 1/3 с получено ${softPedal.brakePos.toFixed(2)}`
       );
       assert(maxDivePitch > 0.02 && Math.abs(brakeS.pitch) < 0.004, "Кузов должен клюнуть при торможении и выровняться в 0");
+
+      // В N сопротивление не зависит от газа, состояния мотора и оставшейся ступени.
+      for (const speed of [0.3, 5, 60 / 3.6, 100 / 3.6]) {
+        const naturalDrag = 0.148 + 0.000331 * speed * speed + 0.0029 * speed;
+        for (const throttle of [0, 0.5, 1]) for (const sub of [0, 1, 6]) for (const running of [false, true]) {
+          assert(Math.abs(computeRoadDragDecel(speed, throttle, sub, "N", running, 1.35) - naturalDrag) < 1e-12,
+            "В N только аэродинамика и качение — без торможения коробкой/двигателем");
+        }
+      }
 
       // 3. Остановка выбегом без газа: в N — до 0 км/ч; в M2 торможение двигателем сильнее N; в D — до самохода D1
       let coastN = { ...createInitialState(track, true), gear: "N" as Gear, prevGear: "N" as Gear, v: 25 / 3.6, prevV: 25 / 3.6 };

@@ -293,6 +293,10 @@ export function computeRoadDragDecel(
   carAccelScale = 1
 ): number {
   const aeroAndRoll = 0.148 + 0.000331 * absV * absV + 0.0029 * absV;
+  // В N двигатель механически разомкнут с колёсами. Ни газ/обороты, ни прежняя
+  // ступень, ни компрессия двигателя не меняют выбег: только шины и воздух.
+  if (gear === "N") return aeroAndRoll;
+
   const coast = Math.pow(clamp(1 - throttlePos, 0, 1), 1.3);
   // Мягкое финальное докатывание шин/подшипников в последние ~2,5 км/ч при выбеге до полной остановки
   const lowSpeedRollSettle = 0.095 * (1 - clamp(absV / 0.72, 0, 1));
@@ -323,7 +327,7 @@ export function computeRoadDragDecel(
     const engineBrake = coast * gearLoss * rpmFactor * dfcoFade;
     return aeroAndRoll + engineBrake;
   }
-  // Нейтраль N / P: чистый свободный выбег шин и аэродинамики с плавной полной остановкой
+  // Остальные режимы без активной ступени (P удерживается парковочным стопором в stepSimulation)
   return aeroAndRoll + coast * (0.045 + lowSpeedRollSettle);
 }
 

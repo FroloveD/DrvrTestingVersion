@@ -3504,7 +3504,7 @@ export function SimulatorView({
             {!helpCollapsed && (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
                 {[
-                  [keyLabel(bindings.KeyW), "Плавный газ · только D + модификатор — быстрый газ/кикдаун"],
+                  [keyLabel(bindings.KeyW), "Газ до 60 % · D/M + модификатор — полный газ; кикдаун в D"],
                   [keyLabel(bindings.KeyS), "Тормоз (в D не даёт реверс)"],
                   [`${keyLabel(bindings.KeyA)} / ${keyLabel(bindings.KeyD)}`, "Руль влево (+X) / вправо (−X)"],
                   ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
