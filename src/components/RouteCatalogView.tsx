@@ -64,8 +64,46 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
   const [routeMapFilter, setRouteMapFilter] = useState("all");
   const [routeLengthFilter, setRouteLengthFilter] = useState("all");
   const [routeManeuverFilter, setRouteManeuverFilter] = useState("all");
-  const dragCheckpointRef = useRef<string | null>(null);
+  const dragCheckpointRef = useRef<{ checkpointId: string; pointerId: number; svg: SVGSVGElement } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Listen on window rather than relying on SVG pointer capture bubbling.
+    // This keeps checkpoint dragging reliable after the pointer leaves the marker.
+    const handleMove = (event: PointerEvent) => {
+      const drag = dragCheckpointRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const matrix = drag.svg.getScreenCTM();
+      if (!matrix) return;
+      const point = drag.svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      const local = point.matrixTransform(matrix.inverse());
+      const x = Number(local.x.toFixed(2));
+      const z = Number((-local.y).toFixed(2));
+      setEditing((current) => current ? {
+        ...current,
+        checkpoints: current.checkpoints.map((checkpoint) =>
+          checkpoint.id === drag.checkpointId ? { ...checkpoint, x, z } : checkpoint
+        ),
+      } : current);
+      event.preventDefault();
+    };
+    const handleEnd = (event: PointerEvent) => {
+      if (dragCheckpointRef.current?.pointerId === event.pointerId) {
+        dragCheckpointRef.current = null;
+      }
+    };
+    window.addEventListener("pointermove", handleMove, { passive: false });
+    window.addEventListener("pointerup", handleEnd);
+    window.addEventListener("pointercancel", handleEnd);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleEnd);
+      window.removeEventListener("pointercancel", handleEnd);
+      dragCheckpointRef.current = null;
+    };
+  }, []);
 
   const bounds = useMemo(() => mapBounds(sourceDef), [sourceDef]);
   const fingerprint = useMemo(
@@ -167,32 +205,14 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     if (!editing) return;
     const svg = event.currentTarget.ownerSVGElement;
     if (!svg) return;
-    dragCheckpointRef.current = checkpointId;
-    // Capture on the marker that received pointerdown. Captured pointermove
-    // events bubble to the SVG map handler even after the pointer leaves it.
-    event.currentTarget.setPointerCapture(event.pointerId);
+    dragCheckpointRef.current = { checkpointId, pointerId: event.pointerId, svg };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Window-level listeners remain available if pointer capture is unsupported.
+    }
     event.preventDefault();
-  };
-
-  const handleCheckpointPointerMove = (event: ReactPointerEvent<SVGCircleElement>) => {
-    const checkpointId = dragCheckpointRef.current;
-    const svg = event.currentTarget.ownerSVGElement;
-    if (!checkpointId || !editing || !svg) return;
-    const matrix = svg.getScreenCTM();
-    if (!matrix) return;
-    const point = svg.createSVGPoint();
-    point.x = event.clientX;
-    point.y = event.clientY;
-    const local = point.matrixTransform(matrix.inverse());
-    patchEditingCheckpoint(checkpointId, {
-      x: Number(local.x.toFixed(2)),
-      z: Number((-local.y).toFixed(2)),
-    });
-  };
-
-  const handleCheckpointPointerUp = (_event: ReactPointerEvent<SVGCircleElement>) => {
-    // The browser releases pointer capture automatically after pointerup.
-    dragCheckpointRef.current = null;
+    event.stopPropagation();
   };
 
   const handleSaveEdit = async (route: ExamRouteRecord) => {
@@ -484,10 +504,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                             cx={checkpoint.x} cy={-checkpoint.z} r={Math.max(5, checkpoint.radius)}
                             fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
                             stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }}
-                            onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)}
-                            onPointerMove={handleCheckpointPointerMove}
-                            onPointerUp={handleCheckpointPointerUp}
-                            onPointerCancel={handleCheckpointPointerUp} />
+                            onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)} />
                           <text x={checkpoint.x + Math.max(7, checkpoint.radius)} y={-checkpoint.z - Math.max(7, checkpoint.radius)}
                             fill="#ffffff" fontSize="12" fontWeight="bold" pointerEvents="none">{index + 1}</text>
                         </g>
