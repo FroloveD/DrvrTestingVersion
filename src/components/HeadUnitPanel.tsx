@@ -18,7 +18,7 @@ import { HEAD_UNIT_MODES, type HeadUnitState } from "../render/cockpitDisplays";
 
 type TrackMeta = Awaited<ReturnType<typeof trackStore.listTracks>>[number];
 
-export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATIONS }: { value: HeadUnitState; onChange: (next: HeadUnitState) => void; stations?: readonly RadioStation[] }) {
+export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATIONS, soundEnabled, soundLayers, onSoundEnabledChange, onSoundLayerToggle }: { value: HeadUnitState; onChange: (next: HeadUnitState) => void; stations?: readonly RadioStation[]; soundEnabled: boolean; soundLayers: { engine: boolean; horn: boolean; indicator: boolean }; onSoundEnabledChange: (enabled: boolean) => void; onSoundLayerToggle: (layer: "engine" | "horn" | "indicator") => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [tracks, setTracks] = useState<TrackMeta[]>([]);
@@ -155,6 +155,27 @@ export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATI
           ))}
         </div>
       )}
+      <div className="border-t border-white/10 pt-2 mt-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="mono text-[10px] text-[#7c909d]">ЗВУК АВТОМОБИЛЯ</span>
+          <label className="flex items-center gap-2 text-[10px] text-[#d3e0e7]">
+            <input type="checkbox" checked={soundEnabled} onChange={(e) => onSoundEnabledChange(e.target.checked)} className="accent-[#52d6bd]" />
+            Звук включён
+          </label>
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          {([
+            ["engine", "ДВС / шины"],
+            ["horn", "Клаксон"],
+            ["indicator", "Реле"],
+          ] as const).map(([layer, label]) => (
+            <label key={layer} className="flex items-center gap-1 text-[10px] text-[#9bafbc]">
+              <input type="checkbox" checked={soundLayers[layer]} onChange={() => onSoundLayerToggle(layer)} disabled={!soundEnabled} className="accent-[#52d6bd]" />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>
       <p className="text-[10px] text-[#f5b942] mt-2" role="status">{message}</p>
       <audio ref={audioRef} preload="none" className="hidden" />
     </section>
