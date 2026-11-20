@@ -14,6 +14,7 @@ import type {
   ObstacleBox,
   ObstacleKind,
   ParkedModelKey,
+  PlayerCarId,
   ParkingBay,
   RoadSegment,
   RoadSignDef,
@@ -24,6 +25,8 @@ import type {
   Vec2,
   WorldData,
 } from "../sim/types";
+import { PLAYER_CARS } from "../sim/playerCar";
+import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
 import { SIGN_SPEED_ZONE_PREFIX, signToSpeedZone } from "./signs";
 
@@ -65,11 +68,18 @@ export type CustomScenarioDef = {
   boundaryPolygon?: Vec2[];
   /** Добавить физический бордюр по периметру. */
   perimeterCurb?: boolean;
+  /** Список радиостанций тюнера для сценария; отсутствие поля означает весь каталог. */
+  radioStationIds?: string[];
+  /** Модель учебного автомобиля; отсутствие поля сохраняет стандартный Ceed JD. */
+  playerCarId?: PlayerCarId;
 };
 
 export type EditorImportKind = "scenario" | "backup" | MapImportFormat;
 
 export const CUSTOM_STORAGE_KEY = "cdt.customScenario.v1";
+
+export const PLAYER_CAR_IDS: readonly PlayerCarId[] = PLAYER_CARS.map((car) => car.id);
+export const RADIO_STATION_IDS: readonly string[] = INTERNET_RADIO_STATIONS.map((station) => station.id);
 
 const PARKED_COLORS: Record<ParkedModelKey, number> = {
   picanto: 0xf2c94c,
@@ -226,6 +236,12 @@ export function normalizeCustomScenario(raw: Partial<CustomScenarioDef>): Custom
     mapMeta: raw.mapMeta ? { ...raw.mapMeta, bbox: [...raw.mapMeta.bbox] as [number, number, number, number] } : undefined,
     boundaryPolygon: Array.isArray(raw.boundaryPolygon) ? sanitizeBoundaryPolygon(raw.boundaryPolygon) : undefined,
     perimeterCurb: Boolean(raw.perimeterCurb) || undefined,
+    playerCarId: PLAYER_CAR_IDS.includes(raw.playerCarId as PlayerCarId) ? raw.playerCarId : undefined,
+    radioStationIds: (() => {
+      if (!Array.isArray(raw.radioStationIds)) return undefined;
+      const ids = raw.radioStationIds.filter((id): id is string => typeof id === "string" && RADIO_STATION_IDS.includes(id));
+      return ids.length > 0 ? ids : undefined;
+    })(),
   };
 }
 
