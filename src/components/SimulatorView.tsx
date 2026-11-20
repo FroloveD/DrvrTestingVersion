@@ -1552,13 +1552,13 @@ export function SimulatorView({
         />
 
         {!uiHidden && <div className="absolute left-3 top-3 z-[58]">
-          <button type="button" className="btn btn-mini shadow-lg" aria-expanded={showPanelsMenu} onClick={() => setShowPanelsMenu((v) => !v)}>Окна HUD ▾</button>
+          <button type="button" data-testid="hud-panels-menu" className="btn btn-mini shadow-lg" aria-expanded={showPanelsMenu} onClick={() => setShowPanelsMenu((v) => !v)}>Окна HUD ▾</button>
           {showPanelsMenu && <div className="mt-1 w-60 rounded-xl border hairline bg-[#0b1218]/98 p-2 shadow-2xl backdrop-blur">
             <div className="text-[10px] mono text-[#8fa2ae] px-2 pb-1">ПАНЕЛИ ТРЕНАЖЁРА</div>
             {PANEL_IDS.map((item) => <div key={item.id} className="flex items-center gap-1 px-1 py-1 text-[11px]">
               <span className="flex-1 truncate text-[#d3e0e7]">{item.label}</span>
-              <button type="button" className="btn btn-mini" onClick={() => togglePanelCollapse(item.id)}>{panelState.collapsed.includes(item.id) ? "Развернуть" : "Свернуть"}</button>
-              {panelState.closed.includes(item.id) ? <button type="button" className="btn btn-mini" onClick={() => restorePanel(item.id)}>Вернуть</button> : <button type="button" className="btn btn-mini" onClick={() => closePanel(item.id)}>×</button>}
+              <button type="button" data-testid={`panel-collapse-toggle-${item.id}`} className="btn btn-mini" onClick={() => togglePanelCollapse(item.id)}>{panelState.collapsed.includes(item.id) ? "Развернуть" : "Свернуть"}</button>
+              {panelState.closed.includes(item.id) ? <button type="button" data-testid={`panel-restore-${item.id}`} className="btn btn-mini" onClick={() => restorePanel(item.id)}>Вернуть</button> : <button type="button" className="btn btn-mini" onClick={() => closePanel(item.id)}>×</button>}
             </div>)}
             <button type="button" className="w-full mt-1 text-[10px] text-[#f5b942] py-1" onClick={() => { setPanelState({ collapsed: [], closed: [] }); }}>Восстановить все панели</button>
           </div>}
