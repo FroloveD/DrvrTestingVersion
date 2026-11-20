@@ -418,7 +418,7 @@ export function stepEngineRpm(
     );
     const rising = freeTarget > prevRpm;
     return clamp(
-      smoothSlewRpm(prevRpm, freeTarget, rising ? 4.2 : 3.6, rising ? 5400 : 4600, dt),
+      smoothSlewRpm(prevRpm, freeTarget, rising ? 4.2 : 8.0, rising ? 5400 : 7000, dt),
       0,
       ENGINE_REDLINE_RPM
     );

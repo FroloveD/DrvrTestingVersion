@@ -366,9 +366,10 @@ export function stepKeyboardGear(inp: GearCheckInput, speedMs: number, autoSubGe
   return stepShifterGate(isManualGear(inp.gear) ? { ...inp, gear: "D" } : inp, speedMs, autoSubGear, dir);
 }
 
-/** Ход цифровой педали за фиксированный тик: обычный газ ≈0,83 с до пола, Shift — ≈0,08 с. */
-export function advanceKeyboardThrottle(current: number, pressed: boolean, kickdown: boolean, dt: number): number {
-  const target = pressed ? 1 : 0;
-  const rate = pressed ? (kickdown ? 12 : 1.2) : 8;
-  return clamp(current + clamp(target - current, -rate * dt, rate * dt), 0, 1);
+/** Цифровая педаль: обычный газ ≈2,2 с до пола; быстрый отклик ≈0,08 с — только D+Shift. */
+export function advanceKeyboardThrottle(current: number, pressed: boolean, kickdown: boolean, dt: number, gear: Gear = "D"): number {
+  // Отпущенная педаль не должна оставаться виртуально нажатой: инерцию заслонки считает ядро.
+  if (!pressed) return 0;
+  const rate = kickdown && gear === "D" ? 12 : 0.45;
+  return clamp(current + clamp(1 - current, 0, rate * Math.max(0, dt)), 0, 1);
 }

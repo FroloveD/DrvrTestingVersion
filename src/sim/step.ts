@@ -284,7 +284,7 @@ export function stepSimulation(
 
   // Brake Override System: нажатая педаль тормоза перекрывает подачу газа (как в реальном ЭБУ Kia Ceed JD)
   const throttleCmd = s.engineOn && brake <= 0.12 ? clamp(input.throttle, 0, 1) : 0;
-  const thRate = throttleCmd > s.throttlePos ? 10.5 : 8.5;
+  const thRate = throttleCmd > s.throttlePos ? 10.5 : 18; // быстрое закрытие после отпускания, без «зависшего» газа
   s.throttlePos = clamp(
     s.throttlePos + (throttleCmd - s.throttlePos) * Math.min(1, dt * thRate),
     0,

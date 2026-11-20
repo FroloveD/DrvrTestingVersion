@@ -1408,8 +1408,12 @@ export const extraCases: SelfTestCase[] = [
         soft = advanceKeyboardThrottle(soft, true, false, FIXED_DT);
         kick = advanceKeyboardThrottle(kick, true, true, FIXED_DT);
       }
-      assert(soft > 0.2 && soft < 0.3 && kick === 1, "Газ нарастает плавно; Shift+газ быстро до пола");
-      assert(advanceKeyboardThrottle(kick, false, true, FIXED_DT) < kick, "Shift без газа не держит педаль");
+      assert(soft > 0.08 && soft < 0.10 && kick === 1, "Газ нарастает плавно; Shift+газ быстро до пола");
+      assert(advanceKeyboardThrottle(kick, false, true, FIXED_DT) === 0, "Отпускание сразу снимает команду газа");
+      for (const gear of ["P", "N", "R", "1", "3", "6"] as const) {
+        assert(advanceKeyboardThrottle(0, true, true, FIXED_DT, gear) === advanceKeyboardThrottle(0, true, false, FIXED_DT, gear),
+          `Shift не ускоряет нажатие газа вне D: ${gear}`);
+      }
       let fine = 0;
       for (let i = 0; i < 24; i++) fine = advanceKeyboardThrottle(fine, true, false, FIXED_DT / 2);
       assert(Math.abs(fine - soft) < 1e-10, "Ход педали зависит от времени, не частоты вызова");
@@ -1506,6 +1510,13 @@ export const extraCases: SelfTestCase[] = [
           FIXED_DT
         ).state;
       }
+      let releaseState = { ...idleState, rpm: peakFreeRpm, throttlePos: 1 };
+      for (let i = 0; i < 60; i++) {
+        releaseState = stepSimulation(releaseState, { ...createReadyInput("P"), throttle: 0 }, track, grid,
+          DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        if (i === 11) assert(releaseState.throttlePos < 0.02, "Заслонка закрывается за 0,2 с после отпускания");
+      }
+      assert(releaseState.rpm < ENGINE_IDLE_RPM + 300, `Обороты зависли через секунду без газа: ${releaseState.rpm}`);
       assert(idleState.rpm < ENGINE_IDLE_RPM + 80, `Обороты не вернулись к ХХ: ${idleState.rpm.toFixed(0)}`);
 
       // 3. Разгон 0–100 км/ч и максимальная скорость 180 км/ч в режиме D (6АКПП)

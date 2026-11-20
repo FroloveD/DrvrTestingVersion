@@ -1520,7 +1520,7 @@ export function SimulatorView({
         const gasPressed = Boolean(keys.KeyW || touchPedalRef.current.gas);
         const brakePressed = Boolean(keys.KeyS || touchPedalRef.current.brake);
         keyboardThrottleRef.current = advanceKeyboardThrottle(
-          keyboardThrottleRef.current, gasPressed, Boolean(keys.ShiftLeft || keys.ShiftRight), FIXED_DT
+          keyboardThrottleRef.current, gasPressed, Boolean(keys.ShiftLeft || keys.ShiftRight), FIXED_DT, inp.gear
         );
         inp.throttle = Math.max(keyboardThrottleRef.current, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
@@ -3504,7 +3504,7 @@ export function SimulatorView({
             {!helpCollapsed && (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
                 {[
-                  [keyLabel(bindings.KeyW), "Плавный газ · с модификатором — кикдаун"],
+                  [keyLabel(bindings.KeyW), "Плавный газ · только D + модификатор — быстрый газ/кикдаун"],
                   [keyLabel(bindings.KeyS), "Тормоз (в D не даёт реверс)"],
                   [`${keyLabel(bindings.KeyA)} / ${keyLabel(bindings.KeyD)}`, "Руль влево (+X) / вправо (−X)"],
                   ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
