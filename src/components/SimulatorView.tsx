@@ -398,11 +398,17 @@ export function SimulatorView({
     setHud((current) => ({ ...current, state: { ...current.state, signal } }));
   }, []);
 
+  /** Мгновенный сигнал тормоза для BTSI/Shift Lock, не дожидаясь следующего тика симуляции. */
+  const liveBrakePressure = useCallback(() => {
+    const keys = keysRef.current;
+    return keys.KeyS || touchPedalRef.current.brake ? 1 : inputRef.current.brake;
+  }, []);
+
   /** Выбор режима АКПП с блокировками (src/sim/controls.ts): P — только на остановке, выход из P — при запущенном ДВС. */
   const setGear = useCallback(
     (gear: Gear) => {
       const inp = inputRef.current;
-      const err = checkGearChange(inp, stateRef.current.v, gear);
+      const err = checkGearChange({ ...inp, brake: liveBrakePressure() }, stateRef.current.v, gear);
       if (err) {
         onNotify(err);
         return;
@@ -410,14 +416,14 @@ export function SimulatorView({
       inp.gear = gear;
       setHud((current) => ({ ...current, state: { ...current.state, gear } }));
     },
-    [onNotify]
+    [liveBrakePressure, onNotify]
   );
 
   /** Ручное секвентальное переключение M1–M6; Shift+↑ повышает, Shift+↓ понижает ступень. */
   const shiftGear = useCallback((dir: 1 | -1) => {
     const inp = inputRef.current;
     const st = stateRef.current;
-    const { next, blockedReason } = stepGearSequential(inp, st.v, st.autoSubGear, dir);
+    const { next, blockedReason } = stepGearSequential({ ...inp, brake: liveBrakePressure() }, st.v, st.autoSubGear, dir);
     if (blockedReason) { onNotify(blockedReason); return; }
     if (!next) return;
     inp.gear = next;
