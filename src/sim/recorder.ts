@@ -11,6 +11,7 @@ import { createInitialState, stepSimulation } from "./step";
 import type {
   CalibrationConfig,
   InputState,
+  PlayerCarId,
   ScenarioId,
   SimEvent,
   SimState,
@@ -52,6 +53,8 @@ export type RecordedAttempt = {
   reviews?: InstructorReview[];
   scenarioId: ScenarioId;
   scenarioTitle: string;
+  /** Модель автомобиля, на которой записана попытка; отсутствует в старых журналах. */
+  playerCarId?: PlayerCarId;
   readyStart: boolean;
   totalTicks: number;
   durationSec: number;
@@ -201,6 +204,7 @@ export class AttemptRecorder {
       createdAt: this.createdAt,
       scenarioId: world.scenarioId,
       scenarioTitle: world.title,
+      ...(world.playerCarId ? { playerCarId: world.playerCarId } : {}),
       readyStart: this.readyStart,
       totalTicks: state.tick,
       durationSec: Number(state.time.toFixed(1)),
