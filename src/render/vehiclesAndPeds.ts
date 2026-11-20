@@ -7,6 +7,7 @@
  */
 import * as THREE from "three";
 import type { ParkedModelKey } from "../sim/types";
+import { HORN_PICK } from "../sim/cockpitLayout";
 import { getPlayerCar } from "../sim/playerCar";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
 
@@ -910,9 +911,10 @@ export function buildDetailedCar(
       addPick("headlight", W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.19, 0.062, 0.062, 0.032),
       addPick("stalk-left", W * 0.23 + 0.112, 0.9, centerShiftZ + 0.55, 0.15, 0.07, 0.07),
       addPick("handbrake", -0.052, gateY + 0.055, centerShiftZ + 0.19, 0.07, 0.085, 0.24),
-      // Сигнал: центральная накладка руля. Зона неподвижна (обод крутится визуально), поэтому
-      // клик по ступице ловится в любом положении руля — как нажатие подушки водителем.
-      addPick("horn", W * 0.23, 0.905, centerShiftZ + 0.44, 0.115, 0.115, 0.075),
+      // Сигнал: накладка ступицы, зона заметно уже обода (0,062 м против радиуса 0,172 м) и смещена от консоли.
+      // Широкая зона перехватывала бы клики по кулисе АКПП и шайбам ШГУ, которые лежат ниже и правее (смоук K7c/K7d).
+      // Раскладка и зазоры — чистый модуль `sim/cockpitLayout.ts`, проверяются T41.
+      addPick(HORN_PICK.id as CockpitControlId, HORN_PICK.cx, HORN_PICK.cy, HORN_PICK.cz, HORN_PICK.sx, HORN_PICK.sy, HORN_PICK.sz),
     ];
     chassis.add(pickGroup);
 

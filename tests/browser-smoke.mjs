@@ -184,11 +184,12 @@ try {
   check("A4c Shift + тормоз усиливает давление в гидроприводе и не переключает передачу вверх",
     brakePosBoost > 0.05 && gearBeforeShiftBrake === "D", JSON.stringify({ brakePosBoost, gearBeforeShiftBrake }));
 
-  await page.keyboard.press("KeyH");
+  // H — сигнал (клаксон), HUD прячет U: разделяем роли, чтобы одна клавиша не делала двух дел
+  await page.keyboard.press("KeyU");
   await sleep(500);
   text = await low(page);
-  check("A5  клавиша H: приборы скрыты, зеркала остались", !text.includes("км/ч") && text.includes("зеркало заднего вида"));
-  await page.keyboard.press("KeyH");
+  check("A5  клавиша U: приборы скрыты, зеркала остались", !text.includes("км/ч") && text.includes("зеркало заднего вида"));
+  await page.keyboard.press("KeyU");
   await sleep(300);
 
   await page.getByRole("button", { name: /Завершить/ }).click();
@@ -1001,9 +1002,9 @@ try {
   check("L3 отключение боковых зеркал не меняет задний кадр",await sideL.count()===0 && (await grab(rear)).hash===baseline.hash);
   await page.getByRole("button", { name: "Боковые", exact:true }).click();
   await page.getByRole("button", { name: "Заднее", exact:true }).click();
-  await page.keyboard.press("KeyH"); await sleep(200);
-  check("L4 H сохраняет выбор зеркал, не создавая пустые отражения",await rear.count()===0 && await sideL.count()===1 && await sideR.count()===1);
-  await page.keyboard.press("KeyH"); await sleep(200);
+  await page.keyboard.press("KeyU"); await sleep(200);
+  check("L4 U сохраняет выбор зеркал, не создавая пустые отражения",await rear.count()===0 && await sideL.count()===1 && await sideR.count()===1);
+  await page.keyboard.press("KeyU"); await sleep(200);
   await page.getByRole("button", { name: "Заднее", exact:true }).click();
 
   await page.getByRole("button", { name: "Быстрый старт" }).click();

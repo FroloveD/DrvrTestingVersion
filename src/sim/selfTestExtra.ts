@@ -99,6 +99,15 @@ import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMet
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { isCarInsideBay, SpatialGrid } from "./spatialGrid";
 import { radioStationsFor } from "../audio/radioCatalog";
+import {
+  COCKPIT_PICK_ZONES,
+  HEAD_UNIT_PICK,
+  HORN_PICK,
+  pickBoxesOverlap,
+  SHIFTER_PICK,
+  WHEEL_PICK_CENTER,
+  WHEEL_RIM_RADIUS,
+} from "./cockpitLayout";
 import { cockpitFramingFor, cockpitWheelBand, projectCockpitPoint } from "../render/cockpitFraming";
 import { dampedHeadStep, HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
 import { DEFAULT_PLAYER_CAR_ID, PLAYER_CARS, getPlayerCar, playerCarPhysics } from "./playerCar";
@@ -2163,6 +2172,43 @@ export const extraCases: SelfTestCase[] = [
       );
 
       return `Ceed ${ceed.length.toFixed(2)}×${ceed.width.toFixed(2)} м · Picanto влезает в карман 1,75 м, Ceed/Sorento нет · Аккерман ${(picInner * 57.3).toFixed(1)}° против ${(sorInner * 57.3).toFixed(1)}° · попытка запомнила ${attempt.playerCarId}`;
+    },
+  },
+  {
+    id: "T41",
+    suite: "vehicle",
+    name: "Зоны клика в салоне: сигнал на ступице руля не перехватывает кулису АКПП и шайбы ШГУ",
+    fn: () => {
+      // Регрессия, которую поймал смоук K7c/K7d: зона 23×23 см вокруг руля накрывала кулису и консоль,
+      // и клик по рычагу/шайбе TUNE уходил в клаксон. Проверяем зазоры в чистом ядре, без браузера.
+      assert(
+        HORN_PICK.sx < WHEEL_RIM_RADIUS && HORN_PICK.sy < WHEEL_RIM_RADIUS,
+        "Зона сигнала обязана быть меньше обода руля — это накладка ступицы, а не весь руль"
+      );
+      for (const zone of COCKPIT_PICK_ZONES) {
+        if (zone.id === HORN_PICK.id) continue;
+        assert(
+          !pickBoxesOverlap(HORN_PICK, zone),
+          `Зона сигнала не должна пересекаться с «${zone.id}»: иначе клик по органу уходит в клаксон`
+        );
+        assert(
+          !pickBoxesOverlap(HORN_PICK, zone, 0.01),
+          `Между сигналом и «${zone.id}» обязателен зазор ≥ 1 см, чтобы промах не бибикал`
+        );
+      }
+      // Смещение в сторону водителя (X влево) сохраняется: ступица стоит на оси руля, а не по центру кузова
+      assert(
+        HORN_PICK.cx > 0.35 && Math.abs(HORN_PICK.cx - WHEEL_PICK_CENTER.x) < 1e-9,
+        "Зона сигнала должна стоять ровно на оси руля водителя"
+      );
+      // Зона ШГУ и кулиса сами по себе не пересекаются — иначе непонятно, какой орган «побеждает»
+      assert(
+        !pickBoxesOverlap(HEAD_UNIT_PICK, SHIFTER_PICK),
+        "7\" ШГУ и кулиса АКПП обязаны быть раздельными зонами клика"
+      );
+      const gapShifter = Math.abs(HORN_PICK.cy - SHIFTER_PICK.cy) - (HORN_PICK.sy + SHIFTER_PICK.sy) / 2;
+      const gapUnit = Math.abs(HORN_PICK.cz - HEAD_UNIT_PICK.cz) - (HORN_PICK.sz + HEAD_UNIT_PICK.sz) / 2;
+      return `ступица ${(HORN_PICK.sx * 100).toFixed(0)} см · зазор до кулисы ${(Math.max(0, gapShifter) * 100).toFixed(0)} см по Y · до ШГУ ${(Math.max(0, gapUnit) * 100).toFixed(0)} см по Z`;
     },
   },
 ];
