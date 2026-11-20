@@ -1195,6 +1195,27 @@ try {
           return { from: screen({ x, y }), to: screen(target) };
         });
         if (!dragPoints) throw new Error("Не удалось вычислить точку переноса вдоль маршрута");
+        await page.evaluate(() => {
+          const trace = [];
+          for (const type of ["pointerdown", "mousedown", "pointermove", "mousemove", "pointerup", "mouseup", "pointercancel"]) {
+            window.addEventListener(type, (event) => {
+              const target = event.target;
+              trace.push({
+                type,
+                pointerType: "pointerType" in event ? event.pointerType : undefined,
+                pointerId: "pointerId" in event ? event.pointerId : undefined,
+                button: event.button,
+                buttons: event.buttons,
+                x: Number(event.clientX.toFixed(1)),
+                y: Number(event.clientY.toFixed(1)),
+                target: target instanceof Element
+                  ? target.tagName.toLowerCase() + (target.getAttribute("data-testid") ? `[${target.getAttribute("data-testid")}]` : "")
+                  : String(target),
+              });
+            }, true);
+          }
+          window.__routeDragTrace = trace;
+        });
         await page.mouse.move(dragPoints.from.x, dragPoints.from.y);
         await page.mouse.down();
         await page.mouse.move(dragPoints.to.x, dragPoints.to.y, { steps: 8 });
@@ -1203,8 +1224,24 @@ try {
           const position = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
           return position.x !== initialPosition.x || position.y !== initialPosition.y ? position : null;
         }, 3000, 100);
+        const dragDiagnostics = await page.evaluate(({ from, to }) => {
+          const describe = (x, y) => {
+            const el = document.elementFromPoint(x, y);
+            return el instanceof Element
+              ? el.tagName.toLowerCase() + (el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : "")
+              : null;
+          };
+          return {
+            fromTarget: describe(from.x, from.y),
+            toTarget: describe(to.x, to.y),
+            events: window.__routeDragTrace ?? [],
+          };
+        }, dragPoints);
+        const finalPosition = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
         check("P5 маркер контрольной точки можно переместить мышью по карте", Boolean(movedPosition),
-          movedPosition ? JSON.stringify(movedPosition) : "координаты не изменились");
+          movedPosition ? JSON.stringify(movedPosition) : JSON.stringify({
+            initialPosition, finalPosition, dragPoints, dragDiagnostics,
+          }));
         await page.getByRole("button", { name: /Сохранить изменения/ }).click();
         const edited = await until(async () => (await low(page)).includes("маршрут p · редакция"), 5000, 100);
         check("P6 редактор сохраняет название и задания контрольных точек", edited);
