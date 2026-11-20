@@ -1037,7 +1037,9 @@ export const extraCases: SelfTestCase[] = [
       for (const car of PLAYER_CARS) {
         const geo = carGeometry(car.id);
         const corners = getCarCorners(0, 0, 0, geo);
-        const length = Math.hypot(corners[0].x - corners[2].x, corners[0].z - corners[2].z);
+        const front = { x: (corners[0].x + corners[1].x) / 2, z: (corners[0].z + corners[1].z) / 2 };
+        const rear = { x: (corners[2].x + corners[3].x) / 2, z: (corners[2].z + corners[3].z) / 2 };
+        const length = Math.hypot(front.x - rear.x, front.z - rear.z);
         const width = Math.hypot(corners[0].x - corners[1].x, corners[0].z - corners[1].z);
         assert(Math.abs(length - car.length) < 1e-6, `${car.name}: длина кузова не совпадает с паспортом`);
         assert(Math.abs(width - car.width) < 1e-6, `${car.name}: ширина кузова не совпадает с паспортом`);
