@@ -342,8 +342,10 @@ export function SimulatorView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [immersive, setImmersive] = useState(false);
   const previousUiHiddenRef = useRef(false);
+  const immersiveRequestedRef = useRef(false);
   const fullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const leaveImmersive = useCallback(() => {
+    immersiveRequestedRef.current = false;
     setImmersive(false);
     setUiHidden(previousUiHiddenRef.current);
     if (document.fullscreenElement === containerRef.current) {
@@ -354,13 +356,22 @@ export function SimulatorView({
   const enterImmersive = useCallback(() => {
     const host = containerRef.current;
     if (!host) return;
+    immersiveRequestedRef.current = true;
     previousUiHiddenRef.current = uiHidden;
     setShowHelp(false);
     setShowControls(false);
     setImmersive(true);
     setUiHidden(true);
     // В iframe fullscreen может запрещаться Permissions Policy: CSS-режим остаётся рабочим.
-    if (host.requestFullscreen) void host.requestFullscreen().catch(() => {});
+    if (host.requestFullscreen) {
+      void host.requestFullscreen().then(() => {
+        // Native fullscreen can finish AFTER Esc/the exit button has already restored the UI.
+        // In that case the host must not remain in the browser top layer above the toolbar.
+        if (!immersiveRequestedRef.current && document.fullscreenElement === host) {
+          void document.exitFullscreen().catch(() => {});
+        }
+      }).catch(() => {});
+    }
   }, [uiHidden]);
   useEffect(() => {
     if (!immersive) return;

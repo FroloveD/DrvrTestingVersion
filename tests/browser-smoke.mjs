@@ -234,6 +234,33 @@ try {
   check("A2m menus can be restored from the scene",
     await page.getByTestId("app-header").isVisible() && await page.getByTestId("sim-toolbar").isVisible());
   await page.evaluate(() => { delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen; });
+  // Deterministic reproduction: fullscreen API resolves only after the user has exited.
+  await page.evaluate(() => {
+    const host = document.querySelector('[data-testid="sim-viewport"]');
+    window.__lateFullscreen = { exited: 0, originalExit: document.exitFullscreen,
+      originalElement: Object.getOwnPropertyDescriptor(document, "fullscreenElement") };
+    Object.defineProperty(host, "requestFullscreen", { configurable: true, value: () => new Promise(resolve => {
+      window.__lateFullscreen.resolve = () => {
+        Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => host });
+        document.exitFullscreen = () => { window.__lateFullscreen.exited++; return Promise.resolve(); };
+        resolve();
+      };
+    }) });
+  });
+  await page.getByTestId("sim-fullscreen-enter").click();
+  await page.getByTestId("sim-fullscreen-exit").click();
+  await page.evaluate(() => window.__lateFullscreen.resolve());
+  check("A2q запоздавший fullscreen-запрос отменяется после выхода", await until(() =>
+    page.evaluate(() => window.__lateFullscreen.exited === 1), 5000));
+  await page.evaluate(() => {
+    const saved = window.__lateFullscreen;
+    document.exitFullscreen = saved.originalExit;
+    if (saved.originalElement) Object.defineProperty(document, "fullscreenElement", saved.originalElement);
+    else delete document.fullscreenElement;
+    delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen;
+    delete window.__lateFullscreen;
+  });
+
 
 
   await page.getByRole("button", { name: "Быстрый старт" }).click();
@@ -291,6 +318,9 @@ try {
   check("A5b повторное U выходит из fullscreen и восстанавливает интерфейс", uRestored && await page.locator('[data-hud-panel="scorePanel"]').count() === 1);
   await sleep(300);
 
+  // An async native request must not put the scene back in the top layer after exit.
+  const nativeExited = await until(() => page.evaluate(() => !document.fullscreenElement), 10000);
+  check("A5c выход из fullscreen убирает сцену из верхнего слоя браузера", nativeExited);
   await page.getByRole("button", { name: /Завершить/ }).click();
   await sleep(700);
   check("A6  «Завершить → Разбор» открывает протокол", (await low(page)).includes("разбор ошибок и реплей заезда"));
