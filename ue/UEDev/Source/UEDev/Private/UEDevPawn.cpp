@@ -37,8 +37,9 @@ bool AUEDevPawn::Down(const FKey& Key) const {
 }
 void AUEDevPawn::ResetRide() { Reset(); }
 void AUEDevPawn::Reset() {
-    Model = uedev::State{}; Accumulator = 0;
-    SetActorLocationAndRotation(FVector(0, 0, 71), FRotator::ZeroRotator, false);
+    Model = uedev::State{}; Accumulator = 0; Run = uedev::RouteRun{};
+    Model.Z = ActiveRoute.StartZ;
+    SetActorLocationAndRotation(FVector(Model.Z * 100, 0, 71), FRotator::ZeroRotator, false);
 }
 void AUEDevPawn::Ready() { Reset(); Model.Engine = true; Model.Handbrake = false; Model.Belt = true; Model.Selector = uedev::Gear::D; }
 void AUEDevPawn::StartEngine() { uedev::ToggleEngine(Model); }
@@ -75,7 +76,8 @@ void AUEDevPawn::MouseY(float Value) {
 }
 void AUEDevPawn::Zoom(float Value) {
     if (Down(EKeys::LeftControl) || Down(EKeys::RightControl)) {
-        OrdinaryGas = FMath::Clamp(OrdinaryGas + Value * 0.05, 0.1, 0.6);
+        SetOrdinaryGas(OrdinaryGas + Value * 0.05);
+        if (auto* PC = Cast<AUEDevPlayerController>(GetController())) PC->SavePreferences();
     } else Arm->TargetArmLength = FMath::Clamp(Arm->TargetArmLength - Value * 50.f, 250.f, 1400.f);
 }
 void AUEDevPawn::SetupPlayerInputComponent(UInputComponent* Input) {
@@ -108,6 +110,7 @@ void AUEDevPawn::Tick(float DeltaSeconds) {
         auto StepInput = Input;
         StepInput.GasLimit = OrdinaryGas;
         if (Down(EKeys::LeftMouseButton)) { StepInput.Steer = 0; StepInput.HoldSteer = true; }
+        const double PreviousX = Model.X, PreviousZ = Model.Z;
         uedev::Step(Model, StepInput);
         FHitResult Hit;
         SetActorLocationAndRotation(FVector(Model.Z * 100, -Model.X * 100, 71),
@@ -116,6 +119,7 @@ void AUEDevPawn::Tick(float DeltaSeconds) {
             const FVector Position = GetActorLocation();
             Model.Z = Position.X / 100; Model.X = -Position.Y / 100; Model.Speed = 0;
         }
+        Run.Advance(ActiveRoute, PreviousX, PreviousZ, Model.X, Model.Z, Model.Speed, uedev::Dt);
         Accumulator -= uedev::Dt;
     }
 }

@@ -22,4 +22,7 @@ class UEDEV_API AUEDevGameMode : public AGameModeBase {
 public:
     AUEDevGameMode();
     virtual void BeginPlay() override;
+    void BuildRoute(int Id);
+private:
+    UPROPERTY() TArray<TObjectPtr<AActor>> RouteActors;
 };

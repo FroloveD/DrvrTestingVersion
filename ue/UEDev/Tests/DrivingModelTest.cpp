@@ -1,5 +1,7 @@
 #include "DrivingModel.h"
 #include "SessionFlow.h"
+#include "RouteRun.h"
+#include <limits>
 #include <cstdlib>
 #include <iostream>
 using namespace uedev;
@@ -18,6 +20,27 @@ int main() {
     Check(!flow.Apply(Action::Resume) && flow.Apply(Action::Restart), "summary new attempt");
     Check(flow.Apply(Action::Pause) && flow.Apply(Action::Home) && flow.Current == Screen::Menu, "home from pause");
     Check(flow.Apply(Action::Start) && flow.Apply(Action::Pause) && flow.Apply(Action::Finish) && flow.Apply(Action::Home), "summary home");
+    const auto straight=Route(1);
+    Check(straight.Count==4 && straight.StartZ==-500 && straight.HalfForward>500,"long route geometry");
+    Check(Route(999).Id==0,"unknown route falls back to yard");
+    RouteRun run;
+    run.Advance(straight,0,240,0,260,20,Dt);
+    Check(run.Next==0,"cannot skip first checkpoint");
+    run.Advance(straight,0,-270,0,-230,20,Dt);
+    Check(run.Next==1,"swept checkpoint not missed at speed");
+    run.Advance(straight,0,-20,0,20,20,Dt);
+    run.Advance(straight,0,230,0,270,20,Dt);
+    Check(run.Next==3,"ordered checkpoint advancement");
+    run.Advance(straight,0,490,0,500,10,Dt);
+    Check(!run.Done(straight),"stop checkpoint needs low speed");
+    run.Advance(straight,0,500,0,500,0,Dt);
+    Check(run.Done(straight) && run.Distance>0 && run.Seconds>0 && run.MaxKmh==72,"stop and stats");
+    const double completedTime=run.Seconds;
+    run.Advance(straight,0,500,0,510,20,Dt);
+    Check(run.Seconds==completedTime,"completed metrics frozen");
+    run=RouteRun{};
+    Check(run.Next==0 && run.Distance==0 && run.Seconds==0,"restart clears progress");
+    Check(OrdinaryGasLimit(99)==0.6 && OrdinaryGasLimit(-1)==0.1 && OrdinaryGasLimit(std::numeric_limits<double>::quiet_NaN())==0.6,"settings normalization");
     State cold;
     Check(!cold.Engine && cold.Handbrake && !cold.Belt && cold.Selector == Gear::P, "cold start");
     Check(!Select(cold, Gear::D, true), "P: engine required");

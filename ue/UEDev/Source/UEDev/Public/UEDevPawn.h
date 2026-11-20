@@ -10,6 +10,7 @@
 #include "GameFramework/Pawn.h"
 #include "InputCoreTypes.h"
 #include "DrivingModel.h"
+#include "RouteRun.h"
 #include "UEDevPawn.generated.h"
 class UBoxComponent;
 class USpringArmComponent;
@@ -23,6 +24,10 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
     void ResetRide();
+    void SetRoute(int Id) { ActiveRoute = uedev::Route(Id); Reset(); }
+    const uedev::TestRoute& GetRoute() const { return ActiveRoute; }
+    const uedev::RouteRun& GetRouteRun() const { return Run; }
+    void SetOrdinaryGas(double Value) { OrdinaryGas = uedev::OrdinaryGasLimit(Value); }
     double GetOrdinaryGas() const { return OrdinaryGas; }
     const uedev::State& GetDrivingState() const { return Model; }
 private:
@@ -30,6 +35,8 @@ private:
     UPROPERTY() TObjectPtr<USpringArmComponent> Arm;
     UPROPERTY() TObjectPtr<UCameraComponent> Camera;
     uedev::State Model;
+    uedev::TestRoute ActiveRoute = uedev::Route(0);
+    uedev::RouteRun Run;
     double Accumulator = 0;
     double OrdinaryGas = 0.6;
     void Reset();

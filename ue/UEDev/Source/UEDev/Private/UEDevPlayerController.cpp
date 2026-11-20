@@ -1,5 +1,7 @@
 #include "UEDevPlayerController.h"
 #include "UEDevPawn.h"
+#include "UEDevGameMode.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Components/InputComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
@@ -10,9 +12,30 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
-void AUEDevPlayerController::BeginPlay() { Super::BeginPlay(); SyncScreen(); }
+#include "Widgets/Input/SSlider.h"
+#include "Widgets/Layout/SBox.h"
+void AUEDevPlayerController::LoadPreferences() {
+    if (PreferencesLoaded) return;
+    PreferencesLoaded = true;
+    if (GConfig) {
+        GConfig->GetInt(TEXT("UEDev"),TEXT("SelectedRoute"),SelectedRoute,GGameUserSettingsIni);
+        GConfig->GetDouble(TEXT("UEDev"),TEXT("OrdinaryGas"),GasSetting,GGameUserSettingsIni);
+    }
+    SelectedRoute = FMath::Clamp(SelectedRoute,0,1);
+    GasSetting = uedev::OrdinaryGasLimit(GasSetting);
+}
+void AUEDevPlayerController::SavePreferences() {
+    if (const auto* DrivingPawn = Cast<AUEDevPawn>(GetPawn())) GasSetting=DrivingPawn->GetOrdinaryGas();
+    if (!GConfig) return;
+    GConfig->SetInt(TEXT("UEDev"),TEXT("SelectedRoute"),SelectedRoute,GGameUserSettingsIni);
+    GConfig->SetDouble(TEXT("UEDev"),TEXT("OrdinaryGas"),GasSetting,GGameUserSettingsIni);
+    GConfig->Flush(false,GGameUserSettingsIni);
+}
+void AUEDevPlayerController::BeginPlay() { Super::BeginPlay(); LoadPreferences(); SyncScreen(); }
 void AUEDevPlayerController::OnPossess(APawn* InPawn) {
     Super::OnPossess(InPawn);
+    LoadPreferences();
+    if (auto* DrivingPawn=Cast<AUEDevPawn>(InPawn)) DrivingPawn->SetOrdinaryGas(GasSetting);
     SyncScreen();
 }
 void AUEDevPlayerController::EndPlay(const EEndPlayReason::Type Reason) {
@@ -29,11 +52,22 @@ void AUEDevPlayerController::Escape() {
 void AUEDevPlayerController::Apply(uedev::Action Action) {
     if (!Flow.Apply(Action)) return;
     if (auto* DrivingPawn = Cast<AUEDevPawn>(GetPawn())) {
-        if (Action == uedev::Action::Start || Action == uedev::Action::Restart) DrivingPawn->ResetRide();
+        if (Action == uedev::Action::Start) {
+            if (auto* Mode=GetWorld()->GetAuthGameMode<AUEDevGameMode>()) Mode->BuildRoute(SelectedRoute);
+            DrivingPawn->SetRoute(SelectedRoute);
+        }
+        if (Action == uedev::Action::Restart) DrivingPawn->ResetRide();
         if (Action == uedev::Action::Finish) {
             const auto& State = DrivingPawn->GetDrivingState();
-            Result = FString::Printf(TEXT("Заезд завершён вручную. Последняя скорость: %.1f км/ч, КПП: %s.\nОценка, запись и журнал пока не перенесены. Это не экзаменационный протокол."),
-                FMath::Abs(State.Speed) * 3.6, UTF8_TO_TCHAR(uedev::Label(State.Selector)));
+            const auto& Run=DrivingPawn->GetRouteRun();
+            const auto& Route=DrivingPawn->GetRoute();
+            Result = FString::Printf(TEXT("%s · КТ %d/%d · %.1f с · %.0f м · максимум %.1f км/ч. %s"),
+                Route.Id==1 ? TEXT("Прямая 1 км") : TEXT("Площадка"),Run.Next,Route.Count,Run.Seconds,Run.Distance,Run.MaxKmh,
+                Run.Done(Route) ? TEXT("Все КТ пройдены.") : TEXT("Завершено до прохождения всех КТ."));
+            RecentResults.Insert(Result,0);
+            if (RecentResults.Num()>10) RecentResults.SetNum(10);
+            Result += FString::Printf(TEXT("\nПоследняя скорость: %.1f км/ч, КПП: %s. Это технический итог, не экзаменационная оценка. Реплей не записывается."),
+                FMath::Abs(State.Speed)*3.6,UTF8_TO_TCHAR(uedev::Label(State.Selector)));
         }
         // Возврат в меню отбрасывает текущий стендовый заезд, журнал пока отсутствует.
         if (Action == uedev::Action::Home) DrivingPawn->ResetRide();
@@ -79,20 +113,43 @@ void AUEDevPlayerController::SyncScreen() {
     if (Flow.Current == uedev::Screen::Menu) {
         Text(TEXT("UEDev — стартовый экран"));
         Text(TEXT("Клавиатура и мышь · технический прототип · физика не откалибрована"));
-        Button(TEXT("Начать заезд — тестовая площадка"), [this]() { Apply(uedev::Action::Start); });
-        for (const FString Name : {FString(TEXT("Маршруты")), FString(TEXT("Автомобиль")), FString(TEXT("Настройки и управление")), FString(TEXT("Журнал и разбор"))}) {
+        Text(SelectedRoute==1 ? TEXT("Выбрано: тестовая прямая 1 км · 4 КТ · остановка в конце") : TEXT("Выбрано: площадка 120×80 м · 2 КТ · остановка в конце"));
+        Button(TEXT("Начать выбранный заезд"), [this]() { Apply(uedev::Action::Start); });
+        for (const FString Name : {FString(TEXT("Заезд")),FString(TEXT("Маршруты")), FString(TEXT("Автомобиль")), FString(TEXT("Настройки и управление")), FString(TEXT("Журнал и разбор"))}) {
             Button(Name, [this, Name]() { Section = Name; SyncScreen(); });
         }
         Text(Section);
-        if (Section == TEXT("Маршруты"))
-            Text(TEXT("Доступна только процедурная тестовая площадка 120×80 м. Создание маршрутов, редактор и импорт OSM ещё не перенесены. Они будут размещены здесь, вне экрана вождения."));
-        else if (Section == TEXT("Автомобиль"))
-            Text(TEXT("Одна машина-заглушка 4,31×1,80 м. Выбор моделей и салон ещё не перенесены."));
-        else if (Section == TEXT("Настройки и управление"))
-            Text(TEXT("W/S — газ/тормоз; A/D — руль; Shift+W — полный газ в D/M. Ctrl+колесо — уровень обычного газа 10–60%.\nI — двигатель; Space — ручник; B — ремень; P/R/N/F — селектор.\nЛКМ+мышь — руль; ПКМ+мышь — камера; колесо — зум.\nEnter — быстрый старт в заезде; Backspace — холодный сброс; Esc — пауза.\nПереназначение, графические настройки и оборудование пока недоступны."));
-        else if (Section == TEXT("Журнал и разбор"))
-            Text(TEXT("Запись, сохранение и реплей ещё не перенесены. Возврат в меню отбрасывает текущий заезд."));
-        else Text(TEXT("Начало заезда — холодный старт: P, двигатель выключен, ручник затянут. Enter в сцене — быстрый старт."));
+        if (Section == TEXT("Маршруты")) {
+            Button(TEXT("Выбрать площадку 120×80 м"), [this]() { SelectedRoute=0; SavePreferences(); SyncScreen(); });
+            Button(TEXT("Выбрать тестовую прямую 1 км"), [this]() { SelectedRoute=1; SavePreferences(); SyncScreen(); });
+            Text(TEXT("Зелёные КТ проходятся по порядку; в последнем жёлтом круге нужна остановка. Прямая — технический стенд динамики, не новое экзаменационное упражнение. Создание маршрутов и импорт OSM ещё не перенесены."));
+        } else if (Section == TEXT("Автомобиль")) {
+            Text(TEXT("Ceed: геометрия 4,31×1,80 м, продольная модель 6АКПП, визуальная заглушка. Других моделей/салона пока нет."));
+        } else if (Section == TEXT("Настройки и управление")) {
+            Text(TEXT("Уровень обычного газа (10–60 %). Меняет тягу по W; Shift+W в D/M — 100 %."));
+            Items->AddSlot().AutoHeight().Padding(0,10)[SNew(SSlider)
+                .Value(static_cast<float>((GasSetting-0.1)/0.5))
+                .OnValueChanged_Lambda([this](float Value) {
+                    GasSetting=uedev::OrdinaryGasLimit(0.1+Value*0.5);
+                    if (auto* DrivingPawn=Cast<AUEDevPawn>(GetPawn())) DrivingPawn->SetOrdinaryGas(GasSetting);
+                })];
+            Items->AddSlot().AutoHeight()[SNew(STextBlock).Text_Lambda([this]() {
+                return FText::FromString(FString::Printf(TEXT("Обычный газ: %.0f %%"),GasSetting*100));
+            })];
+            Button(TEXT("Сохранить настройки"),[this]() { SavePreferences(); });
+            Button(TEXT("Газ по умолчанию — 60 %"),[this]() {
+                GasSetting=0.6;
+                if (auto* DrivingPawn=Cast<AUEDevPawn>(GetPawn())) DrivingPawn->SetOrdinaryGas(GasSetting);
+                SavePreferences(); SyncScreen();
+            });
+            Text(TEXT("W/S — газ/тормоз; A/D — руль; Ctrl+колесо — уровень газа с сохранением.\nI — двигатель; Space — ручник; B — ремень; P/R/N/F — селектор; Shift+↑/↓ — M.\nЛКМ+мышь — руль; ПКМ+мышь — камера; колесо — зум.\nEnter — сброс и быстрый старт; Backspace — холодный сброс; Esc — пауза.\nПереназначение клавиш и графические настройки ещё не перенесены."));
+        } else if (Section == TEXT("Журнал и разбор")) {
+            Text(TEXT("Последние 10 завершённых заездов этой сессии. После закрытия приложения список очищается. Оценка/реплей/постоянный журнал ещё не перенесены."));
+            if (RecentResults.IsEmpty()) Text(TEXT("Завершённых заездов пока нет."));
+            for (const FString& Entry : RecentResults) Text(Entry);
+        } else {
+            Text(TEXT("Старт — P, двигатель выключен, ручник затянут. Ручной запуск: I → удерживать S → F → отпустить S → Space → B → W. Enter сбрасывает заезд и включает быстрый старт. Остановитесь в последней КТ, затем Esc → Завершить."));
+        }
     } else if (Flow.Current == uedev::Screen::Paused) {
         Text(TEXT("Пауза — движение и игровой ввод остановлены"));
         Button(TEXT("Продолжить (Esc)"), [this]() { Apply(uedev::Action::Resume); });
@@ -106,7 +163,9 @@ void AUEDevPlayerController::SyncScreen() {
     }
     Text(TEXT("Учебная симуляция. Не официальный экзамен. Данные карт веб-версии: © OpenStreetMap contributors."));
     ScreenWidget = SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).Padding(40).BorderBackgroundColor(FLinearColor(0.015f, 0.025f, 0.04f, 1.f))[
-        SNew(SScrollBox) + SScrollBox::Slot()[Items]
+        SNew(SVerticalBox) + SVerticalBox::Slot().HAlign(HAlign_Center).VAlign(VAlign_Fill)[
+            SNew(SBox).MaxDesiredWidth(860)[SNew(SScrollBox) + SScrollBox::Slot()[Items]]
+        ]
     ];
     GetWorld()->GetGameViewport()->AddViewportWidgetContent(ScreenWidget.ToSharedRef(), 100);
     FInputModeGameAndUI Mode;

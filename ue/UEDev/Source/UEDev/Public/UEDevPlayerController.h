@@ -19,12 +19,18 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void OnPossess(APawn* InPawn) override;
     virtual void SetupInputComponent() override;
+    void SavePreferences();
     bool IsDriving() const { return Flow.CanDrive(); }
 private:
     uedev::SessionFlow Flow;
     TSharedPtr<SWidget> ScreenWidget;
     FString Section = TEXT("Заезд");
     FString Result;
+    int32 SelectedRoute = 0;
+    double GasSetting = 0.6;
+    bool PreferencesLoaded = false;
+    TArray<FString> RecentResults;
+    void LoadPreferences();
     void Escape();
     void Apply(uedev::Action Action);
     void SyncScreen();
