@@ -1239,15 +1239,18 @@ export function buildGostTrafficSignal(
   // Выносная Г-образная консоль с дублирующей головкой Т.1 (Ø300 мм) над полосой движения
   if (hasMastArm) {
     const armSpan = Math.min(3.4, Math.max(2.2, sig.stopLineWidth * 0.62));
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.066, armSpan, 8), mats.galvPoleMat);
-    arm.rotation.z = -Math.PI / 2;
-    arm.position.set(armSpan * 0.5, poleH - 0.15, 0);
-    arm.castShadow = true;
+    if (includeSupport) {
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.066, armSpan, 8), mats.galvPoleMat);
+      arm.rotation.z = -Math.PI / 2;
+      arm.position.set(armSpan * 0.5, poleH - 0.15, 0);
+      arm.castShadow = true;
 
-    // Раскос жёсткости консоли
-    const brace = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1.15, 6), mats.galvPoleMat);
-    brace.rotation.z = -Math.PI / 4;
-    brace.position.set(0.42, poleH - 0.56, 0);
+      // Раскос жёсткости консоли
+      const brace = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1.15, 6), mats.galvPoleMat);
+      brace.rotation.z = -Math.PI / 4;
+      brace.position.set(0.42, poleH - 0.56, 0);
+      g.add(arm, brace);
+    }
 
     const overHead = makeSignalHeadT1(
       1.12,
@@ -1260,8 +1263,6 @@ export function buildGostTrafficSignal(
       greenHaloMat
     );
     overHead.position.set(armSpan - 0.25, poleH - 0.22, -0.14);
-    g.add(arm, brace);
-    }
     g.add(overHead);
   }
 
