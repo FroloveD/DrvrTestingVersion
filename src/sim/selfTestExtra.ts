@@ -4,7 +4,7 @@
  * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
-import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, renderTrackWav, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
+import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, radioStationsFor, renderTrackWav, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
 import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
