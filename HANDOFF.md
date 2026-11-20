@@ -31,7 +31,7 @@
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
 | Тесты ядра | 36 автотестов ядра (T01–T37), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–Q, >118 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
@@ -115,12 +115,12 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |
 | `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |
 | `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |
-| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда и raycast 3D-селектора |
+| `src/render/sceneController.ts` | OSM-сцена (логика не менялась), PBR IBL с software fallback, физические зеркала, живые дисплеи салона, инерция взгляда и raycast органов управления |
 | `src/render/cityBuildings.ts` | процедурные фасады зданий РФ/СНГ, деревья и облачное небо |
 | `src/render/roadInfra.ts`, `src/render/roadTextures.ts` | PBR-дороги, тротуары, бордюры, разметка, знаки, светофоры и уличная инфраструктура ГОСТ |
 | `src/render/roadSignTextures.ts` | процедурные отражающие текстуры 12 классов дорожных знаков и дополнительные таблички |
 | `src/render/vehiclesAndPeds.ts` | пять детализированных Kia, салон, 3D-рычаг Shiftronic и hit-зоны органов управления |
-| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
+| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming, Gamepad API и опциональная кнопка клаксона |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |
 | `src/storage/routeCatalogStore.ts` | IndexedDB `cdt-route-catalog` v2: `routes` хранит маршруты, `maps` — общие OSM snapshot по fingerprint; миграция v1 → v2 |
@@ -131,7 +131,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–P |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–Q |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
