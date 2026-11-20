@@ -52,6 +52,8 @@ export type SimState = {
   steerRight: number; // рад, правое колесо (-X) по Аккерману
   swDeg: number; // град, -540..+540
   gear: Gear;
+  /** Выбранная машина; отсутствует в старых реплеях — трактуется как Ceed JD. */
+  carId?: PlayerCarId;
   prevGear: Gear;
   autoSubGear: number; // 1..5 в режиме D
   rpm: number; // 0 или 800..6500
