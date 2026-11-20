@@ -29,6 +29,7 @@ import {
   customFromWorld,
   emptyCustomScenario,
   importEditorFileText,
+  normalizeCustomScenario,
   validateCustomScenario,
 } from "../scenarios/custom";
 import {
@@ -1095,6 +1096,21 @@ export const extraCases: SelfTestCase[] = [
       for (let offset = 44; offset < wav.length; offset += 2) peak = Math.max(peak, Math.abs(view.getInt16(offset, true)));
       assert(peak > 3000, "Офлайн-рендер не должен быть тишиной");
       return `Станций: ${ids.size} · WAV: ${wav.length} байт · пик: ${peak}`;
+    },
+  },,
+
+  {
+    id: "T37",
+    suite: "scenario",
+    name: "Сценарий: автомобиль и FM-список нормализуются и фильтруются",
+    fn: () => {
+      const base = defaultCustomScenario();
+      const configured = normalizeCustomScenario({ ...base, playerCarId: "rio", radioStationIds: ["record"] });
+      assert(configured.playerCarId === "rio", "Выбранный автомобиль должен сохраняться в сценарии");
+      assert(configured.radioStationIds?.length === 1 && configured.radioStationIds[0] === "record", "Список FM-станций должен сохраняться");
+      const sanitized = normalizeCustomScenario({ ...base, playerCarId: "invalid" as never, radioStationIds: ["invalid"] });
+      assert(sanitized.playerCarId === undefined && sanitized.radioStationIds === undefined, "Неизвестные ID не должны попадать в нормализованный сценарий");
+      return "Kia Rio · RECORD FM · неверные ID отфильтрованы";
     },
   },
 ];
