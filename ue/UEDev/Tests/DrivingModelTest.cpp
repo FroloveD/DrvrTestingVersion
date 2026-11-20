@@ -113,6 +113,10 @@ int main() {
     State hydraulic; hydraulic.Engine=true; hydraulic.Selector=Gear::D;
     Step(hydraulic,{true,true,false,0});
     Check(hydraulic.BrakePressure>0 && hydraulic.BrakePressure<0.1 && hydraulic.Throttle==0,"hydraulic buildup and brake override");
+    Check(HeadYaw(0,true,false,0.1)==-8.5 && HeadYaw(0,false,true,0.1)==8.5,"head arrows left right signs");
+    Check(HeadYaw(20,true,true,0.1)==20 && HeadYaw(20,false,false,0.1)==20,"head simultaneous arrows cancel and release holds");
+    Check(HeadYaw(109,false,true,0.1)==110 && HeadYaw(-109,true,false,0.1)==-110,"head limits");
+    Check(HeadYaw(0,false,true,10)==8.5 && HeadYaw(0,false,true,-1)==0,"head frame dt limits");
     State hudState;
     Check(NextHint(hudState,false)==HudHint::StartEngine,"HUD cold start hint");
     hudState.Selector=Gear::D;

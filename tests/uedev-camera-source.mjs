@@ -32,3 +32,22 @@ assert(body('Zoom').indexOf('LeftControl')<body('Zoom').indexOf('else if (CabinV
 assert(body('InteriorView').includes('SetRelativeRotation(FRotator(-5,0,0))'));
 assert(body('Tick').includes('SteeringPivot->SetRelativeRotation(FRotator(0,0,-Model.WheelDeg))'));
 console.log('PASS UEDev camera source guards: bindings, independent ride state, active cameras, occluders, input branches (not UE runtime)');
+
+const hud=readFileSync(base+'UEDevHUD.cpp','utf8');
+assert(body('UpdateCabin').includes('Down(EKeys::Left),Down(EKeys::Right)'));
+assert(!/EKeys::(?:Up|Down)\b/.test(body('UpdateCabin')),'up/down remain gearbox only');
+assert(pawn.includes('Target->InitAutoFormat(320,Index==0 ? 96 : 160)'));
+assert(pawn.includes('Capture->bCaptureEveryFrame = false'));
+assert(pawn.includes('Capture->bCaptureOnMovement = false'));
+assert(body('UpdateCabin').includes('1.f/15.f'));
+assert(pawn.includes('MirrorCaptures[Index]->HideComponent(DashboardDisplay)'));
+assert(body('UpdateCabin').includes('Model.Rpm') && body('UpdateCabin').includes('Model.AutoGear'));
+assert(hud.indexOf('Mirror(0,')<hud.indexOf('if (!PanelsVisible) return;'),'mirrors survive HUD hiding');
+assert(hud.includes('H*Scale,1,0,-1,1'),'mirror image must flip U');
+console.log('PASS UEDev mirror/instrument source guards (not Unreal render/compile)');
+
+for (const key of ['F5','F6','F7']) assert(bindings.includes(`${key}:IE_Pressed`));
+assert(hud.includes('IsMirrorEnabled(Index)'));
+assert(body('UpdateCabin').includes('MirrorEnabled[Index]'));
+assert(body('ToggleHud').includes('TogglePanels()'),'H must not disable entire AHUD render path');
+assert(!body('ToggleHud').includes('ShowHUD()'));

@@ -15,6 +15,9 @@ class UEDEV_API AUEDevHUD : public AHUD {
     GENERATED_BODY()
 public:
     virtual void DrawHUD() override;
+    void TogglePanels() { PanelsVisible = !PanelsVisible; }
+private:
+    bool PanelsVisible = true;
 };
 UCLASS()
 class UEDEV_API AUEDevGameMode : public AGameModeBase {

@@ -25,6 +25,10 @@ inline double CheckpointDistance(const State& s, const TestRoute& route, const R
     // До границы зоны, не длина пути по дороге.
     return std::max(0.0,std::hypot(s.X-point.X,s.Z-point.Z)-point.Radius);
 }
+// Стрелки головы независимы от селектора: влево/вправо, скорость 85°/с.
+inline double HeadYaw(double yaw, bool left, bool right, double dt) {
+    return std::clamp(yaw+((right ? 1.0 : 0.0)-(left ? 1.0 : 0.0))*85*std::clamp(dt,0.0,0.1),-110.0,110.0);
+}
 inline double HudScale(double width, double height) {
     return std::clamp(std::min(width/1280.0,height/720.0),0.01,1.5);
 }

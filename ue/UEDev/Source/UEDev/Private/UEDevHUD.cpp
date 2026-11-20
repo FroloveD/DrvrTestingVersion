@@ -11,6 +11,7 @@
 #include "HudModel.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "GameFramework/PlayerController.h"
 
 void AUEDevHUD::DrawHUD() {
@@ -40,8 +41,20 @@ void AUEDevHUD::DrawHUD() {
     // Дисклеймер остаётся виден и при скрытых приборах.
     Rect(0,Height-26,Width,26,Background);
     Text(TEXT("Учебный прототип · не официальный экзамен · © OpenStreetMap contributors (веб-версия)"),16,Height-21,Muted,0.78f,Width-180);
-    Text(bShowHUD ? TEXT("H · скрыть HUD") : TEXT("H · показать HUD"),Width-150,Height-21,White,0.8f,138);
-    if (!bShowHUD) return;
+    Text(PanelsVisible ? TEXT("H · скрыть HUD") : TEXT("H · показать HUD"),Width-150,Height-21,White,0.8f,138);
+    // Зеркала не зависят от H: это средства обзора, а не приборная телеметрия.
+    auto Mirror = [&](int Index,float X,float Y,float W,float H,const TCHAR* Name) {
+        if (!DrivingPawn->IsMirrorEnabled(Index)) return;
+        Panel(X-3,Y-22,W+6,H+25);
+        Text(Name,X+5,Y-19,Muted,0.75f,W-10);
+        if (auto* Target = DrivingPawn->GetMirror(Index))
+            // Отрицательная ширина UV даёт именно зеркальное отражение по горизонтали.
+            DrawTexture(Target,X*Scale,Y*Scale,W*Scale,H*Scale,1,0,-1,1,FLinearColor::White,BLEND_Opaque);
+    };
+    Mirror(0,Width/2-160,142,320,96,TEXT("ЗАДНЕЕ ЗЕРКАЛО · F5"));
+    Mirror(1,16,142,240,120,TEXT("ЛЕВОЕ ЗЕРКАЛО · F6"));
+    Mirror(2,Width-256,142,240,120,TEXT("ПРАВОЕ ЗЕРКАЛО · F7"));
+    if (!PanelsVisible) return;
 
     const auto& S = DrivingPawn->GetDrivingState();
     const auto& Run = DrivingPawn->GetRouteRun();

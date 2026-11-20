@@ -1,6 +1,11 @@
 #include "UEDevPawn.h"
 #include "UEDevPlayerController.h"
+#include "UEDevGameMode.h"
+#include "HudModel.h"
 #include "Camera/CameraComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Components/TextRenderComponent.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/InputComponent.h"
@@ -78,6 +83,27 @@ AUEDevPawn::AUEDevPawn() {
     Spoke->SetupAttachment(SteeringPivot);
     auto* CrossSpoke = Part(TEXT("InteriorWheelCross"),Cube.Object,FVector::ZeroVector,FVector(0.035,0.33,0.035));
     CrossSpoke->SetupAttachment(SteeringPivot);
+    Part(TEXT("InteriorCluster"),Cube.Object,FVector(48,-38,36),FVector(0.05,0.42,0.26));
+    // Индикатор на торпедо виден с водительского места, независимо от HUD.
+    DashboardDisplay = CreateDefaultSubobject<UTextRenderComponent>(TEXT("DashboardDisplay"));
+    DashboardDisplay->SetupAttachment(Body);
+    DashboardDisplay->SetRelativeLocation(FVector(44,-38,45));
+    DashboardDisplay->SetRelativeRotation(FRotator(0,180,0));
+    DashboardDisplay->SetWorldSize(3.5f);
+    DashboardDisplay->SetHorizontalAlignment(EHTA_Center);
+    DashboardDisplay->SetTextRenderColor(FColor(100,240,210));
+    DashboardDisplay->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    for (int Index=0;Index<3;++Index) {
+        auto* Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(*FString::Printf(TEXT("MirrorCapture%d"),Index));
+        Capture->SetupAttachment(Body);
+        Capture->SetRelativeLocation(Index==0 ? FVector(0,0,62) : FVector(75,Index==1 ? -100 : 100,38));
+        Capture->SetRelativeRotation(FRotator(Index==0 ? -5 : -3,Index==0 ? 180 : Index==1 ? -170 : 170,0));
+        Capture->FOVAngle = Index==0 ? 50.f : 65.f;
+        Capture->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+        Capture->bCaptureEveryFrame = false;
+        Capture->bCaptureOnMovement = false;
+        MirrorCaptures.Add(Capture);
+    }
     auto Beam = [&](const TCHAR* Name, FVector Position, FRotator Rotation, FLinearColor Color, float Intensity, float Radius) {
         auto* Light = CreateDefaultSubobject<USpotLightComponent>(Name);
         Light->SetupAttachment(Body);
@@ -131,8 +157,21 @@ void AUEDevPawn::BeginPlay() {
         Material->SetVectorParameterValue(TEXT("Color"), Color);
         if (Name == TEXT("LampRear")) RearLampMaterial = Material;
     }
+    for (int Index=0;Index<MirrorCaptures.Num();++Index) {
+        auto* Target = NewObject<UTextureRenderTarget2D>(this);
+        Target->RenderTargetFormat = RTF_RGBA8;
+        Target->ClearColor = FLinearColor::Black;
+        Target->InitAutoFormat(320,Index==0 ? 96 : 160);
+        MirrorTargets.Add(Target);
+        MirrorCaptures[Index]->TextureTarget = Target;
+        // В зеркале нет кабины/дисплея, но остаются кузов и колёса как ориентиры.
+        for (const auto& Detail : CabinParts) MirrorCaptures[Index]->HideComponent(Detail.Get());
+        for (const auto& Detail : CabinOccluders) MirrorCaptures[Index]->HideComponent(Detail.Get());
+        MirrorCaptures[Index]->HideComponent(DashboardDisplay);
+    }
     Reset();
     ApplyCameraView();
+    UpdateCabin(1.f);
 }
 bool AUEDevPawn::Down(const FKey& Key) const {
     const auto* PC = Cast<APlayerController>(GetController());
@@ -146,9 +185,31 @@ void AUEDevPawn::UpdateLights() {
     if (RearLampMaterial) RearLampMaterial->SetVectorParameterValue(TEXT("Color"),
         Light.Stop ? FLinearColor(1.f,0.025f,0.01f) : FLinearColor(0.25f,0.008f,0.005f));
 }
+void AUEDevPawn::ToggleRearMirror() { MirrorEnabled[0]=!MirrorEnabled[0]; MirrorElapsed=1; }
+void AUEDevPawn::ToggleLeftMirror() { MirrorEnabled[1]=!MirrorEnabled[1]; MirrorElapsed=1; }
+void AUEDevPawn::ToggleRightMirror() { MirrorEnabled[2]=!MirrorEnabled[2]; MirrorElapsed=1; }
+void AUEDevPawn::UpdateCabin(float DeltaSeconds) {
+    // Удержание стрелок меняет только взгляд; отпускание сохраняет угол, 2 центрирует.
+    if (CabinView) {
+        FRotator R = CabinCamera->GetRelativeRotation();
+        R.Yaw = uedev::HeadYaw(R.Yaw,Down(EKeys::Left),Down(EKeys::Right),DeltaSeconds);
+        CabinCamera->SetRelativeRotation(R);
+    }
+    const FString GearLabel = Model.Selector==uedev::Gear::D ? FString::Printf(TEXT("D%d"),Model.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(Model.Selector)));
+    DashboardDisplay->SetText(FText::FromString(FString::Printf(TEXT("%.0f км/ч   %s\n%.0f об/мин\n%s  %s\n%s"),
+        FMath::Abs(Model.Speed)*3.6,*GearLabel,Model.Rpm,Model.Engine ? TEXT("ДВС ВКЛ") : TEXT("ДВС ВЫКЛ"),
+        Model.Handbrake ? TEXT("РУЧНИК") : TEXT(""),Model.Belt ? TEXT("РЕМЕНЬ ДА") : TEXT("РЕМЕНЬ НЕТ"))));
+    MirrorElapsed += DeltaSeconds;
+    if (MirrorElapsed>=1.f/15.f) {
+        MirrorElapsed=0;
+        for (int Index=0;Index<MirrorCaptures.Num();++Index)
+            if (MirrorEnabled[Index] && MirrorCaptures[Index]->TextureTarget) MirrorCaptures[Index]->CaptureScene();
+    }
+}
 void AUEDevPawn::ApplyCameraView() {
     Camera->SetActive(!CabinView);
     CabinCamera->SetActive(CabinView);
+    DashboardDisplay->SetVisibility(CabinView);
     for (const auto& Detail : CabinParts) if (Detail) Detail->SetVisibility(CabinView);
     for (const auto& Detail : CabinOccluders) if (Detail) Detail->SetVisibility(!CabinView);
 }
@@ -162,7 +223,7 @@ void AUEDevPawn::InteriorView() {
 }
 void AUEDevPawn::ToggleHud() {
     if (auto* PC = Cast<APlayerController>(GetController()))
-        if (auto* Hud = PC->GetHUD()) Hud->ShowHUD();
+        if (auto* Hud = Cast<AUEDevHUD>(PC->GetHUD())) Hud->TogglePanels();
 }
 void AUEDevPawn::ToggleHeadlights() { HeadlightsOn = !HeadlightsOn; UpdateLights(); }
 void AUEDevPawn::ResetRide() { Reset(); }
@@ -228,6 +289,9 @@ void AUEDevPawn::Zoom(float Value) {
 }
 void AUEDevPawn::SetupPlayerInputComponent(UInputComponent* Input) {
     Super::SetupPlayerInputComponent(Input);
+    Input->BindKey(EKeys::F5, IE_Pressed, this, &AUEDevPawn::ToggleRearMirror);
+    Input->BindKey(EKeys::F6, IE_Pressed, this, &AUEDevPawn::ToggleLeftMirror);
+    Input->BindKey(EKeys::F7, IE_Pressed, this, &AUEDevPawn::ToggleRightMirror);
     Input->BindKey(EKeys::C, IE_Pressed, this, &AUEDevPawn::ToggleCamera);
     Input->BindKey(EKeys::One, IE_Pressed, this, &AUEDevPawn::ExteriorView);
     Input->BindKey(EKeys::Two, IE_Pressed, this, &AUEDevPawn::InteriorView);
@@ -275,4 +339,5 @@ void AUEDevPawn::Tick(float DeltaSeconds) {
     }
     SteeringPivot->SetRelativeRotation(FRotator(0,0,-Model.WheelDeg));
     UpdateLights();
+    UpdateCabin(DeltaSeconds);
 }

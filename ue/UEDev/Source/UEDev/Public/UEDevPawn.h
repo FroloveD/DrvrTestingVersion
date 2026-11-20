@@ -12,6 +12,9 @@
 #include "DrivingModel.h"
 #include "RouteRun.h"
 #include "UEDevPawn.generated.h"
+class USceneCaptureComponent2D;
+class UTextureRenderTarget2D;
+class UTextRenderComponent;
 class UBoxComponent;
 class USceneComponent;
 class USpringArmComponent;
@@ -34,6 +37,9 @@ public:
     void SetOrdinaryGas(double Value) { OrdinaryGas = uedev::OrdinaryGasLimit(Value); }
     double GetOrdinaryGas() const { return OrdinaryGas; }
     bool AreHeadlightsOn() const { return HeadlightsOn; }
+    UTextureRenderTarget2D* GetMirror(int Index) const { return MirrorTargets.IsValidIndex(Index) ? MirrorTargets[Index].Get() : nullptr; }
+    bool IsMirrorEnabled(int Index) const { return Index>=0 && Index<3 && MirrorEnabled[Index]; }
+    bool IsCabinView() const { return CabinView; }
     const uedev::State& GetDrivingState() const { return Model; }
 private:
     UPROPERTY() TObjectPtr<UBoxComponent> Body;
@@ -43,6 +49,15 @@ private:
     UPROPERTY() TObjectPtr<USceneComponent> SteeringPivot;
     UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> CabinParts;
     UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> CabinOccluders;
+    UPROPERTY() TArray<TObjectPtr<USceneCaptureComponent2D>> MirrorCaptures;
+    UPROPERTY() TArray<TObjectPtr<UTextureRenderTarget2D>> MirrorTargets;
+    UPROPERTY() TObjectPtr<UTextRenderComponent> DashboardDisplay;
+    float MirrorElapsed = 0;
+    bool MirrorEnabled[3] = {true,true,true};
+    void ToggleRearMirror();
+    void ToggleLeftMirror();
+    void ToggleRightMirror();
+    void UpdateCabin(float DeltaSeconds);
     bool CabinView = false;
     void ToggleCamera();
     void ExteriorView();
