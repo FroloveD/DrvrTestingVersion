@@ -119,7 +119,7 @@ export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATI
       <div className="mono text-[10px] text-[#7c909d] mb-2">МУЛЬТИМЕДИА · 7″ ШГУ</div>
       <div className="flex flex-wrap gap-1 mb-3">
         {HEAD_UNIT_MODES.map((mode) => (
-          <button key={mode.id} type="button" className={`btn btn-mini ${value.mode === mode.id ? "border-[#52d6bd]/60 text-[#52d6bd]" : ""}`} onClick={() => chooseMode(mode.id)} aria-pressed={value.mode === mode.id}>
+          <button key={mode.id} type="button" data-headunit-mode={mode.id} className={`btn btn-mini ${value.mode === mode.id ? "border-[#52d6bd]/60 text-[#52d6bd]" : ""}`} onClick={() => chooseMode(mode.id)} aria-pressed={value.mode === mode.id}>
             {mode.short}
           </button>
         ))}
@@ -130,9 +130,9 @@ export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATI
           <div className="text-[10px] text-[#8fa2ae]">{station.genre} · {value.streamStatus === "live" ? "эфир" : value.streamStatus === "connecting" ? "подключение…" : value.streamStatus === "error" ? "ошибка" : "ожидание"}</div>
         </div>
         <div className="flex shrink-0 gap-1">
-          <button type="button" className="btn btn-mini" aria-label="Предыдущая станция" onClick={() => onChange({ ...value, stationIndex: stepStation(-1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>◀</button>
-          <button type="button" className="btn btn-mini" aria-label={value.radioPlaying ? "Пауза радио" : "Воспроизвести радио"} onClick={() => onChange({ ...value, mode: "radio", source: "stream", savedTrackKey: null, radioPlaying: !value.radioPlaying, streamStatus: "idle" })}>{value.radioPlaying ? "Ⅱ" : "▶"}</button>
-          <button type="button" className="btn btn-mini" aria-label="Следующая станция" onClick={() => onChange({ ...value, stationIndex: stepStation(1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>▶|</button>
+          <button type="button" data-testid="headunit-prev" className="btn btn-mini" aria-label="Предыдущая станция" onClick={() => onChange({ ...value, stationIndex: stepStation(-1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>◀</button>
+          <button type="button" data-testid="headunit-radio-play" className="btn btn-mini" aria-label={value.radioPlaying ? "Пауза радио" : "Воспроизвести радио"} onClick={() => onChange({ ...value, mode: "radio", source: "stream", savedTrackKey: null, radioPlaying: !value.radioPlaying, streamStatus: "idle" })}>{value.radioPlaying ? "Ⅱ" : "▶"}</button>
+          <button type="button" data-testid="headunit-next" className="btn btn-mini" aria-label="Следующая станция" onClick={() => onChange({ ...value, stationIndex: stepStation(1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>▶|</button>
         </div>
       </div>
       <label className="block text-[10px] text-[#9bafbc] mb-2">
@@ -140,7 +140,7 @@ export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATI
         <input className="w-full mt-1" type="range" min="0" max="1" step="0.01" value={value.volume} onChange={(e) => onChange({ ...value, volume: clampVolume(Number(e.target.value)) })} />
       </label>
       <div className="flex gap-2 mb-2">
-        <button type="button" className="btn btn-mini flex-1" onClick={() => void saveOffline()}>Сохранить офлайн (24 с)</button>
+        <button type="button" data-testid="headunit-save-offline" className="btn btn-mini flex-1" onClick={() => void saveOffline()}>Сохранить офлайн (24 с)</button>
         <span className="text-[10px] text-[#8fa2ae] self-center">Треков: {tracks.length}</span>
       </div>
       {tracks.length > 0 && (
@@ -158,10 +158,7 @@ export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATI
       <div className="border-t border-white/10 pt-2 mt-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="mono text-[10px] text-[#7c909d]">ЗВУК АВТОМОБИЛЯ</span>
-          <label className="flex items-center gap-2 text-[10px] text-[#d3e0e7]">
-            <input type="checkbox" checked={soundEnabled} onChange={(e) => onSoundEnabledChange(e.target.checked)} className="accent-[#52d6bd]" />
-            Звук включён
-          </label>
+          <button type="button" data-testid="sound-toggle" aria-pressed={soundEnabled} onClick={() => onSoundEnabledChange(!soundEnabled)} className="btn btn-mini">{soundEnabled ? "Звук включён" : "Звук выключен"}</button>
         </div>
         <div className="grid grid-cols-3 gap-1">
           {([
