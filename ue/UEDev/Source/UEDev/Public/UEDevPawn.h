@@ -23,6 +23,7 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
     void ResetRide();
+    double GetOrdinaryGas() const { return OrdinaryGas; }
     const uedev::State& GetDrivingState() const { return Model; }
 private:
     UPROPERTY() TObjectPtr<UBoxComponent> Body;
@@ -30,6 +31,7 @@ private:
     UPROPERTY() TObjectPtr<UCameraComponent> Camera;
     uedev::State Model;
     double Accumulator = 0;
+    double OrdinaryGas = 0.6;
     void Reset();
     void StartEngine();
     void Ready();

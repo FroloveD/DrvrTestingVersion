@@ -267,7 +267,7 @@ requestAnimationFrame(now)
 
 ## UEDev — изолированный нативный эксперимент
 
-Проект `ue/UEDev/UEDev.uproject` (UE 5.6) не подключён к Vite и не меняет браузерное ядро.
+Проект `ue/UEDev/UEDev.uproject` (UE 5.7) не подключён к Vite и не меняет браузерное ядро.
 - `ue/UEDev/Source/UEDev/Public/DrivingModel.h` — переносимый C++-стенд плоской кинематики, не полный порт TS; тест `ue/UEDev/Tests/DrivingModelTest.cpp`.
 - `ue/UEDev/Source/UEDev/Public/UEDevPawn.h` и `Private/UEDevPawn.cpp` — ввод клавиатуры/мыши, аккумулятор 1/60, sweep корпуса, камера.
 - `ue/UEDev/Source/UEDev/Public/UEDevGameMode.h` и `Private/UEDevGameMode.cpp` — процедурная площадка и диагностический HUD.
@@ -278,3 +278,7 @@ requestAnimationFrame(now)
 ### UEDev: стартовое меню без переноса веб-оболочки
 
 `ue/UEDev/Source/UEDev/Public/SessionFlow.h` — переносимый автомат Menu/Driving/Paused/Summary (тот же C++-тест). `ue/UEDev/Source/UEDev/Public/UEDevPlayerController.h` и `Private/UEDevPlayerController.cpp` — Slate-меню, переходы, фокус и курсор. Только Driving включает Tick/Input машины; GameMode назначает контроллер, HUD скрыт вне Driving. Площадка остаётся в одном мире. Разделы маршрутов/настроек/журнала выделены на стартовом экране, но их содержимое ещё не портировано. `tools/package-uedev.py` собирает архив исходников с документацией, исключая кэши/бинарные файлы сборки.
+
+### UEDev: продольная динамика и регулируемый цифровой газ
+
+`ue/UEDev/Source/UEDev/Public/Powertrain.h` — перенос тяги по 6 ступеням, момента/RPM, сопротивлений, гидротрансформаторного самохода и рабочего тормоза из `src/sim/vehicle.ts`. DrivingModel теперь сглаживает заслонку/давление, переключает D с гистерезисом и размыканием тяги, рассчитывает RPM, ограничивает M. `tests/uedev-powertrain-parity.mjs` сравнивает 2656 значений функций TS/C++ с допуском 1e-9; DrivingModelTest дополнительно проверяет интегрированный разгон, переключения, M/N, газ и гидравлику. Ни боковая динамика, ни сцена/коллизии не объявляются полностью эквивалентными вебу. Ctrl+колесо в Pawn регулирует обычный газ 10–60 %, иначе колесо меняет зум; Shift+W в D/M — 100 %. HUD выводит ступень, RPM, заслонку и давление тормоза. Веб-управление не изменено.

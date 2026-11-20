@@ -50,11 +50,15 @@ void AUEDevHUD::DrawHUD() {
     const auto* Pawn = PC ? Cast<AUEDevPawn>(PC->GetPawn()) : nullptr;
     if (!Pawn) return;
     const auto& S = Pawn->GetDrivingState();
+    const FString GearText = S.Selector == uedev::Gear::D
+        ? FString::Printf(TEXT("D%d"), S.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(S.Selector)));
     DrawText(TEXT("UEDev — прототип, физика не откалибрована"), FLinearColor::Yellow, 24, 24);
-    DrawText(FString::Printf(TEXT("%.1f км/ч | %s | ДВС %s | Ручник %s | Ремень %s | Газ %.0f%%"),
-        FMath::Abs(S.Speed) * 3.6, UTF8_TO_TCHAR(uedev::Label(S.Selector)),
+    DrawText(FString::Printf(TEXT("%.1f км/ч | %s | %.0f об/мин | ДВС %s | Ручник %s | Ремень %s | Газ %.0f%% | Тормоз %.0f%%"),
+        FMath::Abs(S.Speed) * 3.6, *GearText, S.Rpm,
         S.Engine ? TEXT("ВКЛ") : TEXT("ВЫКЛ"), S.Handbrake ? TEXT("ВКЛ") : TEXT("ВЫКЛ"),
-        S.Belt ? TEXT("ДА") : TEXT("НЕТ"), S.Pedal * 100), FLinearColor::White, 24, 50);
-    DrawText(TEXT("Esc — пауза | Enter — быстрый старт | Backspace — холодный сброс"), FLinearColor::White, 24, 76);
-    DrawText(TEXT("Учебная симуляция. Не официальный экзамен. © OpenStreetMap contributors (веб-версия)."), FLinearColor::White, 24, 104);
+        S.Belt ? TEXT("ДА") : TEXT("НЕТ"), S.Throttle * 100, S.BrakePressure * 100), FLinearColor::White, 24, 50);
+    DrawText(FString::Printf(TEXT("Обычный газ: %.0f%% · Ctrl+колесо: 10–60%% · Shift+W в D/M: полный газ"),
+        Pawn->GetOrdinaryGas() * 100), FLinearColor::White, 24, 76);
+    DrawText(TEXT("Esc — пауза | Enter — быстрый старт | Backspace — холодный сброс"), FLinearColor::White, 24, 102);
+    DrawText(TEXT("Учебная симуляция. Не официальный экзамен. © OpenStreetMap contributors (веб-версия)."), FLinearColor::White, 24, 128);
 }

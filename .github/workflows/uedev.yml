@@ -1,9 +1,9 @@
 name: UEDev portable core (not Unreal build)
 on:
   push:
-    paths: ['ue/**', '.github/workflows/uedev.yml']
+    paths: ['ue/**', 'tests/uedev-powertrain-parity.mjs', 'src/sim/vehicle.ts', 'src/sim/playerCar.ts', '.github/workflows/uedev.yml']
   pull_request:
-    paths: ['ue/**', '.github/workflows/uedev.yml']
+    paths: ['ue/**', 'tests/uedev-powertrain-parity.mjs', 'src/sim/vehicle.ts', 'src/sim/playerCar.ts', '.github/workflows/uedev.yml']
 permissions:
   contents: read
 jobs:
@@ -17,3 +17,10 @@ jobs:
             -I ue/UEDev/Source/UEDev/Public \
             ue/UEDev/Tests/DrivingModelTest.cpp -o /tmp/uedev-model-test
           /tmp/uedev-model-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compare C++ longitudinal functions with browser TS
+        run: node tests/uedev-powertrain-parity.mjs

@@ -53,6 +53,42 @@ int main() {
     Check(parked.Speed == 0 && parked.X == 0 && parked.Z == 0, "P mechanically holds");
     Check(ToggleEngine(cold) && !cold.Engine, "stop engine");
     cold.Engine = false; Check(!ToggleEngine(cold), "no engine start in D");
+    auto run100 = [](bool boosted) {
+        State s; s.Engine=true; s.Handbrake=false; s.Selector=Gear::D;
+        int shifts=0, previous=1;
+        for (int i=0; i<60*45; ++i) {
+            Step(s,{true,false,boosted,0});
+            if (s.AutoGear!=previous) { ++shifts; previous=s.AutoGear; }
+            if (s.Speed*3.6>=100) {
+                Check(shifts>=2,"D actually shifts under acceleration");
+                return (i+1)*Dt;
+            }
+        }
+        return 45.0;
+    };
+    const double normal100=run100(false), boost100=run100(true);
+    Check(boost100>10 && boost100<12 && normal100>boost100*1.5 && normal100<40,"nonlinear calibrated-range acceleration");
+    std::cout << "0-100 ordinary=" << normal100 << "s Shift=" << boost100 << "s\n";
+    State shift; shift.Engine=true; shift.Handbrake=false; shift.Selector=Gear::D;
+    shift.Speed=46/3.6; shift.Pedal=1; shift.Throttle=1; shift.Rpm=6100;
+    Step(shift,{true,false,true,0});
+    Check(shift.AutoGear==2 && shift.ShiftTimer>0 && shift.Rpm<6100,"shift unloads drive and lowers RPM");
+    Check(EngineAccel(0.6,2,15,true,false,0)>EngineAccel(0.6,3,15,true,false,0),"different tractive effort by gear");
+    Check(EngineAccel(1,1,48/3.6,true,false,0)==0,"M1 rev limiter");
+    Check(RoadDrag(15,0,2,true)>RoadDrag(15,0,0,true),"engine braking versus N");
+    State limit; limit.Engine=true; limit.Handbrake=false; limit.Selector=Gear::D;
+    for (int i=0;i<120;++i) Step(limit,{true,false,false,0,false,0.2});
+    Check(std::abs(limit.Pedal-0.2)<1e-12,"adjustable keyboard pedal limit");
+    State overspeed; overspeed.Engine=true; overspeed.Selector=Gear::D; overspeed.Speed=25;
+    Check(!Select(overspeed,Gear::M1,false),"manual downshift overrev protection");
+    State freeRpm; freeRpm.Engine=true; freeRpm.Selector=Gear::N;
+    for(int i=0;i<120;++i) Step(freeRpm,{true,false,false,0});
+    Check(freeRpm.Rpm>3000 && freeRpm.Speed==0,"N free rev no wheel torque");
+    for(int i=0;i<60;++i) Step(freeRpm,{});
+    Check(freeRpm.Rpm<1100 && freeRpm.Throttle==0,"RPM and throttle release");
+    State hydraulic; hydraulic.Engine=true; hydraulic.Selector=Gear::D;
+    Step(hydraulic,{true,true,false,0});
+    Check(hydraulic.BrakePressure>0 && hydraulic.BrakePressure<0.1 && hydraulic.Throttle==0,"hydraulic buildup and brake override");
     std::cout << "PASS UEDev session flow + model: cold start, selector, gas, neutral, braking, coordinates\n";
     return 0;
 }

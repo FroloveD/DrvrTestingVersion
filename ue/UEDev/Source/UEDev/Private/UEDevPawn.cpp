@@ -51,7 +51,7 @@ void AUEDevPawn::Neutral() { Choose(uedev::Gear::N); }
 void AUEDevPawn::Drive() { Choose(uedev::Gear::D); }
 void AUEDevPawn::GearUp() {
     if (Down(EKeys::LeftShift) || Down(EKeys::RightShift)) {
-        if (Model.Selector == uedev::Gear::D) Choose(uedev::Gear::M1);
+        if (Model.Selector == uedev::Gear::D) Choose(static_cast<uedev::Gear>(static_cast<int>(uedev::Gear::M1) + Model.AutoGear - 1));
         else if (uedev::Manual(Model.Selector) && Model.Selector != uedev::Gear::M6)
             Choose(static_cast<uedev::Gear>(static_cast<int>(Model.Selector) + 1));
     } else if (Model.Selector < uedev::Gear::D) Choose(static_cast<uedev::Gear>(static_cast<int>(Model.Selector) + 1));
@@ -73,7 +73,11 @@ void AUEDevPawn::MouseY(float Value) {
     R.Pitch = FMath::Clamp(R.Pitch + Value * 0.25f, -75.f, 10.f);
     Arm->SetRelativeRotation(R);
 }
-void AUEDevPawn::Zoom(float Value) { Arm->TargetArmLength = FMath::Clamp(Arm->TargetArmLength - Value * 50.f, 250.f, 1400.f); }
+void AUEDevPawn::Zoom(float Value) {
+    if (Down(EKeys::LeftControl) || Down(EKeys::RightControl)) {
+        OrdinaryGas = FMath::Clamp(OrdinaryGas + Value * 0.05, 0.1, 0.6);
+    } else Arm->TargetArmLength = FMath::Clamp(Arm->TargetArmLength - Value * 50.f, 250.f, 1400.f);
+}
 void AUEDevPawn::SetupPlayerInputComponent(UInputComponent* Input) {
     Super::SetupPlayerInputComponent(Input);
     Input->BindKey(EKeys::I, IE_Pressed, this, &AUEDevPawn::StartEngine);
@@ -102,6 +106,7 @@ void AUEDevPawn::Tick(float DeltaSeconds) {
     Accumulator += FMath::Clamp(static_cast<double>(DeltaSeconds), 0.0, 0.25);
     while (Accumulator >= uedev::Dt) {
         auto StepInput = Input;
+        StepInput.GasLimit = OrdinaryGas;
         if (Down(EKeys::LeftMouseButton)) { StepInput.Steer = 0; StepInput.HoldSteer = true; }
         uedev::Step(Model, StepInput);
         FHitResult Hit;
