@@ -1827,7 +1827,7 @@ export function SimulatorView({
               </button>
             </div>
             <KeyBindingsEditor value={bindings} onChange={setBindings} />
-            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} stations={radioStations} soundEnabled={soundEnabled} soundLayers={soundLayers} onSoundEnabledChange={(enabled) => { setSoundEnabled(enabled); if (enabled) ensureEngineSound(); }} onSoundLayerToggle={toggleSoundLayer} />
+            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} stations={radioStations} soundEnabled={soundEnabled} soundLayers={soundLayers} onSoundEnabledChange={(enabled) => { soundEnabledRef.current = enabled; setSoundEnabled(enabled); if (enabled) ensureEngineSound(); }} onSoundLayerToggle={toggleSoundLayer} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
