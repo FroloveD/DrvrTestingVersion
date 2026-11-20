@@ -10,6 +10,7 @@
 #include "UEDevPlayerController.h"
 #include "HudModel.h"
 #include "Engine/Canvas.h"
+#include "Engine/World.h"
 #include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "GameFramework/PlayerController.h"
@@ -51,10 +52,40 @@ void AUEDevHUD::DrawHUD() {
             // Отрицательная ширина UV даёт именно зеркальное отражение по горизонтали.
             DrawTexture(Target,X*Scale,Y*Scale,W*Scale,H*Scale,1,0,-1,1,FLinearColor::White,BLEND_Opaque);
     };
+    if (DrivingPawn->IsCabinView()) {
+        FVector Eye; FRotator ViewRotation;
+        PC->GetPlayerViewPoint(Eye,ViewRotation);
+        for (int Index=0;Index<3;++Index) {
+            auto* Target=DrivingPawn->GetMirror(Index);
+            if (!DrivingPawn->IsMirrorEnabled(Index) || !Target || !Target->GetResource()) continue;
+            FVector2D Corners[4]; bool Projected=true;
+            for (int Corner=0;Corner<4;++Corner)
+                Projected=PC->ProjectWorldLocationToScreen(DrivingPawn->MirrorCorner(Index,Corner),Corners[Corner],true) && Projected;
+            if (!Projected) continue;
+            // Уличная геометрия может закрыть зеркало; не рисуем его через стену.
+            FHitResult Hit;
+            FCollisionQueryParams Query(SCENE_QUERY_STAT(CabinMirrorVisibility),true,DrivingPawn);
+            const FVector Center=(DrivingPawn->MirrorCorner(Index,0)+DrivingPawn->MirrorCorner(Index,3))*0.5;
+            if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Center,ECC_Visibility,Query)) continue;
+            TArray<FCanvasUVTri> Triangles;
+            Triangles.SetNum(2);
+            const int Vertices[2][3]={{0,1,2},{2,1,3}};
+            const FVector2D UV[4]={{1,0},{0,0},{1,1},{0,1}};
+            for (int Triangle=0;Triangle<2;++Triangle) {
+                auto& Tri=Triangles[Triangle];
+                const int A=Vertices[Triangle][0], B=Vertices[Triangle][1], C=Vertices[Triangle][2];
+                Tri.V0_Pos=Corners[A]; Tri.V1_Pos=Corners[B]; Tri.V2_Pos=Corners[C];
+                Tri.V0_UV=UV[A]; Tri.V1_UV=UV[B]; Tri.V2_UV=UV[C];
+                Tri.V0_Color=Tri.V1_Color=Tri.V2_Color=FLinearColor::White;
+            }
+            // Тот же проверенный вывод RT, что у внешних зеркал, но в проекции 3D-рамки.
+            Canvas->K2_DrawTriangle(Target,Triangles);
+        }
+    }
     if (!DrivingPawn->IsCabinView()) {
-    Mirror(0,Width/2-160,142,320,96,TEXT("ЗАДНЕЕ ЗЕРКАЛО · F5"));
-    Mirror(1,16,142,240,120,TEXT("ЛЕВОЕ ЗЕРКАЛО · F6"));
-    Mirror(2,Width-256,142,240,120,TEXT("ПРАВОЕ ЗЕРКАЛО · F7"));
+        Mirror(0,Width/2-160,142,320,96,TEXT("ЗАДНЕЕ ЗЕРКАЛО · F5"));
+        Mirror(1,16,142,240,120,TEXT("ЛЕВОЕ ЗЕРКАЛО · F6"));
+        Mirror(2,Width-256,142,240,120,TEXT("ПРАВОЕ ЗЕРКАЛО · F7"));
     }
     if (!PanelsVisible) return;
 
@@ -75,6 +106,14 @@ void AUEDevHUD::DrawHUD() {
     Text(FString::Printf(TEXT("%02d:%02d   /   %.0f м"),static_cast<int>(Run.Seconds)/60,static_cast<int>(Run.Seconds)%60,Run.Distance),Width-238,53,White,1.15f,210);
     Text(FString::Printf(TEXT("Максимум %.1f км/ч"),Run.MaxKmh),Width-238,83,Muted,0.9f,210);
 
+    if (DrivingPawn->IsCabinView()) {
+        Panel(Width-208,Height-146,192,108);
+        Text(FString::Printf(TEXT("%.0f км/ч"),FMath::Abs(S.Speed)*3.6),Width-194,Height-133,White,1.8f,164);
+        const FString GearLabel=S.Selector==uedev::Gear::D ? FString::Printf(TEXT("D%d"),S.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(S.Selector)));
+        Text(FString::Printf(TEXT("%s · %.0f об/мин"),*GearLabel,S.Rpm),Width-194,Height-91,Green,0.95f,164);
+        Text(TEXT("H · приборы   Esc · пауза"),Width-194,Height-62,Muted,0.75f,164);
+        return;
+    }
     const float Bottom = Height-242;
     Panel(16,Bottom,330,168);
     Text(TEXT("СКОРОСТЬ"),32,Bottom+12,Muted,0.86f);

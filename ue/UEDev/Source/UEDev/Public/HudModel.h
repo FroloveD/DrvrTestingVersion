@@ -59,6 +59,10 @@ struct HeadLook {
         return next;
     }
 };
+inline double InstrumentRoll(double value, double maximum) {
+    const double fraction=std::isfinite(value) && maximum>0 ? std::clamp(value/maximum,0.0,1.0) : 0;
+    return 120-240*fraction;
+}
 inline double HudScale(double width, double height) {
     return std::clamp(std::min(width/1280.0,height/720.0),0.01,1.5);
 }

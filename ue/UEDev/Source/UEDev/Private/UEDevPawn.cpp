@@ -8,8 +8,6 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
-#include "Components/WidgetComponent.h"
-#include "Widgets/Images/SImage.h"
 #include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -85,33 +83,43 @@ AUEDevPawn::AUEDevPawn() {
     Spoke->SetupAttachment(SteeringPivot);
     auto* CrossSpoke = Part(TEXT("InteriorWheelCross"),Cube.Object,FVector::ZeroVector,FVector(0.035,0.33,0.035));
     CrossSpoke->SetupAttachment(SteeringPivot);
-    Part(TEXT("InteriorCluster"),Cube.Object,FVector(48,-38,36),FVector(0.05,0.42,0.26));
-    // Индикатор на торпедо виден с водительского места, независимо от HUD.
-    DashboardDisplay = CreateDefaultSubobject<UTextRenderComponent>(TEXT("DashboardDisplay"));
-    DashboardDisplay->SetupAttachment(Body);
-    DashboardDisplay->SetRelativeLocation(FVector(44,-38,45));
-    DashboardDisplay->SetRelativeRotation(FRotator(0,180,0));
-    DashboardDisplay->SetWorldSize(3.5f);
-    DashboardDisplay->SetHorizontalAlignment(EHTA_Center);
-    DashboardDisplay->SetTextRenderColor(FColor(100,240,210));
-    DashboardDisplay->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Part(TEXT("InteriorCluster"),Cube.Object,FVector(48,-38,25),FVector(0.05,0.4,0.18));
+    // Две физические шкалы ниже дороги; стрелки и надписи перекрываются рулём естественно.
+    for (int Index=0;Index<2;++Index) {
+        const FVector Center(44.8,Index==0 ? -48 : -28,25);
+        Part(*FString::Printf(TEXT("InteriorDial%d"),Index),Cylinder.Object,Center,FVector(0.15,0.15,0.008),FRotator(90,0,0));
+        auto* Pivot = CreateDefaultSubobject<USceneComponent>(*FString::Printf(TEXT("DialPivot%d"),Index));
+        Pivot->SetupAttachment(Body);
+        Pivot->SetRelativeLocation(Center-FVector(1,0,0));
+        InstrumentNeedles.Add(Pivot);
+        auto* Needle = Part(*FString::Printf(TEXT("InteriorNeedle%d"),Index),Cube.Object,FVector(0,0,2.5),FVector(0.007,0.008,0.05));
+        Needle->SetupAttachment(Pivot);
+        for (int Tick=0;Tick<=8;++Tick) {
+            const double Angle=(210-Tick*30)*uedev::Pi/180;
+            Part(*FString::Printf(TEXT("InteriorDialTick%d_%d"),Index,Tick),Cube.Object,
+                Center+FVector(-0.7,6*std::cos(Angle),6*std::sin(Angle)),FVector(0.007,0.006,0.012),FRotator(0,0,static_cast<float>(Angle*180/uedev::Pi-90)));
+        }
+        auto* Label = CreateDefaultSubobject<UTextRenderComponent>(*FString::Printf(TEXT("InstrumentLabel%d"),Index));
+        Label->SetupAttachment(Body);
+        Label->SetRelativeLocation(Center+FVector(-1.2,0,-2));
+        Label->SetRelativeRotation(FRotator(0,180,0));
+        Label->SetWorldSize(1.6f);
+        Label->SetHorizontalAlignment(EHTA_Center);
+        Label->SetVerticalAlignment(EVRTA_TextTop);
+        Label->SetTextRenderColor(FColor(220,235,225));
+        Label->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        InstrumentLabels.Add(Label);
+    }
     for (int Index=0;Index<3;++Index) {
         const FVector Position = Index==0 ? FVector(65,0,62) : FVector(65,Index==1 ? -97 : 97,35);
         const FRotator Facing = (FVector(-30,-38,58)-Position).Rotation();
         Part(*FString::Printf(TEXT("InteriorMirrorFrame%d"),Index),Cube.Object,Position,
             Index==0 ? FVector(0.05,0.27,0.095) : FVector(0.05,0.22,0.12),Facing);
-        auto* SurfaceWidget = CreateDefaultSubobject<UWidgetComponent>(*FString::Printf(TEXT("PhysicalMirror%d"),Index));
-        SurfaceWidget->SetupAttachment(Body);
-        SurfaceWidget->SetRelativeLocation(Position+Facing.Vector()*3);
-        SurfaceWidget->SetRelativeRotation(Facing);
-        SurfaceWidget->SetRelativeScale3D(FVector(Index==0 ? 0.075 : 0.06));
-        SurfaceWidget->SetWidgetSpace(EWidgetSpace::World);
-        SurfaceWidget->SetDrawSize(FVector2D(320,Index==0 ? 96 : 160));
-        SurfaceWidget->SetPivot(FVector2D(0.5,0.5));
-        SurfaceWidget->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-        SurfaceWidget->SetCastShadow(false);
-        SurfaceWidget->SetTwoSided(true);
-        MirrorSurfaces.Add(SurfaceWidget);
+        auto* Frame = CreateDefaultSubobject<USceneComponent>(*FString::Printf(TEXT("MirrorFrame%d"),Index));
+        Frame->SetupAttachment(Body);
+        Frame->SetRelativeLocation(Position+Facing.Vector()*3);
+        Frame->SetRelativeRotation(Facing);
+        MirrorFrames.Add(Frame);
         auto* Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(*FString::Printf(TEXT("MirrorCapture%d"),Index));
         Capture->SetupAttachment(Body);
         Capture->SetRelativeLocation(Index==0 ? FVector(0,0,62) : FVector(75,Index==1 ? -100 : 100,38));
@@ -167,7 +175,9 @@ void AUEDevPawn::BeginPlay() {
         if (!Material) continue;
         const FString Name = Detail->GetName();
         FLinearColor Color(0.04f,0.22f,0.48f);
-        if (Name.StartsWith(TEXT("Interior"))) Color = FLinearColor(0.035f,0.045f,0.055f);
+        if (Name.StartsWith(TEXT("InteriorNeedle"))) Color = FLinearColor(0.95f,0.12f,0.05f);
+        else if (Name.StartsWith(TEXT("InteriorDialTick"))) Color = FLinearColor(0.85f,0.9f,0.88f);
+        else if (Name.StartsWith(TEXT("Interior"))) Color = FLinearColor(0.035f,0.045f,0.055f);
         else if (Name.StartsWith(TEXT("Glass"))) Color = FLinearColor(0.025f,0.055f,0.08f);
         else if (Name.StartsWith(TEXT("Tire")) || Name.StartsWith(TEXT("Trim"))) Color = FLinearColor(0.025f,0.025f,0.03f);
         else if (Name == TEXT("LampFront")) Color = FLinearColor(0.95f,0.9f,0.65f);
@@ -175,24 +185,17 @@ void AUEDevPawn::BeginPlay() {
         Material->SetVectorParameterValue(TEXT("Color"), Color);
         if (Name == TEXT("LampRear")) RearLampMaterial = Material;
     }
-    MirrorBrushes.SetNum(3);
     for (int Index=0;Index<MirrorCaptures.Num();++Index) {
         auto* Target = NewObject<UTextureRenderTarget2D>(this);
         Target->RenderTargetFormat = RTF_RGBA8;
         Target->ClearColor = FLinearColor::Black;
         Target->InitAutoFormat(320,Index==0 ? 96 : 160);
         MirrorTargets.Add(Target);
-        MirrorBrushes[Index].SetResourceObject(Target);
-        MirrorBrushes[Index].ImageSize=FVector2D(320,Index==0 ? 96 : 160);
-        MirrorBrushes[Index].SetUVRegion(FBox2f(FVector2f(1,0),FVector2f(0,1)));
-        MirrorSurfaces[Index]->SetSlateWidget(SNew(SImage).Image(&MirrorBrushes[Index]));
-        // Ни одна зеркальная поверхность не попадает в другой capture (нет рекурсии).
-        for (const auto& SurfaceWidget : MirrorSurfaces) MirrorCaptures[Index]->HideComponent(SurfaceWidget.Get());
         MirrorCaptures[Index]->TextureTarget = Target;
         // В зеркале нет кабины/дисплея, но остаются кузов и колёса как ориентиры.
         for (const auto& Detail : CabinParts) MirrorCaptures[Index]->HideComponent(Detail.Get());
         for (const auto& Detail : CabinOccluders) MirrorCaptures[Index]->HideComponent(Detail.Get());
-        MirrorCaptures[Index]->HideComponent(DashboardDisplay);
+        for (const auto& Label : InstrumentLabels) MirrorCaptures[Index]->HideComponent(Label.Get());
     }
     Reset();
     ApplyCameraView();
@@ -210,6 +213,14 @@ void AUEDevPawn::UpdateLights() {
     if (RearLampMaterial) RearLampMaterial->SetVectorParameterValue(TEXT("Color"),
         Light.Stop ? FLinearColor(1.f,0.025f,0.01f) : FLinearColor(0.25f,0.008f,0.005f));
 }
+FVector AUEDevPawn::MirrorCorner(int Index, int Corner) const {
+    if (!MirrorFrames.IsValidIndex(Index)) return GetActorLocation();
+    const double HalfWidth=Index==0 ? 12 : 9.6;
+    const double HalfHeight=Index==0 ? 3.6 : 4.8;
+    // Порядок: верхний левый, верхний правый, нижний левый, нижний правый.
+    return MirrorFrames[Index]->GetComponentTransform().TransformPosition(FVector(0,
+        Corner%2==0 ? HalfWidth : -HalfWidth,Corner<2 ? HalfHeight : -HalfHeight));
+}
 void AUEDevPawn::ToggleRearMirror() { MirrorEnabled[0]=!MirrorEnabled[0]; MirrorElapsed=1; }
 void AUEDevPawn::ToggleLeftMirror() { MirrorEnabled[1]=!MirrorEnabled[1]; MirrorElapsed=1; }
 void AUEDevPawn::ToggleRightMirror() { MirrorEnabled[2]=!MirrorEnabled[2]; MirrorElapsed=1; }
@@ -220,11 +231,14 @@ void AUEDevPawn::UpdateCabin(float DeltaSeconds) {
         R.Yaw = HeadControl.Step(R.Yaw,Down(EKeys::Left),Down(EKeys::Right),DeltaSeconds,HeadReturnSpeed);
         CabinCamera->SetRelativeRotation(R);
     }
-    const FString GearLabel = Model.Selector==uedev::Gear::D ? FString::Printf(TEXT("D%d"),Model.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(Model.Selector)));
-    DashboardDisplay->SetText(FText::FromString(FString::Printf(TEXT("%.0f км/ч   %s\n%.0f об/мин\n%s  %s\n%s"),
-        FMath::Abs(Model.Speed)*3.6,*GearLabel,Model.Rpm,Model.Engine ? TEXT("ДВС ВКЛ") : TEXT("ДВС ВЫКЛ"),
-        Model.Handbrake ? TEXT("РУЧНИК") : TEXT(""),Model.Belt ? TEXT("РЕМЕНЬ ДА") : TEXT("РЕМЕНЬ НЕТ"))));
-    for (int Index=0;Index<MirrorSurfaces.Num();++Index) MirrorSurfaces[Index]->SetVisibility(CabinView && MirrorEnabled[Index]);
+    const double Values[2]={FMath::Abs(Model.Speed)*3.6,Model.Rpm};
+    const FString GearLabel=Model.Selector==uedev::Gear::D ? FString::Printf(TEXT("D%d"),Model.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(Model.Selector)));
+    for (int Index=0;Index<InstrumentNeedles.Num();++Index) {
+        InstrumentNeedles[Index]->SetRelativeRotation(FRotator(0,0,uedev::InstrumentRoll(Values[Index],Index==0 ? 180.0 : 6500.0)));
+        InstrumentLabels[Index]->SetText(FText::FromString(Index==0
+            ? FString::Printf(TEXT("%.0f km/h"),Values[Index])
+            : FString::Printf(TEXT("%.0f rpm  %s"),Values[Index],*GearLabel)));
+    }
     MirrorElapsed += DeltaSeconds;
     if (MirrorElapsed>=1.f/15.f) {
         MirrorElapsed=0;
@@ -236,8 +250,7 @@ void AUEDevPawn::ApplyCameraView() {
     HeadControl = uedev::HeadLook{};
     Camera->SetActive(!CabinView);
     CabinCamera->SetActive(CabinView);
-    DashboardDisplay->SetVisibility(CabinView);
-    for (int Index=0;Index<MirrorSurfaces.Num();++Index) MirrorSurfaces[Index]->SetVisibility(CabinView && MirrorEnabled[Index]);
+    for (const auto& Label : InstrumentLabels) Label->SetVisibility(CabinView);
     for (const auto& Detail : CabinParts) if (Detail) Detail->SetVisibility(CabinView);
     for (const auto& Detail : CabinOccluders) if (Detail) Detail->SetVisibility(!CabinView);
 }

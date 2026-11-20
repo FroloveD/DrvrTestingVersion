@@ -7,7 +7,6 @@
  */
 #pragma once
 #include "CoreMinimal.h"
-#include "Styling/SlateBrush.h"
 #include "GameFramework/Pawn.h"
 #include "InputCoreTypes.h"
 #include "DrivingModel.h"
@@ -17,7 +16,6 @@
 class USceneCaptureComponent2D;
 class UTextureRenderTarget2D;
 class UTextRenderComponent;
-class UWidgetComponent;
 class UBoxComponent;
 class USceneComponent;
 class USpringArmComponent;
@@ -44,6 +42,7 @@ public:
     bool AreHeadlightsOn() const { return HeadlightsOn; }
     UTextureRenderTarget2D* GetMirror(int Index) const { return MirrorTargets.IsValidIndex(Index) ? MirrorTargets[Index].Get() : nullptr; }
     bool IsMirrorEnabled(int Index) const { return Index>=0 && Index<3 && MirrorEnabled[Index]; }
+    FVector MirrorCorner(int Index, int Corner) const;
     bool IsCabinView() const { return CabinView; }
     const uedev::State& GetDrivingState() const { return Model; }
 private:
@@ -56,9 +55,9 @@ private:
     UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> CabinOccluders;
     UPROPERTY() TArray<TObjectPtr<USceneCaptureComponent2D>> MirrorCaptures;
     UPROPERTY() TArray<TObjectPtr<UTextureRenderTarget2D>> MirrorTargets;
-    UPROPERTY() TObjectPtr<UTextRenderComponent> DashboardDisplay;
-    UPROPERTY() TArray<TObjectPtr<UWidgetComponent>> MirrorSurfaces;
-    TArray<FSlateBrush> MirrorBrushes;
+    UPROPERTY() TArray<TObjectPtr<USceneComponent>> MirrorFrames;
+    UPROPERTY() TArray<TObjectPtr<USceneComponent>> InstrumentNeedles;
+    UPROPERTY() TArray<TObjectPtr<UTextRenderComponent>> InstrumentLabels;
     float MirrorElapsed = 0;
     bool MirrorEnabled[3] = {true,true,true};
     void ToggleRearMirror();

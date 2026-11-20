@@ -40,7 +40,7 @@ assert(pawn.includes('Target->InitAutoFormat(320,Index==0 ? 96 : 160)'));
 assert(pawn.includes('Capture->bCaptureEveryFrame = false'));
 assert(pawn.includes('Capture->bCaptureOnMovement = false'));
 assert(body('UpdateCabin').includes('1.f/15.f'));
-assert(pawn.includes('MirrorCaptures[Index]->HideComponent(DashboardDisplay)'));
+assert(pawn.includes('MirrorCaptures[Index]->HideComponent(Label.Get())'));
 assert(body('UpdateCabin').includes('Model.Rpm') && body('UpdateCabin').includes('Model.AutoGear'));
 assert(hud.indexOf('Mirror(0,')<hud.indexOf('if (!PanelsVisible) return;'),'mirrors survive HUD hiding');
 assert(hud.includes('H*Scale,1,0,-1,1'),'mirror image must flip U');
@@ -66,9 +66,14 @@ assert(controller.includes('TEXT("HeadReturnRate")'));
 assert(controller.includes('SetHeadReturnRate(HeadReturnSetting)'));
 
 assert(hud.includes('if (!DrivingPawn->IsCabinView())'));
-assert(pawn.includes('SetWidgetSpace(EWidgetSpace::World)'));
-assert(pawn.includes('SetSlateWidget(SNew(SImage)'));
-assert(pawn.includes('SetUVRegion(FBox2f(FVector2f(1,0),FVector2f(0,1)))'));
-assert(pawn.includes('HideComponent(SurfaceWidget.Get())'));
-assert(pawn.includes('MirrorBrushes.SetNum(3)'));
+assert(!pawn.includes('SetSlateWidget'));
+assert(hud.includes('Canvas->K2_DrawTriangle(Target,Triangles)'));
+assert(hud.includes('ProjectWorldLocationToScreen(DrivingPawn->MirrorCorner'));
+assert(hud.includes('LineTraceSingleByChannel'));
+assert(hud.includes('UV[4]={{1,0},{0,0},{1,1},{0,1}}'));
+assert(pawn.includes('MirrorFrames.Add(Frame)'));
+assert(pawn.includes('SetVerticalAlignment(EVRTA_TextTop)'));
+assert(pawn.includes('InstrumentNeedles[Index]->SetRelativeRotation'));
+assert(!pawn.includes('DashboardDisplay'));
+
 console.log('PASS physical mirror source guards (not Unreal compile/render)');

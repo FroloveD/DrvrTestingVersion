@@ -163,6 +163,9 @@ int main() {
         HeadLook slow; slow.Step(0,left,!left,0.01); slow.Step(0,false,false,0.4); slow.Step(0,left,!left,0.01);
         Check(slow.Locked==0,"slow taps do not lock");
     }
+    Check(InstrumentRoll(0,180)==120 && InstrumentRoll(90,180)==0 && InstrumentRoll(180,180)==-120,"speed instrument sweep");
+    Check(InstrumentRoll(6500,6500)==-120 && InstrumentRoll(9000,6500)==-120 && InstrumentRoll(-1,6500)==120,"instrument clamps");
+    Check(InstrumentRoll(std::numeric_limits<double>::quiet_NaN(),6500)==120,"instrument invalid value safe");
     State hudState;
     Check(NextHint(hudState,false)==HudHint::StartEngine,"HUD cold start hint");
     hudState.Selector=Gear::D;
