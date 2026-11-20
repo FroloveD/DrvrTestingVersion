@@ -199,6 +199,8 @@ export class SceneController {
   private cockpitRearPrimed = false;
   private cockpitSidePrimed = false;
   private qualityPreset: QualityPreset = "high";
+  // Крупные OSM-сцены используют более лёгкий профиль рендеринга, не затрагивая симуляцию.
+  private isLargeOsmWorld = false;
   private cockpitFov = 68;
   private lastCameraMode: CameraMode = "chase";
   private frameCounter = 0;
@@ -378,17 +380,23 @@ export class SceneController {
 
   applyQuality(preset: QualityPreset): void {
     this.qualityPreset = preset;
+    const deviceRatio = window.devicePixelRatio || 1;
     if (preset === "low") {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
     } else if (preset === "medium") {
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      const ratioCap = this.isLargeOsmWorld ? 1.1 : 1.5;
+      this.renderer.setPixelRatio(Math.min(deviceRatio, ratioCap));
       this.renderer.shadowMap.enabled = true;
       this.sun.shadow.mapSize.set(1024, 1024);
     } else {
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      // На крупных OSM-районах ограничиваем fill-rate и стоимость shadow map.
+      // Небольшие сценарии сохраняют прежний профиль High без изменений.
+      const ratioCap = this.isLargeOsmWorld ? 1.0 : 2;
+      this.renderer.setPixelRatio(Math.max(this.isLargeOsmWorld ? 0.9 : 1, Math.min(deviceRatio, ratioCap)));
       this.renderer.shadowMap.enabled = true;
-      this.sun.shadow.mapSize.set(2048, 2048);
+      const shadowSize = this.isLargeOsmWorld ? 1024 : 2048;
+      this.sun.shadow.mapSize.set(shadowSize, shadowSize);
     }
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
@@ -397,6 +405,12 @@ export class SceneController {
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
+    const osmBuildingCount = world.scenarioId === "city_osm"
+      ? world.obstacles.filter((obs) => obs.kind === "building").length
+      : 0;
+    this.isLargeOsmWorld = world.scenarioId === "city_osm" &&
+      (world.roads.length >= 500 || osmBuildingCount >= 250);
+    this.applyQuality(this.qualityPreset);
     this.lastBuildingCullX = Number.NaN;
     this.lastBuildingCullZ = Number.NaN;
     this.lastBuildingCullRadius = Number.NaN;
