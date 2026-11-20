@@ -190,10 +190,15 @@ try {
   await page.getByTestId("keybindings-editor").locator("summary").click();
   await page.getByRole("button", { name: "Сбросить назначения клавиш", exact: true }).click();
   await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
-  await page.getByTestId("app-menu-hide").click();
-  await page.getByTestId("app-menu-show").click();
-  await page.getByTestId("sim-toolbar-toggle").click();
-  await page.getByTestId("sim-toolbar-toggle").click();
+  const expandedViewport = await page.getByTestId("sim-viewport").boundingBox();
+  await page.getByTestId("sim-menus-toggle").click();
+  const compactViewport = await page.getByTestId("sim-viewport").boundingBox();
+  check("A2l one toggle hides both menus and returns their space to the scene",
+    !(await page.getByTestId("app-header").isVisible()) && !(await page.getByTestId("sim-toolbar").isVisible()) &&
+    compactViewport.y <= 10 && compactViewport.height > expandedViewport.height);
+  await page.getByTestId("sim-menus-toggle").click();
+  check("A2m menus can be restored from the scene",
+    await page.getByTestId("app-header").isVisible() && await page.getByTestId("sim-toolbar").isVisible());
   await page.evaluate(() => { delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen; });
 
 

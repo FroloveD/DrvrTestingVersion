@@ -340,8 +340,8 @@ export default function App() {
       <div className="app-bg" />
 
       {/* Компактная верхняя шапка рабочей станции */}
-      {headerHidden && <button type="button" data-testid="app-menu-show" className="fixed left-2 top-2 z-50 btn btn-mini" onClick={() => setHeaderHidden(false)}>☰ Показать верхнее меню</button>}
-      <header style={headerHidden ? { display: "none" } : undefined} className="sticky top-0 z-40 border-b hairline bg-[#080d12]/92 backdrop-blur-md">
+      {headerHidden && tab !== "sim" && <button type="button" data-testid="app-menu-show" className="fixed left-2 top-2 z-50 btn btn-mini" onClick={() => setHeaderHidden(false)}>☰ Показать верхнее меню</button>}
+      <header data-testid="app-header" style={headerHidden ? { display: "none" } : undefined} className="sticky top-0 z-40 border-b hairline bg-[#080d12]/92 backdrop-blur-md">
         <div className="mx-auto max-w-[1480px] px-4 sm:px-6 h-14 flex items-center gap-3">
           <button
             type="button"
@@ -409,11 +409,13 @@ export default function App() {
       </header>
 
       {/* Основная рабочая область */}
-      <main className="relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-4 sm:px-6 py-4">
+      <main className={headerHidden && tab === "sim" ? "relative z-10 flex-1 w-full p-2" : "relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-4 sm:px-6 py-4"}>
         {/* Тренажёр остаётся примонтированным: переключение вкладок не прерывает заезд */}
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
             active={tab === "sim"}
+            menusHidden={headerHidden}
+            onToggleMenus={() => setHeaderHidden((hidden) => !hidden)}
             scenarioId={scenarioId}
             onScenarioChange={setScenarioId}
             calibration={calibration}

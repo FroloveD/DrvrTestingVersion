@@ -116,6 +116,8 @@ import { SteeringLimitControl } from "./SteeringLimitControl";
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  menusHidden: boolean;
+  onToggleMenus: () => void;
   scenarioId: ScenarioId;
   onScenarioChange: (id: ScenarioId) => void;
   calibration: CalibrationConfig;
@@ -284,6 +286,8 @@ const HUD_PANEL_CATALOG: ReadonlyArray<{ id: string; label: string; group: "hud"
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  menusHidden,
+  onToggleMenus,
   scenarioId,
   onScenarioChange,
   calibration,
@@ -319,7 +323,6 @@ export function SimulatorView({
   const [uiHidden, setUiHidden] = useState(false);
   const [bindings, setBindings] = useState(loadKeyBindings);
   const bindingsRef = useRef(bindings);
-  const [toolbarHidden, setToolbarHidden] = useState(false);
 
   const [showHelp, setShowHelp] = useState(false);
   const [helpCollapsed, setHelpCollapsed] = useState(false);
@@ -2390,9 +2393,7 @@ export function SimulatorView({
   return (
     <div className="space-y-3">
       {/* [SEC:sim-toolbar] Верхняя панель выбора сценария, импорта OSM и завершения попытки */}
-      <button type="button" className="btn btn-mini" data-testid="sim-toolbar-toggle" aria-expanded={!toolbarHidden}
-        onClick={() => setToolbarHidden((v) => !v)}>{toolbarHidden ? "Показать панель сценариев" : "Скрыть панель сценариев"}</button>
-      <div className="flex flex-wrap items-center gap-2" style={toolbarHidden ? { display: "none" } : undefined}>
+      <div data-testid="sim-toolbar" hidden={menusHidden} className="flex flex-wrap items-center gap-2" style={menusHidden ? { display: "none" } : undefined}>
         <div className="segmented flex-wrap">
           {([
             ["bay_90", "1 · Бокс 90°"],
@@ -2495,7 +2496,7 @@ export function SimulatorView({
       </div>
 
       {/* Панель проверки маршрута и произвольной границы для загруженного OSM-пакета (сворачиваемая и закрываемая) */}
-      {customOsm && scenarioId === "city_osm" && osmRouteCheck && osmBarClosed && (
+      {!menusHidden && customOsm && scenarioId === "city_osm" && osmRouteCheck && osmBarClosed && (
         <div className="flex items-center justify-end">
           <button
             type="button"
@@ -2510,7 +2511,7 @@ export function SimulatorView({
           </button>
         </div>
       )}
-      {customOsm && scenarioId === "city_osm" && osmRouteCheck && !osmBarClosed && (
+      {!menusHidden && customOsm && scenarioId === "city_osm" && osmRouteCheck && !osmBarClosed && (
         <div
           data-testid="sim-osm-route-bar"
           className="panel px-3 py-2 text-[11px] space-y-2 border hairline"
@@ -2688,10 +2689,14 @@ export function SimulatorView({
         ref={containerRef}
         data-testid="sim-viewport"
         data-immersive={immersive ? "true" : "false"}
+        data-menus-hidden={menusHidden ? "true" : "false"}
         onContextMenu={(e) => e.preventDefault()}
         className="relative isolate w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"
       >
         <div className="absolute bottom-2 left-2 z-[10001] flex gap-1" data-testid="sim-quick-menu">
+          <button type="button" className="btn btn-mini" data-testid="sim-menus-toggle" onClick={onToggleMenus}
+            aria-expanded={!menusHidden} aria-label={menusHidden ? "Показать верхние меню" : "Скрыть верхние меню"}
+            title={menusHidden ? "Показать навигацию и панель сценариев" : "Скрыть навигацию и панель сценариев"}>☰</button>
           <button type="button" className="btn btn-mini" data-testid="sim-hud-toggle" aria-pressed={uiHidden}
             onClick={() => setUiHidden((v) => !v)}>{uiHidden ? "Показать интерфейс" : "Скрыть интерфейс"} · {keyLabel(bindings.KeyV)}</button>
           <button type="button" className="btn btn-mini" onClick={() => { setControlsCollapsed(false); setShowControls((v) => !v); }}>

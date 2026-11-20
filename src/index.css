@@ -194,3 +194,11 @@ input[type="checkbox"] { accent-color: var(--mint); }
 body:has([data-testid="sim-viewport"][data-immersive="true"]) main {
   z-index: 100;
 }
+
+/* Collapsing menus returns their space to the simulator, without another toolbar row. */
+[data-testid="sim-viewport"][data-menus-hidden="true"]:not([data-immersive="true"]) {
+  height: calc(100vh - 16px);
+  height: calc(100dvh - 16px);
+  min-height: 0;
+  max-height: none;
+}
