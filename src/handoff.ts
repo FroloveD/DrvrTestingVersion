@@ -130,7 +130,7 @@ L.push("| `src/maps/routeCatalog.ts` | построение/проверка OSM
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |");
-L.push("| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда, живые дисплеи и raycast органов салона/селектора |");
+L.push("| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда, живые дисплеи, raycast органов и guarded PMREM/IBL |");
 L.push("| `src/render/cityBuildings.ts` | процедурные фасады зданий РФ/СНГ, деревья и облачное небо |");
 L.push("| `src/render/roadInfra.ts`, `src/render/roadTextures.ts` | PBR-дороги, тротуары, бордюры, разметка, знаки, светофоры и уличная инфраструктура ГОСТ |");
 L.push("| `src/render/roadSignTextures.ts` | процедурные отражающие текстуры 12 классов дорожных знаков и дополнительные таблички |");
