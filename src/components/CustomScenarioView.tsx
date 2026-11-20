@@ -64,7 +64,6 @@ import type {
   Vec2,
 } from "../sim/types";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
-import { SpatialGrid } from "../sim/spatialGrid";
 import { Chip, downloadJson, Icon } from "./Icons";
 import { DEFAULT_LAYERS, MapCanvasEditor, type LayerVisibility } from "./MapCanvasEditor";
 
@@ -141,6 +140,9 @@ function suggestCollisionMove(def: CustomScenarioDef, target: CollisionTarget): 
   const targetRadius = Math.hypot(target.halfX, target.halfZ);
   const minDistance = carRadius + targetRadius + 0.75;
   const baseAngle = Math.atan2(target.center.z - target.car.z, target.center.x - target.car.x);
+  const otherObstacles = buildCustomWorld(def).obstacles.filter((o) =>
+    target.kind === "obstacle" ? o.id !== target.id : o.id !== `parked-bay-${target.id}`
+  );
 
   for (const extra of [0, 2, 4, 7, 10, 14]) {
     const distance = minDistance + extra;
@@ -150,14 +152,14 @@ function suggestCollisionMove(def: CustomScenarioDef, target: CollisionTarget): 
       const z = Number((target.car.z + Math.sin(angle) * distance).toFixed(2));
       if (x < def.bounds.minX || x > def.bounds.maxX || z < def.bounds.minZ || z > def.bounds.maxZ) continue;
 
-      const candidate: CustomScenarioDef =
-        target.kind === "obstacle"
-          ? { ...def, obstacles: def.obstacles.map((o) => o.id === target.id ? { ...o, cx: x, cz: z } : o) }
-          : { ...def, bays: def.bays.map((b) => b.id === target.id ? { ...b, cx: x, cz: z } : b) };
-      const world = buildCustomWorld(candidate);
-      if (!new SpatialGrid(world.obstacles, 10).queryCarHit(target.car.x, target.car.z, target.car.h).hit) {
-        return { x, z };
-      }
+      // Круговые ограничивающие радиусы дают консервативный запас для любой ориентации объектов.
+      const overlapsOtherObject = otherObstacles.some((o) => {
+        const dx = x - o.cx;
+        const dz = z - o.cz;
+        const otherRadius = Math.hypot(o.halfX, o.halfZ);
+        return Math.hypot(dx, dz) < targetRadius + otherRadius + 0.5;
+      });
+      if (!overlapsOtherObject) return { x, z };
     }
   }
   return null;
