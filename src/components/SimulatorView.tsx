@@ -1148,6 +1148,11 @@ export function SimulatorView({
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const sDrag = shifterDragRef.current;
     const ctrl = sceneCtrlRef.current;
+    if (!sDrag && cameraMode === "cockpit" && e.pointerType === "mouse" && ctrl) {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const control = pos ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      ctrl.setCockpitControlInteraction(control);
+    }
     if (sDrag && sDrag.id === e.pointerId && ctrl) {
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
       if (!pos) return;
