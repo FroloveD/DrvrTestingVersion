@@ -383,7 +383,7 @@ export function SimulatorView({
     speedLimit: world.defaultSpeedLimitKmh,
     gridChecks: 0,
     totalObstacles: world.obstacles.length,
-    perf: { fps: 60, p95FrameMs: 16.6, visibleBuildings: 0, totalBuildings: 0 },
+    perf: { fps: 60, p95FrameMs: 16.6, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0 },
     nextSignal: null,
     latestViolation: null,
   }));
@@ -684,7 +684,7 @@ export function SimulatorView({
           totalObstacles: w.obstacles.length,
           perf: sceneCtrlRef.current
             ? sceneCtrlRef.current.getPerfMetrics()
-            : { fps: 60, p95FrameMs: 16, visibleBuildings: 0, totalBuildings: 0 },
+            : { fps: 60, p95FrameMs: 16, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0 },
           nextSignal,
           latestViolation: viol,
         });
@@ -1388,7 +1388,10 @@ export function SimulatorView({
                 {hud.perf.p95FrameMs}мс
               </div>
               <div className="text-[#6e8492]">
-                Grid {hud.gridChecks}/{hud.totalObstacles}
+                Draw {hud.perf.drawCalls} · Tri {(hud.perf.triangles / 1000).toFixed(1)}k · Geo {hud.perf.geometries}
+              </div>
+              <div className="text-[#6e8492]">
+                Grid {hud.gridChecks}/{hud.totalObstacles} · Buildings {hud.perf.visibleBuildings}/{hud.perf.totalBuildings}
               </div>
             </div>
             </div>

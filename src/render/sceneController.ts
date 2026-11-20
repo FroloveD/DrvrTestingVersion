@@ -89,6 +89,10 @@ export type PerfMetrics = {
   p95FrameMs: number;
   visibleBuildings: number;
   totalBuildings: number;
+  drawCalls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
 };
 
 // === [SEC:render-textures] Процедурные Canvas-текстуры (офлайн, без внешних ассетов) ===
@@ -226,6 +230,8 @@ export class SceneController {
       antialias: true,
       powerPreference: "high-performance",
     });
+    // Count the main camera and mirror passes together for each frame.
+    this.renderer.info.autoReset = false;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -791,6 +797,7 @@ export class SceneController {
       right: HTMLCanvasElement | null;
     }
   ): void {
+    this.renderer.info.reset();
     const now = performance.now();
     const dtMs = now - this.lastPerfSample;
     this.lastPerfSample = now;
@@ -1182,6 +1189,10 @@ export class SceneController {
         p95FrameMs: 16.6,
         visibleBuildings: this.visibleBuildings,
         totalBuildings: this.totalBuildingCount || this.buildingMeshes.length,
+        drawCalls: this.renderer.info.render.calls,
+        triangles: this.renderer.info.render.triangles,
+        geometries: this.renderer.info.memory.geometries,
+        textures: this.renderer.info.memory.textures,
       };
     }
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -1192,6 +1203,10 @@ export class SceneController {
       p95FrameMs: Number(p95.toFixed(1)),
       visibleBuildings: this.visibleBuildings,
       totalBuildings: this.totalBuildingCount || this.buildingMeshes.length,
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      geometries: this.renderer.info.memory.geometries,
+      textures: this.renderer.info.memory.textures,
     };
   }
 
