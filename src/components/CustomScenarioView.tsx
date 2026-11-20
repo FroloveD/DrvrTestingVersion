@@ -237,7 +237,11 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     const quoted = message.match(/[«"]([^»"]+)[»"]/);
     const idMatch = message.match(/(?:№|#)\s*(\d+)/);
 
-    if (/стартовая позиция|на старте/i.test(message)) {
+    if (/контакт с:/i.test(message)) {
+      const label = quoted?.[1] ?? message.match(/контакт с:\\s*(.+?)(?:\\.|$)/i)?.[1]?.trim();
+      const item = def.obstacles.find((o) => o.id === label || o.label === label);
+      if (item) target = { kind: "obstacle", id: item.id };
+    } else if (/стартовая позиция|на старте/i.test(message)) {
       target = { kind: "start" };
     } else if (/контур границы|границ[аы] мира|полуразмер площадки|площадк[аи]/i.test(message)) {
       target = def.boundaryPolygon?.length ? { kind: "boundary_point", index: 0 } : null;
@@ -245,7 +249,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
       const id = idMatch?.[1] ? Number(idMatch[1]) : Number(message.match(/бокс\s+(\d+)/i)?.[1]);
       const item = def.bays.find((b) => b.id === id);
       if (item) target = { kind: "bay", id: item.id };
-    } else if (/препятств|контакт с:/i.test(message)) {
+    } else if (/препятств/i.test(message)) {
       const label = quoted?.[1];
       const item = def.obstacles.find((o) => o.id === label || o.label === label);
       if (item) target = { kind: "obstacle", id: item.id };
