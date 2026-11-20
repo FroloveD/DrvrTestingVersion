@@ -615,22 +615,26 @@ try {
   await page.getByRole("button", { name: "Быстрый старт" }).click();
   await sleep(400);
   await page.keyboard.down("KeyW");
-  await sleep(900);
+  // Autosave intentionally ignores attempts that have not actually moved (>1.2 km/h).
+  // Wait for motion, not a wall-clock delay that can expire during a slow SwiftShader frame.
+  const rideStarted = await until(async () => (await speedOf(page)) >= 3, 20000);
   await page.keyboard.up("KeyW");
-  check("I0 заезд начался", !(await low(page)).includes("двигатель заглушен"));
+  check("I0 заезд действительно начался (скорость ≥3 км/ч)", rideStarted);
 
   await tab(page, "Статистика");
   await sleep(500);
   await tab(page, "3D-Тренажёр");
   await sleep(700);
-  check("I1 переключение вкладок не прерывает заезд", !(await low(page)).includes("двигатель заглушен"), "состояние сброшено");
+  check("I1 переключение вкладок не прерывает заезд", !(await low(page)).includes("двигатель заглушен"));
 
   await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-  await sleep(800);
+  const unfinishedSaved = await until(async () => (await readIdb(page)).metaCount === 1, 10000);
   await tab(page, "Разбор и Реплей");
-  await sleep(600);
-  const mid = await low(page);
-  check("I2 незавершённый заезд сохранён в журнале и помечен «в процессе»", mid.includes("в процессе") && mid.includes("из 300"));
+  const unfinishedVisible = await until(async () => {
+    const mid = await low(page);
+    return mid.includes("в процессе") && mid.includes("из 300");
+  }, 10000);
+  check("I2 незавершённый заезд сохранён в журнале и помечен «в процессе»", unfinishedSaved && unfinishedVisible);
 
   await tab(page, "3D-Тренажёр");
   await sleep(700);
