@@ -321,7 +321,8 @@ export function predictTrajectoryArc(
   steer: number,
   reverse: boolean,
   distance = 6.5,
-  steps = 18
+  steps = 18,
+  geo: CarGeometry = BASE_GEOMETRY
 ): { leftTrack: Vec2[]; rightTrack: Vec2[] } {
   const leftTrack: Vec2[] = [];
   const rightTrack: Vec2[] = [];
@@ -348,7 +349,7 @@ export function predictTrajectoryArc(
     });
     cx += Math.sin(ch) * ds;
     cz += Math.cos(ch) * ds;
-    ch += (ds / CAR.wheelbase) * Math.tan(steer);
+    ch += (ds / geo.wheelbase) * Math.tan(steer);
   }
   return { leftTrack, rightTrack };
 }
@@ -381,8 +382,8 @@ export function writeTrajectoryArcPositions(
   let cx = x;
   let cz = z;
   let ch = h;
-  const halfW = CAR.width / 2;
-  const zLocal = reverse ? -(CAR.wheelbase / 2 + CAR.rearOverhang) : CAR.wheelbase / 2 + CAR.frontOverhang;
+  const halfW = geo.width / 2;
+  const zLocal = reverse ? -(geo.wheelbase / 2 + geo.rearOverhang) : geo.wheelbase / 2 + geo.frontOverhang;
 
   for (let i = 0; i <= steps; i++) {
     const fx = Math.sin(ch);
@@ -400,7 +401,7 @@ export function writeTrajectoryArcPositions(
 
     cx += Math.sin(ch) * ds;
     cz += Math.cos(ch) * ds;
-    ch += (ds / CAR.wheelbase) * Math.tan(steer);
+    ch += (ds / geo.wheelbase) * Math.tan(steer);
   }
 }
 
