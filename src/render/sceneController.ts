@@ -139,6 +139,14 @@ export class SceneController {
   private readonly groundMesh: THREE.Mesh;
   private readonly worldGroup = new THREE.Group();
   private readonly buildingMeshes: THREE.Object3D[] = [];
+  private readonly buildingBatches = new Map<string, {
+    mesh: THREE.InstancedMesh;
+    cursor: number;
+    centerX: number;
+    centerZ: number;
+  }>();
+  private useInstancedBuildings = false;
+  private totalBuildingCount = 0;
   private readonly signalVisuals: SignalVisual[] = [];
   private readonly pedVisuals: PedestrianVisual[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
@@ -393,6 +401,9 @@ export class SceneController {
     this.lastTrajectoryReverse = null;
     this.disposeGroup(this.worldGroup);
     this.buildingMeshes.length = 0;
+    this.buildingBatches.clear();
+    this.useInstancedBuildings = false;
+    this.totalBuildingCount = 0;
     this.signalVisuals.length = 0;
     this.pedVisuals.length = 0;
     this.checkpointMeshes.length = 0;
@@ -576,9 +587,50 @@ export class SceneController {
       }
     }
 
+    // Для крупных OSM-районов здания объединяются в InstancedMesh по ячейкам 96×96 м.
+    // Это сохраняет габариты/высоты/повороты, сокращая количество отдельных draw calls.
+    const osmBuildings = world.scenarioId === "city_osm"
+      ? world.obstacles.filter((obs) => obs.kind === "building")
+      : [];
+    this.totalBuildingCount = osmBuildings.length;
+    this.useInstancedBuildings = osmBuildings.length >= 250;
+    if (this.useInstancedBuildings) {
+      const cells = new Map<string, ObstacleBox[]>();
+      for (const obs of osmBuildings) {
+        const gx = Math.floor(obs.cx / 96);
+        const gz = Math.floor(obs.cz / 96);
+        const key = `${gx},${gz}`;
+        const bucket = cells.get(key) ?? [];
+        bucket.push(obs);
+        cells.set(key, bucket);
+      }
+      const unitBox = new THREE.BoxGeometry(1, 1, 1);
+      for (const [key, bucket] of cells) {
+        const [gx, gz] = key.split(",").map(Number);
+        const centerX = (gx + 0.5) * 96;
+        const centerZ = (gz + 0.5) * 96;
+        const mesh = new THREE.InstancedMesh(
+          unitBox,
+          new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, vertexColors: true }),
+          bucket.length
+        );
+        mesh.position.set(centerX, 0, centerZ);
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        this.worldGroup.add(mesh);
+        this.buildingMeshes.push(mesh);
+        this.buildingBatches.set(key, { mesh, cursor: 0, centerX, centerZ });
+      }
+    }
+
     // Препятствия: автопарк, здания РФ/СНГ (панельные/кирпичные/адм.), многоярусные деревья и инфраструктура ГОСТ
     for (const obs of world.obstacles) {
       this.addObstacleMesh(obs, world, roadMats, cityEnv, shadowTex, learnerTex, civilPlateTex, clusterTex);
+    }
+    for (const batch of this.buildingBatches.values()) {
+      batch.mesh.instanceMatrix.needsUpdate = true;
+      if (batch.mesh.instanceColor) batch.mesh.instanceColor.needsUpdate = true;
+      batch.mesh.computeBoundingSphere();
     }
 
     // Светофоры ГОСТ Р 52282 (Т.1 + Г-консоль + П.1 + табличка 6.16 «СТОП») и стоп-линии 1.12
@@ -693,6 +745,28 @@ export class SceneController {
     }
 
     if (obs.kind === "building") {
+      if (this.useInstancedBuildings) {
+        const gx = Math.floor(obs.cx / 96);
+        const gz = Math.floor(obs.cz / 96);
+        const batch = this.buildingBatches.get(`${gx},${gz}`);
+        if (batch) {
+          const w = Math.max(2, obs.halfX * 2);
+          const l = Math.max(2, obs.halfZ * 2);
+          const h = Math.max(3.2, obs.height);
+          const transform = new THREE.Object3D();
+          transform.position.set(obs.cx - batch.centerX, h * 0.5, obs.cz - batch.centerZ);
+          transform.rotation.y = obs.h;
+          transform.scale.set(w, h, l);
+          transform.updateMatrix();
+          batch.mesh.setMatrixAt(batch.cursor, transform.matrix);
+          const palette = [0xcfd8df, 0xd8cfc2, 0xc3d2dc, 0xb97b63, 0xc89a78, 0xdad2be];
+          let hash = 0;
+          for (let i = 0; i < obs.id.length; i++) hash = (Math.imul(hash, 31) + obs.id.charCodeAt(i)) | 0;
+          batch.mesh.setColorAt(batch.cursor, new THREE.Color(palette[Math.abs(hash) % palette.length]));
+          batch.cursor++;
+        }
+        return;
+      }
       const bld = buildRussianBuilding(obs, cityEnv);
       this.worldGroup.add(bld);
       this.buildingMeshes.push(bld);
@@ -765,14 +839,15 @@ export class SceneController {
     const cullDz = state.z - this.lastBuildingCullZ;
     const cullMoved = !Number.isFinite(this.lastBuildingCullX) || cullDx * cullDx + cullDz * cullDz >= 1;
     if (cullMoved || opts.drawRadius !== this.lastBuildingCullRadius) {
-      const r2 = opts.drawRadius * opts.drawRadius;
+      const cullRadius = opts.drawRadius + (this.useInstancedBuildings ? 68 : 0);
+      const r2 = cullRadius * cullRadius;
       let vis = 0;
       for (const bm of this.buildingMeshes) {
         const dx = bm.position.x - state.x;
         const dz = bm.position.z - state.z;
         const show = dx * dx + dz * dz <= r2;
         bm.visible = show;
-        if (show) vis++;
+        if (show) vis += bm instanceof THREE.InstancedMesh ? bm.count : 1;
       }
       this.visibleBuildings = vis;
       this.lastBuildingCullX = state.x;
@@ -1106,7 +1181,7 @@ export class SceneController {
         fps: 60,
         p95FrameMs: 16.6,
         visibleBuildings: this.visibleBuildings,
-        totalBuildings: this.buildingMeshes.length,
+        totalBuildings: this.totalBuildingCount || this.buildingMeshes.length,
       };
     }
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -1116,7 +1191,7 @@ export class SceneController {
       fps: Math.round(1000 / Math.max(1, avg)),
       p95FrameMs: Number(p95.toFixed(1)),
       visibleBuildings: this.visibleBuildings,
-      totalBuildings: this.buildingMeshes.length,
+      totalBuildings: this.totalBuildingCount || this.buildingMeshes.length,
     };
   }
 
