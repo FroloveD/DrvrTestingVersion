@@ -6,7 +6,7 @@
  * @tests T05, T06, T07, T08, T16
  */
 import type { ObstacleBox, ParkingBay, Vec2 } from "./types";
-import { CAR, getCarCorners } from "./vehicle";
+import { CAR, getCarCorners, type CarGeometry } from "./vehicle";
 
 function getBoxCorners(b: ObstacleBox): [Vec2, Vec2, Vec2, Vec2] {
   const fx = Math.sin(b.h);
@@ -96,8 +96,8 @@ export class SpatialGrid {
   }
 
   /** Возвращает первое препятствие, с которым пересекается автомобиль, либо null. */
-  queryCarHit(x: number, z: number, h: number): { hit: ObstacleBox | null; checked: number } {
-    const carCorners = getCarCorners(x, z, h);
+  queryCarHit(x: number, z: number, h: number, geo?: CarGeometry): { hit: ObstacleBox | null; checked: number } {
+    const carCorners = getCarCorners(x, z, h, geo);
     let minX = Infinity;
     let maxX = -Infinity;
     let minZ = Infinity;
@@ -139,7 +139,8 @@ export function checkCarCollisionBruteForce(
   x: number,
   z: number,
   h: number,
-  obstacles: readonly ObstacleBox[]
+  obstacles: readonly ObstacleBox[],
+  geo?: CarGeometry
 ): ObstacleBox | null {
   const carCorners = getCarCorners(x, z, h);
   for (const obs of obstacles) {
@@ -165,9 +166,9 @@ export function worldToBayLocal(pt: Vec2, bay: ParkingBay): { lx: number; lz: nu
 }
 
 /** Проверка полного вхождения всех четырёх углов кузова в свободный парковочный бокс (допуск 4 см). */
-export function isCarInsideBay(x: number, z: number, h: number, bay: ParkingBay, margin = 0.04): boolean {
+export function isCarInsideBay(x: number, z: number, h: number, bay: ParkingBay, margin = 0.04, geo?: CarGeometry): boolean {
   if (bay.occupied) return false;
-  const corners = getCarCorners(x, z, h);
+  const corners = getCarCorners(x, z, h, geo);
   const halfW = bay.width / 2 + margin;
   const halfL = bay.length / 2 + margin;
   for (const c of corners) {
@@ -180,9 +181,9 @@ export function isCarInsideBay(x: number, z: number, h: number, bay: ParkingBay,
 }
 
 /** Находит свободный бокс, в котором находится автомобиль целиком. */
-export function findCompletedBay(x: number, z: number, h: number, bays: readonly ParkingBay[]): ParkingBay | null {
+export function findCompletedBay(x: number, z: number, h: number, bays: readonly ParkingBay[], geo?: CarGeometry): ParkingBay | null {
   for (const bay of bays) {
-    if (isCarInsideBay(x, z, h, bay)) return bay;
+    if (isCarInsideBay(x, z, h, bay, 0.04, geo)) return bay;
   }
   return null;
 }
@@ -201,7 +202,7 @@ export function findBayUnderCarCenter(x: number, z: number, bays: readonly Parki
  * Проверка наезда углом кузова на боковую/заднюю сплошную линию разметки свободного бокса,
  * когда центр автомобиля уже зашёл в глубину бокса.
  */
-export function findBayLineCross(x: number, z: number, h: number, bays: readonly ParkingBay[]): ParkingBay | null {
+export function findBayLineCross(x: number, z: number, h: number, bays: readonly ParkingBay[], geo?: CarGeometry): ParkingBay | null {
   const corners = getCarCorners(x, z, h);
   for (const bay of bays) {
     if (bay.occupied) continue;
@@ -233,7 +234,7 @@ export function findBayLineCross(x: number, z: number, h: number, bays: readonly
 }
 
 /** Минимальное расстояние до правого края параллельного бокса (контроль прижатия к бордюру). */
-export function rightCurbClearance(x: number, z: number, h: number, bay: ParkingBay): number {
+export function rightCurbClearance(x: number, z: number, h: number, bay: ParkingBay, geo?: CarGeometry): number {
   const corners = getCarCorners(x, z, h);
   let minGap = Infinity;
   for (const c of corners) {
@@ -244,6 +245,6 @@ export function rightCurbClearance(x: number, z: number, h: number, bay: Parking
   return Math.max(0, minGap);
 }
 
-export function carBoundingRadius(): number {
-  return Math.hypot(CAR.length / 2 + 0.1, CAR.width / 2);
+export function carBoundingRadius(geo?: CarGeometry): number {
+  return Math.hypot((geo?.length ?? CAR.length) / 2 + 0.1, (geo?.width ?? CAR.width) / 2);
 }
