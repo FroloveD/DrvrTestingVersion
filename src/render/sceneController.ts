@@ -373,6 +373,9 @@ export class SceneController {
     this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 105);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
+    // Риг игрока (включая невидимые pick-меши органов салона) живёт на слое 1.
+    // Raycaster по умолчанию видит только слой 0: проекция работала, но все клики промахивались.
+    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
 
     // Физические 3D-зеркала в салоне: повышенное разрешение, прямой GPU-рендер и единый ACES tone mapping со сценой
     this.cockpitRearRT = new THREE.WebGLRenderTarget(512, 160, { depthBuffer: true });
