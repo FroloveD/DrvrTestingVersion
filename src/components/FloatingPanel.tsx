@@ -44,6 +44,12 @@ type Props = {
   id: string;
   /** Без подписи панель перемещается только за grip-поле или по длительному нажатию */
   title?: string;
+  label?: string;
+  collapsedSummary?: string;
+  collapsed?: boolean;
+  closed?: boolean;
+  onToggleCollapse?: (id: string) => void;
+  onClose?: (id: string) => void;
   icon?: string;
   layout: PanelLayout | undefined;
   defaults: (containerW: number, containerH: number) => PanelLayout;
@@ -68,6 +74,12 @@ type Props = {
 export function FloatingPanel({
   id,
   title,
+  label,
+  collapsedSummary,
+  collapsed = false,
+  closed = false,
+  onToggleCollapse,
+  onClose,
   icon = "grid",
   layout,
   defaults,
@@ -82,6 +94,7 @@ export function FloatingPanel({
   children,
 }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  if (closed) return null;
   const [fallback, setFallback] = useState<PanelLayout | null>(null);
   const [armed, setArmed] = useState(false);
   const current: PanelLayout = layout ?? fallback ?? { x: 12, y: 12, w: minW };
@@ -292,7 +305,7 @@ export function FloatingPanel({
       onDoubleClick={(e) => e.stopPropagation()}
       title={mode === "longPress" ? "Удерживайте 0,4 с — панель можно перетащить" : undefined}
     >
-      {title && (
+      {(title || label) && (
         <div
           onPointerDown={beginDrag("move")}
           onPointerMove={moveDrag}
@@ -302,8 +315,13 @@ export function FloatingPanel({
           title="Перетащите, чтобы переместить"
         >
           <Icon name={icon} size={11} />
-          <span className="truncate">{title}</span>
-          <span className="ml-auto text-[#5b6f7d]">⋮⋮</span>
+          <span className="truncate">{title ?? label}</span>
+          {collapsed && collapsedSummary && <span className="truncate text-[#5b6f7d]">{collapsedSummary}</span>}
+          <span className="ml-auto flex items-center gap-1">
+            {onToggleCollapse && <button type="button" aria-label={collapsed ? `Развернуть ${label ?? title}` : `Свернуть ${label ?? title}`} title={collapsed ? "Развернуть" : "Свернуть"} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#d3e0e7]">{collapsed ? "+" : "−"}</button>}
+            {onClose && <button type="button" aria-label={`Закрыть ${label ?? title}`} title="Закрыть панель" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="rounded px-1.5 hover:bg-white/10 text-[#ff9b9b]">×</button>}
+            <span className="text-[#5b6f7d]">⋮⋮</span>
+          </span>
         </div>
       )}
       {mode === "grip" && (
@@ -325,7 +343,7 @@ export function FloatingPanel({
           </svg>
         </button>
       )}
-      <div>{children}</div>
+      {!collapsed && <div>{children}</div>}
 
       {/* У педалей ручка находится над рабочей кнопкой и не перекрывает её. */}
       {mode !== "grip" && <div
