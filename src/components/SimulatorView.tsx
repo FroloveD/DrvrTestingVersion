@@ -329,6 +329,49 @@ export function SimulatorView({
   const [pedalVisual, setPedalVisual] = useState<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [immersive, setImmersive] = useState(false);
+  const previousUiHiddenRef = useRef(false);
+  const fullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
+  const leaveImmersive = useCallback(() => {
+    setImmersive(false);
+    setUiHidden(previousUiHiddenRef.current);
+    if (document.fullscreenElement === containerRef.current) {
+      void document.exitFullscreen().catch(() => {});
+    }
+    fullscreenButtonRef.current?.focus({ preventScroll: true });
+  }, []);
+  const enterImmersive = useCallback(() => {
+    const host = containerRef.current;
+    if (!host) return;
+    previousUiHiddenRef.current = uiHidden;
+    setShowHelp(false);
+    setImmersive(true);
+    setUiHidden(true);
+    // В iframe fullscreen может запрещаться Permissions Policy: CSS-режим остаётся рабочим.
+    if (host.requestFullscreen) void host.requestFullscreen().catch(() => {});
+  }, [uiHidden]);
+  useEffect(() => {
+    if (!immersive) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onFullscreenChange = () => {
+      if (document.fullscreenElement !== containerRef.current) leaveImmersive();
+    };
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.code === "Escape") { e.preventDefault(); leaveImmersive(); }
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [immersive, leaveImmersive]);
+  useEffect(() => {
+    if (!active && immersive) leaveImmersive();
+  }, [active, immersive, leaveImmersive]);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rearMirrorRef = useRef<HTMLCanvasElement | null>(null);
   const leftMirrorRef = useRef<HTMLCanvasElement | null>(null);
@@ -2409,6 +2452,16 @@ export function SimulatorView({
             <Icon name="sliders" size={13} /> Управление
           </button>
           <button
+            ref={fullscreenButtonRef}
+            type="button"
+            className="btn btn-mini"
+            data-testid="sim-fullscreen-enter"
+            onClick={enterImmersive}
+            title="Полноэкранная сцена без меню и панелей · U — вернуть приборы · Esc — выйти"
+          >
+            <Icon name="maximize" size={13} /> Полный экран
+          </button>
+          <button
             type="button"
             className="btn btn-primary btn-mini"
             onClick={handleFinishAndDebrief}
@@ -2610,9 +2663,22 @@ export function SimulatorView({
       {/* Главная 3D-сцена с зеркалами, статусом экзаменатора и органами управления */}
       <div
         ref={containerRef}
+        data-testid="sim-viewport"
+        data-immersive={immersive ? "true" : "false"}
         onContextMenu={(e) => e.preventDefault()}
         className="relative isolate w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"
       >
+        {immersive && (
+          <button
+            type="button"
+            data-testid="sim-fullscreen-exit"
+            onClick={leaveImmersive}
+            className="absolute right-3 top-3 z-[10000] rounded-lg border border-white/20 bg-[#0b131b]/90 px-3 py-2 text-xs text-white shadow-lg hover:border-[#f5b942]"
+            title="Выйти из полноэкранного режима (Esc)"
+          >
+            ✕ Выйти · Esc <span className="text-[#9bafbc]">| U — приборы</span>
+          </button>
+        )}
         <canvas
           ref={canvasRef}
           onPointerDown={handleCanvasPointerDown}

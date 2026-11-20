@@ -145,6 +145,32 @@ try {
   check("A2d навигация: все 7 вкладок видны на экране 1440 px", nav1440.ok, `нужно ${nav1440.need}px, есть ${nav1440.have}px`);
   await page.screenshot({ path: `${shotDir}/layout.png` });
 
+  // Fullscreen remains usable in embedded previews even when the browser denies the API.
+  await page.evaluate(() => {
+    const host = document.querySelector('[data-testid="sim-viewport"]');
+    Object.defineProperty(host, "requestFullscreen", { configurable: true,
+      value: () => Promise.reject(new Error("Fullscreen denied by iframe policy")) });
+  });
+  await page.getByTestId("sim-fullscreen-enter").click();
+  await until(() => page.evaluate(() => {
+    const host = document.querySelector('[data-testid="sim-viewport"]');
+    const r = host.getBoundingClientRect();
+    return host.dataset.immersive === "true" && Math.abs(r.width - innerWidth) < 2 && Math.abs(r.height - innerHeight) < 2;
+  }), 5000);
+  const full = await page.getByTestId("sim-viewport").boundingBox();
+  check("A2e fullscreen fallback fills viewport and hides HUD",
+    Math.abs(full.width - 1440) < 2 && Math.abs(full.height - 900) < 2 &&
+    await page.locator('[data-hud-panel="scorePanel"]').count() === 0);
+  await page.keyboard.press("Escape");
+  await until(() => page.evaluate(() => document.querySelector('[data-testid="sim-viewport"]')?.dataset.immersive === "false"), 5000);
+  check("A2f Esc exits fullscreen and restores HUD", await page.locator('[data-hud-panel="scorePanel"]').count() === 1);
+  await page.getByTestId("sim-fullscreen-enter").click();
+  await page.getByTestId("sim-fullscreen-exit").click();
+  check("A2g fullscreen exit button works without native API",
+    await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false");
+  await page.evaluate(() => { delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen; });
+
+
   await page.getByRole("button", { name: "Быстрый старт" }).click();
   await sleep(400);
   await page.keyboard.down("KeyW");
