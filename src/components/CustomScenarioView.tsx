@@ -283,6 +283,8 @@ function isEditableElement(target: EventTarget | null): boolean {
 }
 
 
+const EDITOR_PANEL_LABELS: Record<string, string> = { carRadio: "Автомобиль и радио", palette: "Инструменты и 2D-холст", inspector: "Инспектор", objects: "Объекты", bounds: "Параметры площадки" };
+
 function EditorPanelFrame({ id, title, collapsed, onToggle, onClose, children }: {
   id: string;
   title: string;
@@ -338,6 +340,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const toggleEditorCollapse = useCallback((id: string) => setEditorPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((x) => x !== id) : [...prev.collapsed, id] })), []);
   const closeEditorPanel = useCallback((id: string) => setEditorPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
   const restoreEditorPanel = useCallback((id: string) => setEditorPanelState((prev) => ({ ...prev, closed: prev.closed.filter((x) => x !== id) })), []);
+  const closedEditorPanelIds = editorPanelState.closed.filter((id) => EDITOR_PANEL_LABELS[id]);
   const validation = useMemo(() => validateCustomScenario(def), [def]);
   const blocked = validation.errors.length > 0;
   // Imported OSM geometry may contain editor-only validation warnings (e.g. large
@@ -816,6 +819,15 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         </div>
       )}
 
+      {closedEditorPanelIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-white/10 bg-[#0b141d] p-2" data-testid="editor-panel-restore">
+          <span className="mono text-[9px] text-[#7c909d]">ВОССТАНОВИТЬ ПАНЕЛИ</span>
+          {closedEditorPanelIds.map((id) => (
+            <button key={id} type="button" className="btn btn-mini" onClick={() => restoreEditorPanel(id)}>+ {EDITOR_PANEL_LABELS[id]}</button>
+          ))}
+          <button type="button" className="btn btn-mini" onClick={() => setEditorPanelState((prev) => ({ ...prev, closed: [] }))}>Все</button>
+        </div>
+      )}
       {/* === [SEC:custom-car] Выбор автомобиля и доступных радиостанций сценария === */}
       <section className="panel p-3.5 space-y-3" data-testid="editor-car-panel">
         <div className="flex flex-wrap items-center justify-between gap-2">
