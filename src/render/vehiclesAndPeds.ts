@@ -7,6 +7,8 @@
  */
 import * as THREE from "three";
 import type { ParkedModelKey } from "../sim/types";
+import { HORN_PICK } from "../sim/cockpitLayout";
+import { getPlayerCar } from "../sim/playerCar";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
 
 export type DetailedCarRig = {
@@ -28,9 +30,189 @@ export type DetailedCarRig = {
   rearMirrorGlass?: THREE.Mesh;
   leftMirrorGlass?: THREE.Mesh;
   rightMirrorGlass?: THREE.Mesh;
+  /** Живой 7" экран ШГУ Kia Ceed JD (навигация/ассистент в P/N/D и живая камера заднего вида в R). */
+  headUnitScreen?: THREE.Mesh;
+  rearCamScreen?: THREE.Mesh;
+  rearCamOverlay?: THREE.Mesh;
+  /** Анимированные физические органы управления в салоне Kia Ceed JD (в т.ч. интерактивный рычаг 6АКПП Shiftronic). */
+  gearLeverPivot?: THREE.Object3D;
+  gearGateDot?: THREE.Mesh;
+  gearGateDotMat?: THREE.MeshBasicMaterial;
+  gearKnobCapMat?: THREE.MeshStandardMaterial;
+  gearGateRimMat?: THREE.MeshStandardMaterial;
+  /** Невидимые коллайдеры рычага и пазов кулисы (`lever`, `P`, `R`, `N`, `D`, `M`, `M+`, `M-`) для raycast в салоне. */
+  shifterPickTargets?: THREE.Object3D[];
+  /** Невидимые коллайдеры органов салона (ШГУ, ручки VOL/TUNE, подрулевой, аварийка, START/STOP, ручник) для raycast. */
+  cockpitPickTargets?: THREE.Object3D[];
+  headUnitKnobL?: THREE.Object3D;
+  headUnitKnobR?: THREE.Object3D;
+  headlightSwitchPivot?: THREE.Object3D;
+  headlightSwitchMat?: THREE.MeshBasicMaterial;
+  handbrakePivot?: THREE.Object3D;
+  leftStalkPivot?: THREE.Object3D;
+  hazardBtnMat?: THREE.MeshBasicMaterial;
+  startBtnMat?: THREE.MeshBasicMaterial;
+  brakePedalPivot?: THREE.Object3D;
+  gasPedalPivot?: THREE.Object3D;
+  seatbeltStrap?: THREE.Object3D;
+  /** ДХО (DRL), конусы ближнего света и подсветка заднего госномера. */
+  drlMat?: THREE.MeshBasicMaterial;
+  plateLightMat?: THREE.MeshBasicMaterial;
+  headlightBeamGroup?: THREE.Group;
   /** Силуэт водителя (виден снаружи, скрывается в режиме камеры из салона). */
   driverGroup?: THREE.Group;
 };
+
+/** Идентификатор зоны интерактивного 3D-селектора 6АКПП Shiftronic в салоне Kia Ceed JD. */
+export type ShifterHitId = "lever" | "P" | "R" | "N" | "D" | "M" | "M+" | "M-";
+
+/** Идентификатор органа управления в салоне Kia Ceed JD для raycast (ШГУ, подрулевой, аварийка, START/STOP, ручник). */
+export type CockpitControlId =
+  | "headunit"
+  | "vol"
+  | "tune"
+  | "stalk-left"
+  | "headlight"
+  | "hazard"
+  | "start"
+  | "handbrake"
+  | "horn";
+
+/** Геометрия кулисы 6АКПП Shiftronic в локальных координатах кузова (`+X` к водителю, `+Z` вперёд). */
+export const SHIFTER_LAYOUT = {
+  gateX: 0.022,
+  gateY: 0.545,
+  gateOffsetZ: 0.44, // прибавляется к centerShiftZ = (frontOverhang - rearOverhang) * 0.5
+  mainRailX: 0.032,
+  manualRailX: 0.064,
+  mainDotX: 0.006,
+  manualDotX: 0.048,
+  knobPlaneY: 0.655,
+  offP: 0.058,
+  offR: 0.022,
+  offN: -0.014,
+  offD: -0.05,
+  offMPlus: -0.014,
+  offMMinus: -0.08,
+} as const;
+
+/**
+ * Текстура подсвеченной кулисы 6АКПП Shiftronic `P – R – N – D` + боковой ручной паз `+ / M / −`
+ * на центральном тоннеле Kia Ceed JD (160×320; `u=0` слева — сторона водителя `+X`, `v=1` сверху — вперёд `+Z`).
+ */
+function makeShifterGateTextureRaw(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 160;
+  c.height = 320;
+  const g = c.getContext("2d")!;
+
+  // Рояльный чёрный лак с тонкой металлической окантовкой
+  const bg = g.createLinearGradient(0, 0, 160, 320);
+  bg.addColorStop(0, "#151c26");
+  bg.addColorStop(0.5, "#0d1219");
+  bg.addColorStop(1, "#18212d");
+  g.fillStyle = bg;
+  g.fillRect(0, 0, 160, 320);
+
+  g.strokeStyle = "#94a3b8";
+  g.lineWidth = 5;
+  g.strokeRect(4, 4, 152, 312);
+  g.strokeStyle = "rgba(255,255,255,0.12)";
+  g.lineWidth = 1.5;
+  g.strokeRect(10, 10, 140, 300);
+
+  // Хромированная окантовка основной прорези P–R–N–D (x≈68) и ручного паза Shiftronic +/M/− слева к водителю (x≈28)
+  g.strokeStyle = "#64748b";
+  g.lineWidth = 22;
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  g.beginPath();
+  g.moveTo(68, 56);
+  g.lineTo(68, 246);
+  g.lineTo(28, 246);
+  g.moveTo(28, 186);
+  g.lineTo(28, 286);
+  g.stroke();
+
+  // Внутренняя тёмная прорезь кулисы со шторкой
+  g.strokeStyle = "#04060a";
+  g.lineWidth = 15;
+  g.beginPath();
+  g.moveTo(68, 56);
+  g.lineTo(68, 246);
+  g.lineTo(28, 246);
+  g.moveTo(28, 186);
+  g.lineTo(28, 286);
+  g.stroke();
+
+  // Тонкие риски фиксаторов P / R / N / D
+  g.strokeStyle = "rgba(148,163,184,0.38)";
+  g.lineWidth = 2;
+  for (const y of [63, 123, 183, 243]) {
+    g.beginPath();
+    g.moveTo(82, y);
+    g.lineTo(94, y);
+    g.stroke();
+  }
+
+  // Подсвеченные символы P – R – N – D справа от основной прорези
+  const labels: Array<[string, number, string]> = [
+    ["P", 63, "#f1f5f9"],
+    ["R", 123, "#ff6b6b"],
+    ["N", 183, "#cbd5e1"],
+    ["D", 243, "#52d6bd"],
+  ];
+  g.font = "900 32px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  for (const [txt, y, col] of labels) {
+    g.fillStyle = col;
+    g.fillText(txt, 124, y);
+  }
+
+  // Подсветка ручного паза Shiftronic (+ / M / −) со стороны водителя
+  g.fillStyle = "#f5b942";
+  g.font = "900 26px system-ui, sans-serif";
+  g.fillText("+", 28, 156);
+  g.fillText("−", 28, 304);
+  g.font = "800 17px system-ui, sans-serif";
+  g.fillStyle = "#fcd34d";
+  g.fillText("M", 49, 221);
+
+  // Нижняя микроподпись SHIFTRONIC
+  g.font = "700 11px system-ui, sans-serif";
+  g.fillStyle = "#7c909d";
+  g.fillText("SHIFT", 114, 294);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Текстура мягкого светового пятна ближнего света фар на дорожном полотне (128×256). */
+function makeHeadlightBeamTextureRaw(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 256;
+  const g = c.getContext("2d")!;
+  // v=0 (y=256) — у фары, v=1 (y=0) — затухание вдали
+  const grad = g.createLinearGradient(0, 256, 0, 0);
+  grad.addColorStop(0, "rgba(255,248,220,0.34)");
+  grad.addColorStop(0.35, "rgba(255,246,214,0.18)");
+  grad.addColorStop(0.75, "rgba(255,244,210,0.05)");
+  grad.addColorStop(1, "rgba(255,244,210,0)");
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(48, 256);
+  g.lineTo(80, 256);
+  g.lineTo(126, 0);
+  g.lineTo(2, 0);
+  g.closePath();
+  g.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 /** Плоскость зеркального полотна с горизонтально отражёнными UV (`u' = 1 - u`) для честного зеркала без CPU-readback. */
 function makeMirroredPlaneGeometry(width: number, height: number): THREE.PlaneGeometry {
@@ -188,7 +370,40 @@ function createDetailedWheelMesh(radius: number, width: number): THREE.Group {
   return g;
 }
 
-/** Строит детализированный учебный Kia Ceed JD (`isPlayer = true`) или автомобиль припаркованного автопарка. */
+/**
+ * Текстуры кулисы и светового пятна не зависят от машины, поэтому создаются один раз на вкладку:
+ * парк из пяти машин не плодит по копии canvas-текстуры на каждый кадр (и GPU-память не утекает
+ * при пересборке рига). Общая текстура освобождается вместе со сценой.
+ */
+let shifterGateTexCache: THREE.CanvasTexture | null = null;
+let headlightBeamTexCache: THREE.CanvasTexture | null = null;
+
+function makeShifterGateTexture(): THREE.CanvasTexture {
+  if (!shifterGateTexCache) shifterGateTexCache = makeShifterGateTextureRaw();
+  return shifterGateTexCache;
+}
+
+function makeHeadlightBeamTexture(): THREE.CanvasTexture {
+  if (!headlightBeamTexCache) headlightBeamTexCache = makeHeadlightBeamTextureRaw();
+  return headlightBeamTexCache;
+}
+
+/** Освобождает общие текстуры кулисы и лучей (вызывается при полном dispose сцены). */
+export function disposeSharedVehicleTextures(): void {
+  shifterGateTexCache?.dispose();
+  headlightBeamTexCache?.dispose();
+  shifterGateTexCache = null;
+  headlightBeamTexCache = null;
+}
+
+/**
+ * Строит детализированный автомобиль (`isPlayer = true` — машина игрока с полным салоном)
+ * или припаркованный автомобиль автопарка.
+ *
+ * Для машины игрока `model` — это её паспортный ключ парка (Picanto, Rio, Ceed, XCeed, Sorento):
+ * габариты кузова, база, колея, радиус колеса и предел выворота берутся из `sim/playerCar.ts`,
+ * поэтому риг совпадает с физикой (столкновения, клиренс в боксе, кадр из салона).
+ */
 export function buildDetailedCar(
   model: ParkedModelKey,
   bodyColor: number,
@@ -197,16 +412,31 @@ export function buildDetailedCar(
   learnerTex: THREE.CanvasTexture,
   plateTex: THREE.CanvasTexture,
   clusterTex: THREE.CanvasTexture,
-  mirrorHardwareLayer: number
+  mirrorHardwareLayer: number,
+  cockpitTextures?: {
+    headUnitTex: THREE.CanvasTexture;
+    rearOverlayTex: THREE.CanvasTexture;
+  }
 ): DetailedCarRig {
-  const dim = VEHICLE_DIMS[model];
+  // Машина игрока строится по своему паспорту парка, припаркованная — по прежним размерам модели
+  const playerSpec = isPlayer ? getPlayerCar(model) : null;
+  const dim = playerSpec
+    ? {
+        length: playerSpec.length,
+        width: playerSpec.width,
+        height: playerSpec.height,
+        wheelbase: playerSpec.wheelbase,
+      }
+    : VEHICLE_DIMS[model];
   const L = dim.length;
   const W = dim.width;
   const H = dim.height;
   const wb = dim.wheelbase;
-  const wr = isPlayer ? CAR.wheelRadius : model === "sorento" ? 0.35 : 0.3;
-  const ww = isPlayer ? CAR.wheelWidth : 0.205;
-  const centerShiftZ = isPlayer ? (CAR.frontOverhang - CAR.rearOverhang) / 2 : 0;
+  const wr = isPlayer && playerSpec ? playerSpec.wheelRadius : model === "sorento" ? 0.35 : 0.3;
+  const ww = isPlayer && playerSpec ? playerSpec.wheelWidth : 0.205;
+  const frontOverhang = playerSpec ? playerSpec.frontOverhang : CAR.frontOverhang;
+  const rearOverhang = playerSpec ? playerSpec.rearOverhang : CAR.rearOverhang;
+  const centerShiftZ = isPlayer ? (frontOverhang - rearOverhang) / 2 : 0;
 
   const root = new THREE.Group();
   const chassis = new THREE.Group();
@@ -221,20 +451,22 @@ export function buildDetailedCar(
   shadowPlane.position.set(0, 0.02, centerShiftZ);
   root.add(shadowPlane);
 
+  // Глянцевая автомобильная эмаль металлик (ловит блики 360°-неба и облаков из scene.environment без тяжёлого шейдера)
   const paintMat = new THREE.MeshStandardMaterial({
     color: bodyColor,
-    metalness: 0.44,
-    roughness: 0.26,
+    metalness: isPlayer ? 0.54 : 0.48,
+    roughness: isPlayer ? 0.18 : 0.24,
   });
-  const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x1b2129, roughness: 0.72, metalness: 0.12 });
-  const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.82, roughness: 0.18 });
+  const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x1b2129, roughness: 0.68, metalness: 0.14 });
+  const satinSilverMat = new THREE.MeshStandardMaterial({ color: 0xb8c4d0, metalness: 0.72, roughness: 0.28 });
+  const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe6edf5, metalness: 0.9, roughness: 0.12 });
   const plateMat = new THREE.MeshBasicMaterial({ map: plateTex });
   const glassMat = new THREE.MeshStandardMaterial({
-    color: isPlayer ? 0x9ec5e6 : 0x2f4358,
+    color: isPlayer ? 0xa6cce8 : 0x2b4158,
     transparent: true,
-    opacity: isPlayer ? 0.28 : 0.72,
-    roughness: 0.1,
-    metalness: 0.35,
+    opacity: isPlayer ? 0.22 : 0.76,
+    roughness: 0.08,
+    metalness: 0.45,
   });
 
   const isSuv = model === "sorento";
@@ -257,6 +489,30 @@ export function buildDetailedCar(
   let rearMirrorGlass: THREE.Mesh | undefined;
   let leftMirrorGlass: THREE.Mesh | undefined;
   let rightMirrorGlass: THREE.Mesh | undefined;
+  let headUnitScreen: THREE.Mesh | undefined;
+  let rearCamScreen: THREE.Mesh | undefined;
+  let rearCamOverlay: THREE.Mesh | undefined;
+  let gearLeverPivot: THREE.Object3D | undefined;
+  let gearGateDot: THREE.Mesh | undefined;
+  let gearGateDotMat: THREE.MeshBasicMaterial | undefined;
+  let gearKnobCapMat: THREE.MeshStandardMaterial | undefined;
+  let gearGateRimMat: THREE.MeshStandardMaterial | undefined;
+  let shifterPickTargets: THREE.Object3D[] | undefined;
+  let cockpitPickTargets: THREE.Object3D[] | undefined;
+  let headUnitKnobL: THREE.Object3D | undefined;
+  let headUnitKnobR: THREE.Object3D | undefined;
+  let headlightSwitchPivot: THREE.Object3D | undefined;
+  let headlightSwitchMat: THREE.MeshBasicMaterial | undefined;
+  let handbrakePivot: THREE.Object3D | undefined;
+  let leftStalkPivot: THREE.Object3D | undefined;
+  let hazardBtnMat: THREE.MeshBasicMaterial | undefined;
+  let startBtnMat: THREE.MeshBasicMaterial | undefined;
+  let brakePedalPivot: THREE.Object3D | undefined;
+  let gasPedalPivot: THREE.Object3D | undefined;
+  let seatbeltStrap: THREE.Object3D | undefined;
+  let drlMat: THREE.MeshBasicMaterial | undefined;
+  let plateLightMat: THREE.MeshBasicMaterial | undefined;
+  let headlightBeamGroup: THREE.Group | undefined;
   let driverGroup: THREE.Group | undefined;
 
   /** Назначает всем мешам узла зеркала выделенный слой, чтобы зеркала не рендерили сами себя. */
@@ -313,10 +569,54 @@ export function buildDetailedCar(
     frontLip.position.set(0, sillY + 0.02, frontFaceZ - 0.11);
     chassis.add(frontCore, hoodTop, frontLip);
 
+    // Характерные продольные выштамповки капота Kia Ceed JD (видны из салона для точного чувства передних габаритов),
+    // жабо лобового стекла, форсунки омывателя и бескаркасные дворники в зоне покоя
+    for (const side of [1, -1] as const) {
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.026, hoodLen * 0.78), paintMat);
+      rib.position.set(side * (W * 0.31), beltY + 0.002, frontFaceZ - hoodLen * 0.52);
+      rib.rotation.x = 0.105;
+      rib.rotation.y = -side * 0.055;
+      const nozzle = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.014, 0.032), darkTrimMat);
+      nozzle.position.set(side * 0.24, beltY + 0.038, frontFaceZ - hoodLen + 0.16);
+      chassis.add(rib, nozzle);
+    }
+    const cowl = new THREE.Mesh(new THREE.BoxGeometry(W * 0.88, 0.045, 0.16), darkTrimMat);
+    cowl.position.set(0, beltY + 0.022, frontFaceZ - hoodLen + 0.04);
+    const wiperL = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.014, 0.022), mirrorBezelMat);
+    wiperL.position.set(0.22, beltY + 0.058, frontFaceZ - hoodLen + 0.01);
+    wiperL.rotation.z = -0.045;
+    wiperL.rotation.y = 0.08;
+    const wiperR = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.014, 0.02), mirrorBezelMat);
+    wiperR.position.set(-0.28, beltY + 0.056, frontFaceZ - hoodLen + 0.02);
+    wiperR.rotation.z = -0.035;
+    wiperR.rotation.y = 0.06;
+    chassis.add(cowl, wiperL, wiperR);
+
     // Задний модуль хэтчбека + чёрный диффузор + хромированный выхлоп
     const trunk = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, lowerH * 0.98, trunkLen), paintMat);
     trunk.position.set(0, sillY + lowerH * 0.49, rearFaceZ + trunkLen / 2);
     trunk.castShadow = true;
+    // Для зеркала нужна верхняя поверхность кормы, а не передняя стенка грубого
+    // BoxGeometry (она скрыта салоном в обычном виде, но выглядит как висящий ящик
+    // при выборочном рендере). Отдельная поверхность — только для слоя отражения.
+    const rearReferenceGeometry = new THREE.BufferGeometry();
+    const refFrontZ = rearFaceZ + trunkLen * 0.78;
+    const refBackZ = rearFaceZ + 0.025;
+    const refY = sillY + lowerH * 0.98;
+    rearReferenceGeometry.setAttribute("position", new THREE.Float32BufferAttribute([
+      -W * 0.42, refY, refFrontZ,
+       W * 0.42, refY, refFrontZ,
+       W * 0.47, refY - 0.025, refBackZ,
+      -W * 0.42, refY, refFrontZ,
+       W * 0.47, refY - 0.025, refBackZ,
+      -W * 0.47, refY - 0.025, refBackZ,
+    ], 3));
+    rearReferenceGeometry.computeVertexNormals();
+    const rearReference = new THREE.Mesh(rearReferenceGeometry, paintMat);
+    rearReference.name = "rear-mirror-deck-reference";
+    rearReference.userData.rearMirrorOnly = true;
+    rearReference.receiveShadow = true;
+    chassis.add(rearReference);
     const diffuser = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.12, 0.18), darkTrimMat);
     diffuser.position.set(0, sillY + 0.05, rearFaceZ + 0.08);
     const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.14, 10), chromeMat);
@@ -361,27 +661,307 @@ export function buildDetailedCar(
     rearGlass.rotation.x = Math.PI + 0.52;
     chassis.add(windshield, rearGlass);
 
-    // Детализированный салон: торпедо, козырёк и шкалы приборов Supervision, ШГУ, тоннель АКПП, кресла и водитель
+    // Детализированный «живой» салон Kia Ceed JD: торпедо, Supervision, 7" ШГУ + R-камера, климат, АКПП, ручник, педали
     const dashZ = centerShiftZ + cabinLen * 0.35;
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.1, 0.24, 0.38), darkTrimMat);
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.1, 0.25, 0.4), darkTrimMat);
     dash.position.set(0, beltY - 0.055, dashZ + 0.02);
-    const binnacle = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 0.24), darkTrimMat);
-    binnacle.position.set(W * 0.23, beltY + 0.11, dashZ - 0.02);
+    // Мягкий верхний козырёк торпедо с серебристым молдингом Kia Ceed JD
+    const dashTopPad = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.15, 0.045, 0.36), mirrorBezelMat);
+    dashTopPad.position.set(0, beltY + 0.062, dashZ + 0.03);
+    const dashTrimStrip = new THREE.Mesh(new THREE.BoxGeometry(W - wall * 2.3, 0.014, 0.016), satinSilverMat);
+    dashTrimStrip.position.set(0, beltY - 0.028, dashZ - 0.175);
+
+    // Козырёк и наклонённый к глазам водителя щиток приборов Supervision (512×192)
+    const binnacle = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.155, 0.25), mirrorBezelMat);
+    binnacle.position.set(W * 0.23, beltY + 0.112, dashZ - 0.015);
+    const binnacleTrim = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.012, 0.02), satinSilverMat);
+    binnacleTrim.position.set(W * 0.23, beltY + 0.178, dashZ - 0.138);
     const cluster = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.34, 0.12),
-      new THREE.MeshBasicMaterial({ map: clusterTex })
+      new THREE.PlaneGeometry(0.356, 0.134),
+      new THREE.MeshBasicMaterial({ map: clusterTex, toneMapped: false })
     );
-    cluster.position.set(W * 0.23, beltY + 0.09, dashZ - 0.145);
+    cluster.position.set(W * 0.23, beltY + 0.098, dashZ - 0.156);
+    cluster.rotation.order = "YXZ";
     cluster.rotation.y = Math.PI;
-    const headUnit = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.22, 0.12),
-      new THREE.MeshBasicMaterial({ color: 0x172b3a })
+    cluster.rotation.x = 0.16;
+
+    // Кнопка запуска двигателя ENGINE START/STOP в хромированном кольце (справа от рулевой колонки)
+    const startRing = new THREE.Mesh(new THREE.CylinderGeometry(0.023, 0.025, 0.014, 14), chromeMat);
+    startRing.rotation.x = Math.PI / 2;
+    startRing.position.set(W * 0.118, beltY + 0.012, dashZ - 0.178);
+    startBtnMat = new THREE.MeshBasicMaterial({ color: 0xd97706, toneMapped: false });
+    const startCore = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.016, 14), startBtnMat);
+    startCore.rotation.x = Math.PI / 2;
+    startCore.position.set(W * 0.118, beltY + 0.012, dashZ - 0.18);
+
+    // Поворотный переключатель света фар слева от рулевой колонки (L) — как на реальном Kia Ceed JD
+    headlightSwitchMat = new THREE.MeshBasicMaterial({ color: 0x334155, toneMapped: false });
+    headlightSwitchPivot = new THREE.Group();
+    headlightSwitchPivot.position.set(W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.172);
+    const hlRing = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.014, 14), chromeMat);
+    hlRing.rotation.x = Math.PI / 2;
+    const hlKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.02, 12), headlightSwitchMat);
+    hlKnob.rotation.x = Math.PI / 2;
+    hlKnob.position.z = -0.008;
+    const hlMark = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.014, 0.004), new THREE.MeshBasicMaterial({ color: 0xf8fafc }));
+    hlMark.position.set(0, 0.01, -0.019);
+    headlightSwitchPivot.add(hlRing, hlKnob, hlMark);
+
+    // Боковые дефлекторы обдува и перчаточный ящик (бардачок) пассажира
+    for (const side of [1, -1] as const) {
+      const ventFrame = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.068, 0.018), satinSilverMat);
+      ventFrame.position.set(side * (W * 0.375), beltY + 0.018, dashZ - 0.176);
+      const ventCore = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.052, 0.02), mirrorBezelMat);
+      ventCore.position.set(side * (W * 0.375), beltY + 0.018, dashZ - 0.178);
+      chassis.add(ventFrame, ventCore);
+    }
+    const gloveHandle = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 0.016), satinSilverMat);
+    gloveHandle.position.set(-W * 0.24, beltY - 0.075, dashZ - 0.18);
+
+    // Центральная консоль Kia Ceed JD, слегка развёрнутая к водителю (+X)
+    const centerStack = new THREE.Group();
+    centerStack.position.set(0, beltY + 0.038, dashZ - 0.176);
+    centerStack.rotation.y = 0.09;
+    const huBezel = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.176, 0.036), mirrorBezelMat);
+    huBezel.position.set(0, 0.02, 0.01);
+    const huSilver = new THREE.Mesh(new THREE.BoxGeometry(0.272, 0.158, 0.014), satinSilverMat);
+    huSilver.position.set(0, 0.02, -0.006);
+
+    headUnitScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.246, 0.142),
+      cockpitTextures
+        ? new THREE.MeshBasicMaterial({ map: cockpitTextures.headUnitTex, toneMapped: false })
+        : new THREE.MeshBasicMaterial({ color: 0x102030 })
     );
-    headUnit.position.set(0, beltY + 0.02, dashZ - 0.176);
-    headUnit.rotation.y = Math.PI;
-    const consoleTunnel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.92), darkTrimMat);
-    consoleTunnel.position.set(0, sillY + 0.16, centerShiftZ + 0.18);
-    chassis.add(dash, binnacle, cluster, headUnit, consoleTunnel);
+    headUnitScreen.position.set(0, 0.02, -0.016);
+    headUnitScreen.rotation.y = Math.PI;
+    centerStack.add(huBezel, huSilver, headUnitScreen);
+
+    if (cockpitTextures) {
+      // Экран камеры заднего вида R (отражённые UV под cockpitRearRT + прозрачный слой парковочных линий Аккермана)
+      rearCamScreen = new THREE.Mesh(makeMirroredPlaneGeometry(0.246, 0.142), mirrorDefaultGlassMat);
+      rearCamScreen.position.set(0, 0.02, -0.016);
+      rearCamScreen.rotation.y = Math.PI;
+      rearCamScreen.visible = false;
+      rearCamOverlay = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.246, 0.142),
+        new THREE.MeshBasicMaterial({
+          map: cockpitTextures.rearOverlayTex,
+          transparent: true,
+          depthWrite: false,
+          toneMapped: false,
+        })
+      );
+      rearCamOverlay.position.set(0, 0.02, -0.019);
+      rearCamOverlay.rotation.y = Math.PI;
+      rearCamOverlay.visible = false;
+      centerStack.add(rearCamScreen, rearCamOverlay);
+    }
+
+    // Шайбы громкости/настройки VOL·TUNE и боковые центральные дефлекторы
+    for (const side of [1, -1] as const) {
+      const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.018, 12), chromeMat);
+      knob.rotation.x = Math.PI / 2;
+      knob.position.set(side * 0.142, -0.036, -0.012);
+      knob.userData.cockpitControl = (side === 1 ? "vol" : "tune") satisfies CockpitControlId;
+      if (side === 1) headUnitKnobL = knob;
+      else headUnitKnobR = knob;
+      const cVent = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.135, 0.022), mirrorBezelMat);
+      cVent.position.set(side * 0.185, 0.018, 0.004);
+      centerStack.add(knob, cVent);
+    }
+
+    // Красная кнопка аварийной сигнализации ▲ (мигает при включённой аварийке Z)
+    hazardBtnMat = new THREE.MeshBasicMaterial({ color: 0x991b1b, toneMapped: false });
+    const hazardBtn = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.026, 0.016), hazardBtnMat);
+    hazardBtn.position.set(0, -0.082, -0.01);
+
+    // Блок двухзонного климат-контроля с двумя хромированными шайбами и фирменной тёплой подсветкой Kia
+    const climatePanel = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.072, 0.026), mirrorBezelMat);
+    climatePanel.position.set(0, -0.138, 0.002);
+    const kiaBacklightMat = new THREE.MeshBasicMaterial({ color: 0xea580c });
+    const climateLcd = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.026), kiaBacklightMat);
+    climateLcd.position.set(0, -0.134, -0.0145);
+    climateLcd.rotation.y = Math.PI;
+    for (const side of [1, -1] as const) {
+      const dial = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.024, 0.02, 14), chromeMat);
+      dial.rotation.x = Math.PI / 2;
+      dial.position.set(side * 0.095, -0.138, -0.012);
+      const dialCenter = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.022, 12), mirrorBezelMat);
+      dialCenter.rotation.x = Math.PI / 2;
+      dialCenter.position.set(side * 0.095, -0.138, -0.013);
+      centerStack.add(dial, dialCenter);
+    }
+    centerStack.add(hazardBtn, climatePanel, climateLcd);
+
+    // Центральный тоннель, интерактивный селектор 6АКПП Shiftronic (P–R–N–D + M+/−), ручник и подлокотник
+    const consoleTunnel = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.252, 0.96), darkTrimMat);
+    consoleTunnel.position.set(0, sillY + 0.175, centerShiftZ + 0.18);
+    const consoleArmrest = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.09, 0.34), mirrorBezelMat);
+    consoleArmrest.position.set(0, sillY + 0.33, centerShiftZ - 0.12);
+
+    const gateZ = centerShiftZ + SHIFTER_LAYOUT.gateOffsetZ;
+    const gateY = SHIFTER_LAYOUT.gateY;
+    gearGateRimMat = new THREE.MeshStandardMaterial({
+      color: 0xb8c4d0,
+      metalness: 0.72,
+      roughness: 0.28,
+      emissive: 0x000000,
+      emissiveIntensity: 0,
+    });
+    const gateBezel = new THREE.Mesh(new THREE.BoxGeometry(0.148, 0.014, 0.21), gearGateRimMat);
+    gateBezel.position.set(SHIFTER_LAYOUT.gateX, gateY, gateZ);
+    const gatePlate = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.128, 0.192),
+      new THREE.MeshBasicMaterial({ map: makeShifterGateTexture(), toneMapped: false })
+    );
+    gatePlate.rotation.x = -Math.PI / 2;
+    gatePlate.rotation.z = Math.PI;
+    gatePlate.position.set(SHIFTER_LAYOUT.gateX, gateY + 0.008, gateZ);
+
+    gearGateDotMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, toneMapped: false });
+    gearGateDot = new THREE.Mesh(new THREE.CircleGeometry(0.0068, 12), gearGateDotMat);
+    gearGateDot.rotation.x = -Math.PI / 2;
+    gearGateDot.position.set(SHIFTER_LAYOUT.mainDotX, gateY + 0.0095, gateZ + SHIFTER_LAYOUT.offP);
+
+    gearLeverPivot = new THREE.Group();
+    gearLeverPivot.position.set(SHIFTER_LAYOUT.mainRailX, gateY + 0.006, gateZ + SHIFTER_LAYOUT.offP);
+    const shiftBoot = new THREE.Mesh(new THREE.ConeGeometry(0.033, 0.05, 10), mirrorBezelMat);
+    shiftBoot.position.y = 0.023;
+    const shiftCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.016, 10), chromeMat);
+    shiftCollar.position.y = 0.098;
+    const shiftShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0072, 0.0082, 0.106, 10), chromeMat);
+    shiftShaft.position.y = 0.068;
+    const shiftKnob = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.042, 0.072), mirrorBezelMat);
+    shiftKnob.position.set(0, 0.128, 0.006);
+    gearKnobCapMat = new THREE.MeshStandardMaterial({
+      color: 0xc2ceda,
+      metalness: 0.74,
+      roughness: 0.25,
+      emissive: 0x000000,
+      emissiveIntensity: 0,
+    });
+    const shiftKnobCap = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.011, 0.054), gearKnobCapMat);
+    shiftKnobCap.position.set(0, 0.15, 0.006);
+    // Передняя хромированная клавиша снятия блокировки P/R (как на реальном селекторе Kia Ceed JD)
+    const shiftTrigger = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.018, 0.01), chromeMat);
+    shiftTrigger.position.set(0, 0.124, 0.043);
+    gearLeverPivot.add(shiftBoot, shiftShaft, shiftCollar, shiftKnob, shiftKnobCap, shiftTrigger);
+
+    // Невидимые точные зоны наведения/клика/перетаскивания 3D-рычага АКПП и пазов кулисы
+    const hitMat = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      colorWrite: false,
+    });
+    const knobHit = new THREE.Mesh(new THREE.BoxGeometry(0.092, 0.165, 0.098), hitMat);
+    knobHit.position.set(0, 0.098, 0.006);
+    knobHit.userData.shifterHit = "lever" satisfies ShifterHitId;
+    gearLeverPivot.add(knobHit);
+
+    const slotGroup = new THREE.Group();
+    const slotDefs: Array<[ShifterHitId, number, number, number, number]> = [
+      ["P", 0.008, SHIFTER_LAYOUT.offP, 0.088, 0.034],
+      ["R", 0.008, SHIFTER_LAYOUT.offR, 0.088, 0.034],
+      ["N", 0.008, SHIFTER_LAYOUT.offN, 0.088, 0.034],
+      ["D", 0.0, SHIFTER_LAYOUT.offD, 0.072, 0.036],
+      ["M", SHIFTER_LAYOUT.manualRailX, SHIFTER_LAYOUT.offD, 0.042, 0.03],
+      ["M+", SHIFTER_LAYOUT.manualRailX, SHIFTER_LAYOUT.offMPlus, 0.044, 0.04],
+      ["M-", SHIFTER_LAYOUT.manualRailX, SHIFTER_LAYOUT.offMMinus, 0.044, 0.034],
+    ];
+    shifterPickTargets = [knobHit];
+    for (const [id, sx, sz, sw, sd] of slotDefs) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.02, sd), hitMat);
+      m.position.set(sx, gateY + 0.014, gateZ + sz);
+      m.userData.shifterHit = id;
+      slotGroup.add(m);
+      shifterPickTargets.push(m);
+    }
+    chassis.add(slotGroup);
+
+    // Рычаг стояночного тормоза (поднят на холодном старте, опускается при снятии Space)
+    handbrakePivot = new THREE.Group();
+    handbrakePivot.position.set(-0.052, gateY + 0.012, centerShiftZ + 0.1);
+    handbrakePivot.rotation.x = -0.44;
+    const hbArm = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.03, 0.2), mirrorBezelMat);
+    hbArm.position.set(0, 0.015, 0.095);
+    const hbBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.024, 8), chromeMat);
+    hbBtn.rotation.x = Math.PI / 2;
+    hbBtn.position.set(0, 0.016, 0.2);
+    handbrakePivot.add(hbArm, hbBtn);
+
+    // Педальный узел АКПП в нише водителя (широкая педаль тормоза слева + напольная педаль газа справа)
+    brakePedalPivot = new THREE.Group();
+    brakePedalPivot.position.set(W * 0.245, sillY + 0.26, dashZ + 0.04);
+    const bArm = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.15, 0.018), darkTrimMat);
+    bArm.position.set(0, -0.07, -0.03);
+    const bPad = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.052, 0.016), satinSilverMat);
+    bPad.position.set(0, -0.135, -0.048);
+    brakePedalPivot.add(bArm, bPad);
+
+    gasPedalPivot = new THREE.Group();
+    gasPedalPivot.position.set(W * 0.165, sillY + 0.25, dashZ + 0.06);
+    const gArm = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.16, 0.014), darkTrimMat);
+    gArm.position.set(0, -0.075, -0.02);
+    const gPad = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.105, 0.014), satinSilverMat);
+    gPad.position.set(0, -0.13, -0.032);
+    gasPedalPivot.add(gArm, gPad);
+
+    // Потолочная консоль плафона освещения и очечника
+    const domeConsole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.022, 0.18), darkTrimMat);
+    domeConsole.position.set(0, roofY - 0.032, centerShiftZ + 0.56);
+
+    // Невидимые зоны клика по органам салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, ENGINE START/STOP,
+    // поворотный переключатель света фар, левый подрулевой (поворотники) и рычаг стояночного тормоза.
+    const pickGroup = new THREE.Group();
+    const pickMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+    const addPick = (id: CockpitControlId, x: number, y: number, z: number, sx: number, sy: number, sz: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), pickMat);
+      m.position.set(x, y, z);
+      m.userData.cockpitControl = id;
+      pickGroup.add(m);
+      return m;
+    };
+    cockpitPickTargets = [
+      addPick("headunit", 0.0, beltY + 0.058, dashZ - 0.2, 0.238, 0.152, 0.03),
+      addPick("vol", 0.142, beltY + 0.002, dashZ - 0.201, 0.05, 0.05, 0.032),
+      addPick("tune", -0.142, beltY + 0.002, dashZ - 0.201, 0.05, 0.05, 0.032),
+      addPick("hazard", 0.0, beltY - 0.044, dashZ - 0.201, 0.056, 0.044, 0.032),
+      addPick("start", W * 0.118, beltY + 0.012, dashZ - 0.196, 0.056, 0.056, 0.032),
+      addPick("headlight", W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.19, 0.062, 0.062, 0.032),
+      addPick("stalk-left", W * 0.23 + 0.112, 0.9, centerShiftZ + 0.55, 0.15, 0.07, 0.07),
+      addPick("handbrake", -0.052, gateY + 0.055, centerShiftZ + 0.19, 0.07, 0.085, 0.24),
+      // Сигнал: накладка ступицы, зона заметно уже обода (0,062 м против радиуса 0,172 м) и смещена от консоли.
+      // Широкая зона перехватывала бы клики по кулисе АКПП и шайбам ШГУ, которые лежат ниже и правее (смоук K7c/K7d).
+      // Раскладка и зазоры — чистый модуль `sim/cockpitLayout.ts`, проверяются T41.
+      addPick(HORN_PICK.id as CockpitControlId, HORN_PICK.cx, HORN_PICK.cy, HORN_PICK.cz, HORN_PICK.sx, HORN_PICK.sy, HORN_PICK.sz),
+    ];
+    chassis.add(pickGroup);
+
+    chassis.add(
+      dash,
+      dashTopPad,
+      dashTrimStrip,
+      binnacle,
+      binnacleTrim,
+      cluster,
+      startRing,
+      startCore,
+      headlightSwitchPivot,
+      gloveHandle,
+      centerStack,
+      consoleTunnel,
+      consoleArmrest,
+      gateBezel,
+      gatePlate,
+      gearGateDot,
+      gearLeverPivot,
+      handbrakePivot,
+      brakePedalPivot,
+      gasPedalPivot,
+      domeConsole
+    );
 
     const seatMat = new THREE.MeshStandardMaterial({ color: 0x28313c, roughness: 0.86 });
     const doorCardMat = new THREE.MeshStandardMaterial({ color: 0x202730, roughness: 0.8 });
@@ -394,19 +974,38 @@ export function buildDetailedCar(
       const headrest = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.09), seatMat);
       headrest.position.set(side * W * 0.24, 1.04, centerShiftZ - 0.23);
 
-      // Внутренняя обшивка передних дверей с подлокотником и хромированной ручкой
+      // Внутренняя обшивка передних дверей с подлокотником, блоком стеклоподъёмников, динамиком и ручкой
       const doorCard = new THREE.Mesh(new THREE.BoxGeometry(0.028, lowerH - 0.08, cabinLen * 0.48), doorCardMat);
       doorCard.position.set(side * (W / 2 - wall - 0.012), sillY + 0.06 + (lowerH - 0.08) / 2, centerShiftZ + 0.36);
-      const armrest = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.045, 0.42), darkTrimMat);
-      armrest.position.set(side * (W / 2 - wall - 0.032), beltY - 0.16, centerShiftZ + 0.3);
+      const doorTrimLine = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.014, 0.54), satinSilverMat);
+      doorTrimLine.position.set(side * (W / 2 - wall - 0.027), beltY - 0.055, centerShiftZ + 0.4);
+      const armrest = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.045, 0.44), darkTrimMat);
+      armrest.position.set(side * (W / 2 - wall - 0.032), beltY - 0.16, centerShiftZ + 0.32);
+      const switchPod = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.012, 0.13), mirrorBezelMat);
+      switchPod.position.set(side * (W / 2 - wall - 0.035), beltY - 0.134, centerShiftZ + 0.44);
       const innerPull = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.024, 0.09), chromeMat);
-      innerPull.position.set(side * (W / 2 - wall - 0.028), beltY - 0.09, centerShiftZ + 0.48);
+      innerPull.position.set(side * (W / 2 - wall - 0.028), beltY - 0.09, centerShiftZ + 0.5);
+      // Катушка ремня безопасности на средней стойке B
+      const beltAnchor = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.055), mirrorBezelMat);
+      beltAnchor.position.set(side * (W * 0.41), 1.12, centerShiftZ - 0.14);
       // Сложенный солнцезащитный козырёк под кромкой потолка (не перекрывает обзор)
       const visor = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.018, 0.13), seatMat);
       visor.position.set(side * 0.36, roofY - 0.034, centerShiftZ + roofLen * 0.4 - 0.03);
       visor.rotation.x = 0.08;
-      chassis.add(cushion, seatBack, headrest, doorCard, armrest, innerPull, visor);
+      chassis.add(cushion, seatBack, headrest, doorCard, doorTrimLine, armrest, switchPod, innerPull, beltAnchor, visor);
     }
+
+    // Диагональная лента пристёгнутого ремня безопасности водителя (появляется при нажатии B)
+    const strap = new THREE.Mesh(
+      new THREE.BoxGeometry(0.048, 0.62, 0.01),
+      new THREE.MeshStandardMaterial({ color: 0x11151b, roughness: 0.7 })
+    );
+    strap.position.set(W * 0.25, 0.84, centerShiftZ - 0.08);
+    strap.rotation.z = -0.56;
+    strap.rotation.x = -0.18;
+    strap.visible = false;
+    seatbeltStrap = strap;
+    chassis.add(strap);
 
     // Физическое салонное зеркало заднего вида под верхним краем лобового стекла (с живым отражением в «Салоне»)
     const rearMirrorAssembly = new THREE.Group();
@@ -526,27 +1125,67 @@ export function buildDetailedCar(
   rPlate.rotation.y = Math.PI;
   chassis.add(grilleChrome, grilleMesh, lowerIntake, fPlate, rPlate);
 
-  // Трёхспицевое рулевое колесо в салоне (+X — левая сторона)
+  // Трёхспицевое мультирулевое колесо Kia Ceed JD (+X — левая сторона), кожух колонки и подрулевые рычажки
   const steerWheelMesh = new THREE.Group();
-  steerWheelMesh.position.set(W * 0.23, 0.92, centerShiftZ + 0.48);
-  steerWheelMesh.rotation.x = 0.35;
+  steerWheelMesh.position.set(W * 0.23, 0.905, centerShiftZ + 0.485);
+  steerWheelMesh.rotation.x = 0.34;
   if (isPlayer) {
     const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(0.17, 0.021, 10, 24),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 })
+      new THREE.TorusGeometry(0.172, 0.0195, 12, 28),
+      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.42, metalness: 0.08 })
     );
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.066, 0.04, 14), darkTrimMat);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.064, 0.04, 16), mirrorBezelMat);
     hub.rotation.x = Math.PI / 2;
-    const barH = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.03, 0.022), darkTrimMat);
-    const barV = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.15, 0.022), darkTrimMat);
-    barV.position.y = -0.085;
+    const badgeRing = new THREE.Mesh(new THREE.RingGeometry(0.019, 0.024, 16), chromeMat);
+    badgeRing.rotation.y = Math.PI;
+    badgeRing.position.z = -0.021;
+    badgeRing.scale.set(1.35, 0.78, 1);
+    const barH = new THREE.Mesh(new THREE.BoxGeometry(0.305, 0.028, 0.022), darkTrimMat);
+    barH.position.y = -0.012;
+    // Мультикнопки на левой и правой спицах и серебристая V-вставка нижней спицы Kia Ceed JD
+    for (const sgn of [1, -1] as const) {
+      const btnPad = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.038, 0.026), satinSilverMat);
+      btnPad.position.set(sgn * 0.108, -0.01, -0.004);
+      steerWheelMesh.add(btnPad);
+    }
+    // Кнопка сигнала в центре ступицы: чёрная накладка с эмблемой-гудком, отличается от накладок спиц
+    const hornPad = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.046, 0.05, 0.014, 18),
+      new THREE.MeshStandardMaterial({ color: 0x0b1118, roughness: 0.6, metalness: 0.18 })
+    );
+    hornPad.rotation.x = Math.PI / 2;
+    hornPad.position.z = -0.026;
+    const hornGlyph = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.017, 14), chromeMat);
+    hornGlyph.position.z = -0.036;
+    hornGlyph.scale.set(1.3, 0.85, 1);
+    const barV = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.135, 0.022), satinSilverMat);
+    barV.position.y = -0.092;
     const marker = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.046, 0.032),
+      new THREE.BoxGeometry(0.024, 0.042, 0.042),
       new THREE.MeshBasicMaterial({ color: 0xf5b942 })
     );
-    marker.position.set(0, 0.17, 0);
-    steerWheelMesh.add(rim, hub, barH, barV, marker);
-    chassis.add(steerWheelMesh);
+    marker.position.set(0, 0.172, 0);
+    steerWheelMesh.add(rim, hub, badgeRing, barH, barV, marker, hornPad, hornGlyph);
+
+    // Кожух рулевой колонки и подрулевые переключатели (левый — поворотники Q/E, правый — стеклоочистители)
+    const colShroud = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.095, 0.16), darkTrimMat);
+    colShroud.position.set(W * 0.23, 0.875, centerShiftZ + 0.585);
+    colShroud.rotation.x = 0.24;
+
+    leftStalkPivot = new THREE.Group();
+    leftStalkPivot.position.set(W * 0.23 + 0.052, 0.892, centerShiftZ + 0.55);
+    const lStalk = new THREE.Mesh(new THREE.CylinderGeometry(0.0075, 0.0105, 0.115, 8), mirrorBezelMat);
+    lStalk.rotation.z = -Math.PI * 0.44;
+    lStalk.position.set(0.052, 0.012, 0);
+    leftStalkPivot.add(lStalk);
+
+    const rStalk = new THREE.Mesh(new THREE.CylinderGeometry(0.0075, 0.0105, 0.11, 8), mirrorBezelMat);
+    rStalk.rotation.z = Math.PI * 0.44;
+    rStalk.position.set(W * 0.23 - 0.102, 0.904, centerShiftZ + 0.55);
+
+    chassis.add(steerWheelMesh, colShroud, leftStalkPivot, rStalk);
+
+    // Невидимые зоны клика по органам салона создаются ниже, рядом с геометрией торпедо и тоннеля.
   }
 
   // Блок-фары, ПТФ, двухсекционные задние фонари, катафоты, зеркала и поворотники (+X левый, -X правый)
@@ -669,6 +1308,40 @@ export function buildDetailedCar(
     headSpotL = makeSpot(W * 0.34);
     headSpotR = makeSpot(-W * 0.34);
 
+    // Фирменные светодиодные ДХО (DRL) Kia Ceed JD (загораются при запуске ДВС) и подсветка заднего госномера
+    drlMat = new THREE.MeshBasicMaterial({ color: 0x64748b, toneMapped: false });
+    for (const side of [1, -1] as const) {
+      const drlBrow = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.018, 0.016), drlMat);
+      drlBrow.position.set(side * (W * 0.34), grilleY + 0.072, frontZ + 0.014);
+      const drlLower = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.022, 0.016), drlMat);
+      drlLower.position.set(side * (W * 0.385), sillY + 0.205, frontZ + 0.01);
+      chassis.add(drlBrow, drlLower);
+    }
+    plateLightMat = new THREE.MeshBasicMaterial({ color: 0x334155, toneMapped: false });
+    const plateLamp = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.012, 0.018), plateLightMat);
+    plateLamp.position.set(0, sillY + lowerH * 0.52 + 0.064, rearZ - 0.014);
+    chassis.add(plateLamp);
+
+    // Мягкие световые пучки ближнего света фар на асфальте (включаются по L при работающем ДВС)
+    headlightBeamGroup = new THREE.Group();
+    const beamMat = new THREE.MeshBasicMaterial({
+      map: makeHeadlightBeamTexture(),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+    const beamLen = 11.5;
+    for (const side of [1, -1] as const) {
+      const beam = new THREE.Mesh(new THREE.PlaneGeometry(3.1, beamLen), beamMat);
+      beam.rotation.x = -Math.PI / 2;
+      beam.rotation.z = Math.PI;
+      beam.position.set(side * (W * 0.32), 0.048, frontFaceZ + beamLen * 0.5 + 0.25);
+      headlightBeamGroup.add(beam);
+    }
+    headlightBeamGroup.visible = false;
+    root.add(headlightBeamGroup);
+
     const signGrp = new THREE.Group();
     signGrp.position.set(0, H + 0.13, centerShiftZ - 0.12);
     const pad = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.028, 0.15), darkTrimMat);
@@ -719,6 +1392,30 @@ export function buildDetailedCar(
     rearMirrorGlass,
     leftMirrorGlass,
     rightMirrorGlass,
+    headUnitScreen,
+    rearCamScreen,
+    rearCamOverlay,
+    gearLeverPivot,
+    gearGateDot,
+    gearGateDotMat,
+    gearKnobCapMat,
+    gearGateRimMat,
+    shifterPickTargets,
+    cockpitPickTargets,
+    headUnitKnobL,
+    headUnitKnobR,
+    headlightSwitchPivot,
+    headlightSwitchMat,
+    handbrakePivot,
+    leftStalkPivot,
+    hazardBtnMat,
+    startBtnMat,
+    brakePedalPivot,
+    gasPedalPivot,
+    seatbeltStrap,
+    drlMat,
+    plateLightMat,
+    headlightBeamGroup,
     driverGroup,
   };
 }
