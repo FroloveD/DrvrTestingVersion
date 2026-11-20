@@ -1044,7 +1044,7 @@ export class SceneController {
       const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
       const inManualGate = /^[1-6]$/.test(state.gear);
       const dragPulse = inManualGate ? this.shifterManualPulse * 0.022 : 0;
-      const shiftPulse = inManualGate && dragPulse === 0 && state.shiftTimer > 0 ? 0.015 : dragPulse;
+      const shiftPulse = inManualGate && dragPulse === 0 && (state.shiftTimer ?? 0) > 0 ? 0.015 : dragPulse;
       const gOff = state.gear === "P" ? SHIFTER_LAYOUT.offP : state.gear === "R" ? SHIFTER_LAYOUT.offR :
         state.gear === "N" ? SHIFTER_LAYOUT.offN : SHIFTER_LAYOUT.offD + shiftPulse;
       rig.gearLeverPivot.position.x = inManualGate ? SHIFTER_LAYOUT.manualRailX : SHIFTER_LAYOUT.mainRailX;
