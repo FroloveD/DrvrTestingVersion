@@ -204,6 +204,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const [snapStep, setSnapStep] = useState<number>(0.5);
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [fitSignal, setFitSignal] = useState<number>(0);
+  const [focusSignal, setFocusSignal] = useState<number>(0);
   const [draftBoundary, setDraftBoundary] = useState<Vec2[]>([]);
 
   // Параметры добавляемого объекта в палитре
@@ -228,6 +229,60 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   // footprints) while still being a valid renderable simulator world. Do not trap
   // the user in the editor when a parsed road network is available.
   const canOpenInSimulator = !blocked || Boolean(def.mapMeta && (def.roads?.length ?? 0) > 0);
+
+  // Привязываем текст замечания к реальному объекту, чтобы переход не зависел от
+  // хрупких индексов массива: после исправления состава карты ID остаётся стабильным.
+  const focusValidationIssue = (message: string) => {
+    let target: EditorSelection | null = null;
+    const byLabel = (label: string) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\  const canOpenInSimulator = !blocked || Boolean(def.mapMeta && (def.roads?.length ?? 0) > 0);
+
+  const commitChange");
+    const quoted = message.match(/[«"]([^»"]+)[»"]/);
+    const idMatch = message.match(/(?:№|#)\s*(\d+)/);
+
+    if (/стартовая позиция|на старте/i.test(message)) {
+      target = { kind: "start" };
+    } else if (/контур границы|границ[аы] мира|полуразмер площадки|площадк[аи]/i.test(message)) {
+      target = def.boundaryPolygon?.length ? { kind: "boundary_point", index: 0 } : null;
+    } else if (/бокс/i.test(message)) {
+      const id = idMatch?.[1] ? Number(idMatch[1]) : Number(message.match(/бокс\s+(\d+)/i)?.[1]);
+      const item = def.bays.find((b) => b.id === id);
+      if (item) target = { kind: "bay", id: item.id };
+    } else if (/препятств|контакт с:/i.test(message)) {
+      const label = quoted?.[1];
+      const item = def.obstacles.find((o) => o.id === label || o.label === label);
+      if (item) target = { kind: "obstacle", id: item.id };
+    } else if (/дорог/i.test(message)) {
+      const label = quoted?.[1];
+      const item = def.roads?.find((r) => r.id === label || r.name === label);
+      if (item) target = { kind: "road", id: item.id };
+    } else if (/знак/i.test(message)) {
+      const label = quoted?.[1];
+      const item = def.signs?.find((s) => s.id === label || s.label === label);
+      if (item) target = { kind: "sign", id: item.id };
+    } else if (/светофор/i.test(message)) {
+      const label = quoted?.[1] ?? message.match(/светофор\s+(\S+)/i)?.[1];
+      const item = def.signals?.find((s) => s.id === label);
+      if (item) target = { kind: "signal", id: item.id };
+    } else if (/переход/i.test(message)) {
+      const label = quoted?.[1] ?? message.match(/переход\s+(\S+)/i)?.[1];
+      const item = def.crosswalks?.find((x) => x.id === label);
+      if (item) target = { kind: "crosswalk", id: item.id };
+    } else if (/точк[аи]/i.test(message)) {
+      const label = quoted?.[1];
+      const item = def.checkpoints.find((x) => x.id === label);
+      if (item) target = { kind: "checkpoint", id: item.id };
+    }
+
+    setTool("select");
+    setSelection(target);
+    if (target) {
+      setFocusSignal((n) => n + 1);
+    } else {
+      // Для общих замечаний без однозначного объекта показываем всю карту.
+      setFitSignal((n) => n + 1);
+    }
+  };
 
   const commitChange = useCallback(
     (next: CustomScenarioDef, before: CustomScenarioDef = def) => {
@@ -559,16 +614,30 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
       {(blocked || validation.warnings.length > 0) && (
         <div className="panel p-3.5 space-y-1">
           {validation.errors.map((e, i) => (
-            <div key={`e${i}`} className="flex gap-2 text-[12px] text-[#ff9494]">
+            <button
+              key={`e${i}`}
+              type="button"
+              onClick={() => focusValidationIssue(e)}
+              title="Перейти к объекту или области карты, связанной с замечанием"
+              className="w-full flex gap-2 text-left text-[12px] text-[#ff9494] hover:bg-[#ff9494]/10 rounded px-1.5 py-1 transition-colors cursor-pointer"
+            >
               <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
               <span>{e}</span>
-            </div>
+              <Icon name="crosshair" size={13} className="shrink-0 mt-0.5 ml-auto opacity-60" />
+            </button>
           ))}
           {validation.warnings.map((w, i) => (
-            <div key={`w${i}`} className="flex gap-2 text-[12px] text-[#f5d78a]">
+            <button
+              key={`w${i}`}
+              type="button"
+              onClick={() => focusValidationIssue(w)}
+              title="Перейти к объекту или области карты, связанной с замечанием"
+              className="w-full flex gap-2 text-left text-[12px] text-[#f5d78a] hover:bg-[#f5d78a]/10 rounded px-1.5 py-1 transition-colors cursor-pointer"
+            >
               <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
               <span>{w}</span>
-            </div>
+              <Icon name="crosshair" size={13} className="shrink-0 mt-0.5 ml-auto opacity-60" />
+            </button>
           ))}
         </div>
       )}
@@ -900,6 +969,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           layers={layers}
           placeOptions={placeOptions}
           fitSignal={fitSignal}
+          focusSignal={focusSignal}
           onSelect={setSelection}
           onLiveChange={onChange}
           onCommitChange={commitChange}
