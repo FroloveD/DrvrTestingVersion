@@ -767,8 +767,13 @@ try {
     return p ? toPx(p) : null;
   };
   const shifterSettled = await settleHead();
-  const knobPx = (await shifterPx("lever")) ?? { x: cvBox.x + cvBox.width * 0.486, y: cvBox.y + cvBox.height * 0.486 };
-  const slotDPx = (await shifterPx("D")) ?? { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
+  const knobPx = await shifterPx("lever");
+  if (!knobPx) throw new Error("Рукоятка КПП вне кадра");
+  const dragPx = async (id) => {
+    const p = await page.evaluate((sid) => window.__cdtCockpit?.shifterDragPoint?.(sid) ?? null, id);
+    if (!p) throw new Error(`Нет drag-цели ${id}: рычаг не захвачен или цель вне кадра`);
+    return toPx(p);
+  };
   const topTag = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName || "NONE", knobPx);
   const knobPick = await page.evaluate(({ x, y }) => window.__cdtCockpit?.pickAt?.(x, y), {
     x: (knobPx.x - cvBox.x) / cvBox.width, y: (knobPx.y - cvBox.y) / cvBox.height,
@@ -779,6 +784,9 @@ try {
   const cabinHintOk = cabinHintText.includes("3D-РЫЧАГ") && cabinHintText.includes("M1–M6") && cabinHintText.includes("D1–D6");
   // BTSI: без нажатого тормоза селектор не выходит из P (блокировка brake-transmission shift interlock)
   await page.mouse.down();
+  // Клик — в pick-меш, перенос — на плоскости рукоятки с исходным offset захвата.
+  // Проекция паза на пластине ниже рукоятки даёт другую траекторию из-за перспективы.
+  const slotDPx = await dragPx("D");
   await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 6 });
   await sleep(80);
   const gearNoBrake = (await page.evaluate(() => window.__cdtCockpit?.gear?.() ?? "")).trim();
@@ -795,25 +803,17 @@ try {
   await page.keyboard.up("KeyS");
   await sleep(900);
   // Тянем рычаг влево (к водителю) в ручной паз M, затем качаем вверх к + (M2)
-  const slotMPx = (await shifterPx("M")) ?? { x: slotDPx.x - 28, y: slotDPx.y };
-  const plusPx = (await shifterPx("M+")) ?? { x: slotMPx.x, y: slotMPx.y - 26 };
+  const slotMPx = await dragPx("M");
+  const plusPx = await dragPx("M+");
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 5 });
   await sleep(80);
   const afterDragM1 = (await hudDriveBtn.innerText()).trim();
   await page.mouse.move(plusPx.x, plusPx.y, { steps: 5 });
   await sleep(80);
   let afterDragM2 = (await hudDriveBtn.innerText()).trim();
-  if (afterDragM2 === "M1") {
-    // Под SwiftShader курсор мог не дойти до зоны качания «+» с первого раза: повторяем шаг
-    await page.mouse.move(slotMPx.x, slotMPx.y - 4, { steps: 3 });
-    await sleep(60);
-    await page.mouse.move(slotMPx.x, slotMPx.y - 34, { steps: 5 });
-    await sleep(90);
-    afterDragM2 = (await hudDriveBtn.innerText()).trim();
-  }
   // Возвращаем рычаг в центр M и толкаем вправо обратно в автомат D
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
-  await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
+  await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 5 });
   await page.mouse.up();
   await sleep(100);
   const afterBackD = (await hudDriveBtn.innerText()).trim();

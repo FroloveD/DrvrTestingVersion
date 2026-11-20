@@ -656,6 +656,33 @@ export class SceneController {
     };
   }
 
+  /**
+   * Цель перетаскивания на высоте рукоятки, с сохранением смещения точки захвата.
+   * Центры pick-мешей пазов лежат на пластине ниже рукоятки: их экранные координаты
+   * нельзя использовать как drag-цели (перспектива меняет и X, и Z пересечения луча).
+   */
+  getShifterDragTargetScreenPoint(id: Exclude<ShifterHitId, "lever">, offsetX: number, offsetZ: number): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const offsets = {
+      P: SHIFTER_LAYOUT.offP, R: SHIFTER_LAYOUT.offR, N: SHIFTER_LAYOUT.offN,
+      D: SHIFTER_LAYOUT.offD, M: SHIFTER_LAYOUT.offD,
+      "M+": SHIFTER_LAYOUT.offMPlus, "M-": SHIFTER_LAYOUT.offMMinus,
+    };
+    const manual = id === "M" || id === "M+" || id === "M-";
+    const { gateZ } = this.getShifterLocalAnchor();
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterProjTmp.set(
+      (manual ? SHIFTER_LAYOUT.manualRailX : SHIFTER_LAYOUT.mainRailX) + offsetX,
+      SHIFTER_LAYOUT.knobPlaneY,
+      gateZ + offsets[id] + offsetZ
+    ).applyMatrix4(this.playerRig.chassis.matrixWorld).project(this.camera);
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (Math.abs(this.shifterProjTmp.z) > 1 || normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
+  }
+
   /** Возвращает нормализованные экранные координаты `[0..1]` рукоятки или паза 3D-селектора в режиме `cockpit`. */
   getShifterTargetScreenPoint(id: ShifterHitId): { normX: number; normY: number } | null {
     if (this.lastCameraMode !== "cockpit") return null;

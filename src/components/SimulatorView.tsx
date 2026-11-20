@@ -1275,6 +1275,10 @@ export function SimulatorView({
         control: sceneCtrlRef.current?.pickCockpitControl(normX, normY) ?? null,
         shifter: sceneCtrlRef.current?.pickCockpitShifter(normX, normY) ?? null,
       }),
+      shifterDragPoint: (id: Exclude<ShifterHitId, "lever">) => {
+        const drag = shifterDragRef.current;
+        return drag ? sceneCtrlRef.current?.getShifterDragTargetScreenPoint(id, drag.offsetX, drag.offsetZ) ?? null : null;
+      },
       pressControl: (id: CockpitControlId) => pressCockpitControl(id),
       cameraMode: () => optsRef.current.cameraMode,
       gear: () => inputRef.current.gear,
