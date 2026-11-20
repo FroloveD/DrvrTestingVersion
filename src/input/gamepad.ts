@@ -58,6 +58,8 @@ export type GamepadProfile = {
   buttonSignalRight: number;
   buttonGearDrive: number;
   buttonGearReverse: number;
+  /** Кнопка сигнала (клаксона); −1 — не назначена. */
+  buttonHorn?: number;
 };
 
 export type GamepadButtons = {
@@ -67,6 +69,7 @@ export type GamepadButtons = {
   signalRight: boolean;
   gearDrive: boolean;
   gearReverse: boolean;
+  horn: boolean;
 };
 
 export type GamepadRead = {
@@ -139,6 +142,7 @@ export function createDefaultProfile(): GamepadProfile {
     buttonSignalRight: -1,
     buttonGearDrive: -1,
     buttonGearReverse: -1,
+    buttonHorn: -1,
   };
 }
 
@@ -259,6 +263,7 @@ export function readGamepad(
       signalRight: pressed(profile.buttonSignalRight),
       gearDrive: pressed(profile.buttonGearDrive),
       gearReverse: pressed(profile.buttonGearReverse),
+      horn: pressed(profile.buttonHorn ?? -1),
     },
   };
 }
@@ -468,5 +473,6 @@ export function sanitizeProfile(raw: unknown): GamepadProfile {
     buttonSignalRight: int(r.buttonSignalRight, -1, -1, 31),
     buttonGearDrive: int(r.buttonGearDrive, -1, -1, 31),
     buttonGearReverse: int(r.buttonGearReverse, -1, -1, 31),
+    buttonHorn: int(r.buttonHorn, -1, -1, 31),
   };
 }
