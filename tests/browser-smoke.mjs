@@ -1156,6 +1156,17 @@ try {
         await page.getByTestId("route-edit-title").fill("Маршрут P · редакция");
         await page.getByTestId("route-edit-checkpoint-0").fill("Проверить перекрёсток и выполнить задание инструктора.");
         const marker = page.getByTestId("route-checkpoint-marker-0");
+        // The edit button may be visible while the map itself is still below the
+        // viewport. Bring the actual drag target on-screen before using page.mouse.
+        await marker.scrollIntoViewIfNeeded();
+        const markerBox = await marker.boundingBox();
+        const viewport = page.viewportSize();
+        if (!markerBox || !viewport ||
+            markerBox.x < 0 || markerBox.y < 0 ||
+            markerBox.x + markerBox.width > viewport.width ||
+            markerBox.y + markerBox.height > viewport.height) {
+          throw new Error("Маркер контрольной точки не попал в область просмотра после прокрутки");
+        }
         const initialPosition = await marker.evaluate((el) => ({ x: el.getAttribute("cx"), y: el.getAttribute("cy") }));
         const dragPoints = await marker.evaluate((el) => {
           const svg = el.ownerSVGElement;
