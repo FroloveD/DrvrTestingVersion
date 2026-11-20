@@ -214,8 +214,16 @@ try {
   await page.keyboard.press("KeyU");
   await sleep(500);
   text = await low(page);
-  check("A5  клавиша U: приборы скрыты, зеркала остались", !text.includes("км/ч") && text.includes("зеркало заднего вида"));
+  const uFullscreen = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="sim-viewport"]');
+    const r = el.getBoundingClientRect();
+    return el.dataset.immersive === "true" && Math.abs(r.width - innerWidth) < 2 && Math.abs(r.height - innerHeight) < 2;
+  });
+  check("A5 клавиша U включает полный экран, а не просто скрывает HUD",
+    uFullscreen && !text.includes("км/ч") && text.includes("зеркало заднего вида"));
   await page.keyboard.press("KeyU");
+  const uRestored = await until(() => page.evaluate(() => document.querySelector('[data-testid="sim-viewport"]')?.dataset.immersive === "false"), 5000);
+  check("A5b повторное U выходит из fullscreen и восстанавливает интерфейс", uRestored && await page.locator('[data-hud-panel="scorePanel"]').count() === 1);
   await sleep(300);
 
   await page.getByRole("button", { name: /Завершить/ }).click();

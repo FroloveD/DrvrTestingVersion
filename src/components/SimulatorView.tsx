@@ -345,6 +345,7 @@ export function SimulatorView({
     if (!host) return;
     previousUiHiddenRef.current = uiHidden;
     setShowHelp(false);
+    setShowControls(false);
     setImmersive(true);
     setUiHidden(true);
     // В iframe fullscreen может запрещаться Permissions Policy: CSS-режим остаётся рабочим.
@@ -1758,18 +1759,10 @@ export function SimulatorView({
           pressHorn(false);
           break;
         case "KeyU":
-          // U — скрыть/показать интерфейс (раньше жил на H, теперь H — сигнал)
-          setShowHelp(false);
-          setShowControls(false);
-          setUiHidden((v) => {
-            const next = !v;
-            onNotify(
-              next
-                ? "HUD скрыт — остались только зеркала. Нажмите U, чтобы вернуть интерфейс."
-                : "HUD показан"
-            );
-            return next;
-          });
+          // Та же команда, что у кнопки: полноэкранная сцена, а не только скрытие HUD.
+          e.preventDefault();
+          if (immersive) leaveImmersive();
+          else enterImmersive();
           break;
         case "KeyC":
           setCameraMode((prev) => {
@@ -1828,6 +1821,9 @@ export function SimulatorView({
     liveBrakePressure,
     toggleEngine,
     toggleShifterGlance,
+    immersive,
+    enterImmersive,
+    leaveImmersive,
     onNotify,
     pressHorn,
     releaseHorn,
@@ -2457,7 +2453,7 @@ export function SimulatorView({
             className="btn btn-mini"
             data-testid="sim-fullscreen-enter"
             onClick={enterImmersive}
-            title="Полноэкранная сцена без меню и панелей · U — вернуть приборы · Esc — выйти"
+            title="Полноэкранная сцена без меню и панелей · U — включить/выключить · Esc — выйти"
           >
             <Icon name="maximize" size={13} /> Полный экран
           </button>
@@ -2676,7 +2672,7 @@ export function SimulatorView({
             className="absolute right-3 top-3 z-[10000] rounded-lg border border-white/20 bg-[#0b131b]/90 px-3 py-2 text-xs text-white shadow-lg hover:border-[#f5b942]"
             title="Выйти из полноэкранного режима (Esc)"
           >
-            ✕ Выйти · Esc <span className="text-[#9bafbc]">| U — приборы</span>
+            ✕ Выйти · Esc <span className="text-[#9bafbc]">/ U</span>
           </button>
         )}
         <canvas
@@ -3471,7 +3467,8 @@ export function SimulatorView({
                   ["I (в P/N)", "Запуск ДВС только из P или N"],
                   ["Q / E / Z", "Поворотники лев. / прав. / аварийка"],
                   ["I / Space / B", "Двигатель / Ручник / Ремень"],
-                  ["L · H", "Фары · Скрыть/показать HUD"],
+                  ["L · H", "Фары · Сигнал"],
+                  ["U", "Полный экран — включить / выключить (Esc — выйти)"],
                   ["− / ×", "Свернуть / закрыть любую панель"],
                   ["1–4 / C", "Вид: сзади, салон, сверху, орбита"],
                 ].map(([k, d]) => (
