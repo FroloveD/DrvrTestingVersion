@@ -1864,7 +1864,7 @@ export function SimulatorView({
                 <label className="block text-[10px] text-[#9bafbc]">VOL · {Math.round(headUnit.volume * 100)}%
                   <input type="range" min={0} max={1} step={0.05} value={headUnit.volume} onChange={(e) => { const volume = clampVolume(Number(e.target.value)); setHeadUnit((prev) => ({ ...prev, volume })); if (radioAudioRef.current) radioAudioRef.current.volume = volume; }} className="w-full" />
                 </label>
-                <button type="button" className="btn btn-mini mt-2 w-full" onClick={async () => {
+                <button type="button" data-testid="radio-save-track" className="btn btn-mini mt-2 w-full" onClick={async () => {
                   const station = radioStations[headUnit.stationIndex]; const seconds = 32; const key = trackCacheKey(station.id, seconds);
                   const wav = renderTrackWav(station, seconds);
                   const persistent = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, blob: new Blob([wav], { type: "audio/wav" }) });
