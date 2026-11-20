@@ -212,18 +212,10 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     } catch {
       // Window-level listeners remain available if pointer capture is unsupported.
     }
-    // Do not cancel pointerdown: browsers otherwise suppress the compatibility mousedown
-    // event used by the desktop fallback below.
+    // Pointer capture keeps subsequent pointermove events flowing while the marker is dragged.
     event.stopPropagation();
   };
 
-  const handleCheckpointMouseDown = (
-    event: MouseEvent<SVGCircleElement>,
-    checkpointId: string
-  ) => {
-    if (!editing || event.button !== 0) return;
-    const svg = event.currentTarget.ownerSVGElement;
-    if (!svg) return;
   const handleSaveEdit = async (route: ExamRouteRecord) => {
     if (!editing || editing.id !== route.id) return;
     const revised = reviseExamRouteRecord(route, editing.title, editing.checkpoints, new Date().toISOString());
@@ -514,7 +506,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                             fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
                             stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }}
                             onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)}
-                            onMouseDown={(event) => handleCheckpointMouseDown(event, checkpoint.id)} />
+                            />
                           <text x={checkpoint.x + Math.max(7, checkpoint.radius)} y={-checkpoint.z - Math.max(7, checkpoint.radius)}
                             fill="#ffffff" fontSize="12" fontWeight="bold" pointerEvents="none">{index + 1}</text>
                         </g>
