@@ -1850,14 +1850,14 @@ export function SimulatorView({
               {headUnit.mode === "radio" && <>
                 <div className="flex items-center justify-between gap-2 text-[11px] mb-2">
                   <button type="button" className="btn btn-mini" aria-label="Предыдущая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, -1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>◀ TUNE</button>
-                  <span className="text-center min-w-0"><b>{radioStations[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{RADIO_STATIONS[headUnit.stationIndex]?.freq} FM</span></span>
+                  <span className="text-center min-w-0"><b>{radioStations[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{radioStations[headUnit.stationIndex]?.freq} FM</span></span>
                   <button type="button" className="btn btn-mini" aria-label="Следующая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, 1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>TUNE ▶</button>
                 </div>
                 <div className="flex items-center gap-2 mb-2">
                   <button type="button" className="btn btn-mini" onClick={() => {
                     const audio = radioAudioRef.current; if (!audio) return;
                     if (headUnit.radioPlaying) { audio.pause(); setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "idle" })); }
-                    else { const station = RADIO_STATIONS[headUnit.stationIndex]; audio.src = station.streamUrl; audio.volume = headUnit.volume; engineSoundRef.current?.ensureStarted(); void audio.play().then(() => setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "stream", streamStatus: "live" }))).catch(() => setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "error" }))); }
+                    else { const station = radioStations[headUnit.stationIndex]; audio.src = station.streamUrl; audio.volume = headUnit.volume; engineSoundRef.current?.ensureStarted(); void audio.play().then(() => setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "stream", streamStatus: "live" }))).catch(() => setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "error" }))); }
                   }}>{headUnit.radioPlaying ? "Пауза" : "▶ Эфир"}</button>
                   <span className="text-[10px] text-[#8fa2ae]">{headUnit.streamStatus === "live" ? "ЖИВОЙ ЭФИР" : headUnit.streamStatus === "connecting" ? "ПОДКЛЮЧЕНИЕ…" : headUnit.streamStatus === "error" ? "ЭФИР НЕДОСТУПЕН" : "ГОТОВ"}</span>
                 </div>
@@ -1865,7 +1865,7 @@ export function SimulatorView({
                   <input type="range" min={0} max={1} step={0.05} value={headUnit.volume} onChange={(e) => { const volume = clampVolume(Number(e.target.value)); setHeadUnit((prev) => ({ ...prev, volume })); if (radioAudioRef.current) radioAudioRef.current.volume = volume; }} className="w-full" />
                 </label>
                 <button type="button" className="btn btn-mini mt-2 w-full" onClick={async () => {
-                  const station = RADIO_STATIONS[headUnit.stationIndex]; const seconds = 32; const key = trackCacheKey(station.id, seconds);
+                  const station = radioStations[headUnit.stationIndex]; const seconds = 32; const key = trackCacheKey(station.id, seconds);
                   const wav = renderTrackWav(station, seconds);
                   const persistent = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, blob: new Blob([wav], { type: "audio/wav" }) });
                   const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
