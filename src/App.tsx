@@ -387,6 +387,19 @@ export default function App() {
             })}
           </nav>
 
+          {tab === "sim" && scenarioSection === "routes" && (
+            <button
+              type="button"
+              title="Вернуться в каталог маршрутов"
+              aria-label="Каталог маршрутов"
+              onClick={() => setTab("custom")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold whitespace-nowrap text-[#f5b942] border border-[#f5b942]/40 bg-[#f5b942]/10"
+            >
+              <Icon name="route" size={14} />
+              Каталог маршрутов
+            </button>
+          )}
+
           <a
             href="https://github.com/FroloveD/CytyDrivingTraining"
             target="_blank"
