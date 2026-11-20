@@ -210,19 +210,13 @@ export function FloatingPanel({
 
   const bodyMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const p = pressRef.current;
-    if (!p || p.id !== e.pointerId) return;
+    if (!p || p.id !== e.pointerId || p.dragging) return;
     const dx = e.clientX - p.sx;
     const dy = e.clientY - p.sy;
-    if (!p.dragging) {
-      if (Math.abs(dx) > 9 || Math.abs(dy) > 9) {
-        window.clearTimeout(p.timer);
-        pressRef.current = null;
-      }
-      return;
+    if (Math.abs(dx) > 9 || Math.abs(dy) > 9) {
+      window.clearTimeout(p.timer);
+      pressRef.current = null;
     }
-    e.preventDefault();
-    const pos = clampPos(p.ox + dx, p.oy + dy, current.w);
-    onChange(id, { ...current, ...pos });
   };
 
   const bodyUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -245,6 +239,18 @@ export function FloatingPanel({
   };
 
   useEffect(() => {
+    // После long-press указатель может покинуть DOM-панель. Слушаем движение
+    // на window, чтобы перенос не зависел от доставки React pointer-события
+    // через pointer capture конкретного браузера.
+    const movePointer = (event: PointerEvent) => {
+      const p = pressRef.current;
+      if (!p || !p.dragging || p.id !== event.pointerId) return;
+      event.preventDefault();
+      const dx = event.clientX - p.sx;
+      const dy = event.clientY - p.sy;
+      const pos = clampPos(p.ox + dx, p.oy + dy, current.w);
+      onChange(id, { ...current, ...pos });
+    };
     const cancelAll = () => {
       const p = pressRef.current;
       if (p) window.clearTimeout(p.timer);
@@ -255,14 +261,16 @@ export function FloatingPanel({
     const cancelPointer = (event: PointerEvent) => {
       if (event.pointerId === pressRef.current?.id || event.pointerId === dragRef.current?.pointerId) cancelAll();
     };
+    window.addEventListener("pointermove", movePointer, { passive: false });
     window.addEventListener("pointercancel", cancelPointer);
     window.addEventListener("blur", cancelAll);
     return () => {
       if (pressRef.current) window.clearTimeout(pressRef.current.timer);
+      window.removeEventListener("pointermove", movePointer);
       window.removeEventListener("pointercancel", cancelPointer);
       window.removeEventListener("blur", cancelAll);
     };
-  }, []);
+  }, [clampPos, current, id, onChange]);
 
   return (
     <div
