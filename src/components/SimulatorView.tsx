@@ -1830,7 +1830,7 @@ export function SimulatorView({
             )}
             <button
               type="button"
-              onClick={() => setShowTrajectory((v) => !v)
+              onClick={() => setShowTrajectory((v) => !v)}
               className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
                 showTrajectory
                   ? "bg-[#52d6bd]/20 border-[#52d6bd]/50 text-[#52d6bd]"
