@@ -596,6 +596,8 @@ export function buildDetailedCar(
     const trunk = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, lowerH * 0.98, trunkLen), paintMat);
     trunk.position.set(0, sillY + lowerH * 0.49, rearFaceZ + trunkLen / 2);
     trunk.castShadow = true;
+    // Только корма служит ориентиром в заднем зеркале; крыша и салон не должны закрывать обзор.
+    trunk.userData.rearMirrorReference = true;
     const diffuser = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.12, 0.18), darkTrimMat);
     diffuser.position.set(0, sillY + 0.05, rearFaceZ + 0.08);
     const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.14, 10), chromeMat);

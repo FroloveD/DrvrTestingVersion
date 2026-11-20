@@ -75,6 +75,7 @@ import {
 // Слои относятся только к геометрии машины игрока. Мир и припаркованные авто — слой 0.
 const PLAYER_EXTERIOR_LAYER = 1;
 const OWN_MIRROR_HARDWARE_LAYER = 2;
+const REAR_MIRROR_REFERENCE_LAYER = 3;
 
 type CarRig = DetailedCarRig;
 
@@ -364,7 +365,7 @@ export class SceneController {
     this.trajGroup.add(this.trajLineL, this.trajLineR);
     this.scene.add(this.trajGroup);
 
-    // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир без пересечения крыши/салона;
+    // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир и багажник без пересечения крыши/салона;
     // боковые дополнительно видят наружную кромку автомобиля, но не корпуса зеркал.
     this.rearRT = new THREE.WebGLRenderTarget(320, 96, { depthBuffer: true });
     this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 112);
@@ -1610,8 +1611,19 @@ export class SceneController {
     // на слой 1, а зеркала — на 2. Основная камера обязана видеть оба, не только мир (0).
     this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
     this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
+    this.rearCam.layers.enable(REAR_MIRROR_REFERENCE_LAYER);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
     this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
+  }
+
+  /** Заднее зеркало видит только багажник, а не весь кузов вместе с крышей и креслами. */
+  private configurePlayerMeshLayers(root: THREE.Object3D): void {
+    root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
+        obj.layers.set(PLAYER_EXTERIOR_LAYER);
+        if (obj.userData.rearMirrorReference === true) obj.layers.enable(REAR_MIRROR_REFERENCE_LAYER);
+      }
+    });
   }
 
   /**
@@ -1634,11 +1646,7 @@ export class SceneController {
         rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
       }
     );
-    rig.root.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
-        obj.layers.set(PLAYER_EXTERIOR_LAYER);
-      }
-    });
+    this.configurePlayerMeshLayers(rig.root);
     this.playerRigCarId = carId;
     return rig;
   }

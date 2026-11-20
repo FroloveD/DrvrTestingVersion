@@ -57,3 +57,25 @@ assert.ok(!ctrl.sideCam.layers.test(mirror), "side mirrors must not render their
 assert.ok(!ctrl.rearCam.layers.test(body), "rear mirror must not be blocked by own car");
 assert.ok(ctrl.shifterRaycaster.layers.test(body), "cabin pick meshes must remain interactive");
 console.log("PASS player camera layers: world, body/cockpit, mirrors and picking");
+
+// Own trunk is a lower-frame distance reference; the roof/interior stay excluded.
+const own = new THREE.Group();
+const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.588, 0.87));
+trunk.userData.rearMirrorReference = true;
+const roof = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.055, 2));
+const hardware = new THREE.Mesh(); hardware.layers.set(2);
+own.add(trunk, roof, hardware);
+ctrl["configurePlayerMeshLayers"](own);
+assert.ok(ctrl.rearCam.layers.test(trunk.layers), "rear mirror must show own trunk");
+assert.ok(!ctrl.rearCam.layers.test(roof.layers), "roof must not obscure rear view");
+assert.ok(!ctrl.rearCam.layers.test(hardware.layers), "no mirror self-reflection");
+assert.ok(camera.layers.test(trunk.layers), "trunk remains visible in main view");
+
+// Same pose/FOV as the actual HUD rear mirror; the top of the trunk lies at the bottom.
+const rear = new THREE.PerspectiveCamera(38, 10 / 3, 0.06, 112);
+rear.position.set(0, 1.24, 0.25);
+rear.lookAt(0, 1.24 - 0.08, -0.75);
+rear.updateMatrixWorld(true);
+const trunkTop = new THREE.Vector3(0, 0.24 + 0.588, -1.6).project(rear);
+assert.ok(trunkTop.y > -1 && trunkTop.y < -0.25, "trunk reference is visible in lower mirror, not covering road");
+console.log("PASS rear mirror: trunk visible below road, roof/interior excluded");
