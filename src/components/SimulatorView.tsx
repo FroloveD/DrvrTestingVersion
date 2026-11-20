@@ -18,6 +18,8 @@
  * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { EngineSound } from "../audio/engineSound";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
@@ -219,6 +221,9 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [bindings, setBindings] = useState<KeyBindings>(loadKeyBindings);
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
   const [showHelp, setShowHelp] = useState(false);
   const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
   const [quickStartUsed, setQuickStartUsed] = useState(false);
@@ -267,6 +272,14 @@ export function SimulatorView({
   useEffect(() => {
     saveLayout(layout);
   }, [layout]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cdt.keybindings.v1", JSON.stringify(bindings));
+    } catch {
+      // Раскладка остаётся активной до закрытия вкладки, если storage недоступно.
+    }
+  }, [bindings]);
 
   const handleLayoutChange = useCallback((id: string, next: PanelLayout) => {
     setLayout((prev) => ({ ...prev, [id]: next }));
@@ -819,16 +832,16 @@ export function SimulatorView({
       // Слайдеру оставляем стрелки, Home и End. Клавиши вождения работают и после настройки.
       const drivingFromSlider = e.target instanceof HTMLInputElement && e.target.type === "range" && /^Key[A-Z]$/.test(e.code);
       if (isEditable(e.target) && !drivingFromSlider) return;
-      const code = e.code;
-      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
-        e.preventDefault();
-      }
+      const code = logicalKey(bindingsRef.current, e.code);
+      if (code === "unbound") return;
+      e.preventDefault();
       keysRef.current[code] = true;
       if (e.repeat) return;
 
       const inp = inputRef.current;
-      if (e.shiftKey && code === "ArrowUp") { shiftGear(1); return; }
-      if (e.shiftKey && code === "ArrowDown") { shiftGear(-1); return; }
+      const shiftHeld = Boolean(keysRef.current.ShiftLeft || keysRef.current.ShiftRight);
+      if (shiftHeld && code === "ArrowUp") { shiftGear(1); return; }
+      if (shiftHeld && code === "ArrowDown") { shiftGear(-1); return; }
       switch (code) {
         case "KeyI":
           toggleEngine();
@@ -864,6 +877,9 @@ export function SimulatorView({
           break;
         case "KeyF":
           setGear("D");
+          break;
+        case "KeyO":
+          setShowControls((shown) => !shown);
           break;
         case "KeyH":
           setShowHelp(false);
@@ -914,7 +930,8 @@ export function SimulatorView({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
+      const code = logicalKey(bindingsRef.current, e.code);
+      keysRef.current[code] = false;
     };
 
     const onBlur = () => {
@@ -1672,6 +1689,7 @@ export function SimulatorView({
                 ✕
               </button>
             </div>
+            <KeyBindingsEditor value={bindings} onChange={setBindings} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
