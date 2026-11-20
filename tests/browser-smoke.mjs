@@ -1376,6 +1376,63 @@ try {
   await ctx.close();
 }
 
+// === Q. Selective Arena_v1 integration: head unit, per-scenario car, HUD panel controls ===
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  try {
+    await tab(page, "3D-Тренажёр");
+    await page.getByTitle("Выворот колёс, скорость руления, педали и раскладка HUD").click();
+    const headUnit = page.getByTestId("head-unit-panel");
+    await headUnit.waitFor({ timeout: 5000 });
+    await page.locator('[data-headunit-mode="radio"]').click();
+    const radioMode = (await page.locator('[data-headunit-mode="radio"]').getAttribute("aria-pressed")) === "true";
+    await page.getByTestId("headunit-save-offline").click();
+    const savedTrack = await until(async () => (await page.locator("text=/Треков: [1-9]/").count()) > 0, 8000, 100);
+    const soundToggle = page.getByTestId("sound-toggle");
+    const soundBefore = await soundToggle.getAttribute("aria-pressed");
+    await soundToggle.click();
+    const soundChanged = (await soundToggle.getAttribute("aria-pressed")) !== soundBefore;
+    await soundToggle.click();
+    check("Q1 ШГУ переключает режим радио, сохраняет офлайн-трек и управляет звуком",
+      radioMode && savedTrack && soundChanged,
+      JSON.stringify({ radioMode, savedTrack, soundBefore, soundChanged }));
+
+    const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
+    await page.getByLabel("Закрыть: Оценка заезда").click();
+    const closed = await scorePanel.count() === 0;
+    const restore = page.getByRole("button", { name: "+ Оценка" });
+    await restore.click();
+    const restored = await page.locator('[data-hud-panel="scorePanel"]').count() === 1;
+    check("Q2 HUD-панель закрывается и восстанавливается", closed && restored, JSON.stringify({ closed, restored }));
+
+    await tab(page, "Свой сценарий");
+    const firstCar = page.locator('[data-testid^="editor-car-"]').first();
+    await firstCar.click();
+    const carSelected = (await firstCar.getAttribute("aria-pressed")) === "true";
+    const radioOptions = await page.locator('[data-testid^="editor-radio-"]').count();
+    check("Q3 редактор сценария показывает выбор автомобиля и список радиостанций",
+      carSelected && radioOptions > 0,
+      JSON.stringify({ carSelected, radioOptions }));
+
+    await tab(page, "3D-Тренажёр");
+    await page.getByRole("button", { name: /Завершить.*Разбор/ }).click();
+    const debriefReady = await until(async () => (await page.getByTestId("debrief-new-attempt").count()) === 1, 6000, 100);
+    if (debriefReady) {
+      await page.getByTestId("debrief-new-attempt").click();
+      const returned = await until(async () => await page.locator('[data-testid="sim-canvas"]').isVisible(), 6000, 100);
+      check("Q4 команда «Новый заезд» возвращает в симулятор с холодным стартом", returned);
+    } else {
+      check("Q4 команда «Новый заезд» доступна в разборе", false, "debrief button not found");
+    }
+    check("Q5 ошибок JavaScript в новых интерфейсах нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.screenshot({ path: `${shotDir}/arena-v1-integration.png` });
+  } catch (e) {
+    check("Q сценарий выборочной интеграции выполнен без исключений", false, String(e.message).slice(-460));
+  }
+  await ctx.close();
+}
+
 await browser.close();
 console.log(failed === 0 ? "SMOKE: все проверки пройдены" : `SMOKE: не пройдено ${failed}`);
 process.exit(failed === 0 ? 0 : 1);
