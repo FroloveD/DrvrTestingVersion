@@ -286,9 +286,10 @@ export function SimulatorView({
   useEffect(() => {
     const saveUnfinished = () => {
       const st = stateRef.current;
-      if (!recordingActiveRef.current || !rideDirtyRef.current || autoSavedRef.current || !st.hasMoved) return;
+      if (!recordingActiveRef.current || !rideDirtyRef.current || autoSavedRef.current) return;
       rideDirtyRef.current = false;
       lastAutoSaveRef.current = Date.now();
+      // Любой записанный тик сохраняется: движение может ещё не превысить порог hasMoved.
       // closed = false: это страховочная копия незавершённого заезда
       attemptSavedRef.current(
         recorderRef.current.snapshot(st, worldRef.current, calRef.current, ruleRef.current, false),
