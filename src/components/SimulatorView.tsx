@@ -42,7 +42,7 @@ import type {
   SimState,
   WorldData,
 } from "../sim/types";
-import { getPlayerCar, PLAYER_CARS } from "../sim/playerCar";
+import { PLAYER_CARS } from "../sim/playerCar";
 import {
   CAR,
   clamp,
