@@ -265,6 +265,7 @@ export function SimulatorView({
   const [radioMessage, setRadioMessage] = useState("");
   const engineSoundRef = useRef<EngineSound | null>(null);
   const hornPressedRef = useRef(false);
+  const lastIndicatorPhaseRef = useRef(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
   const [quickStartUsed, setQuickStartUsed] = useState(false);
@@ -896,6 +897,9 @@ export function SimulatorView({
         lastHudUpdate = nowMs;
         const s = stateRef.current;
         engineSoundRef.current?.update({ engineOn: s.engineOn, rpm: s.rpm, throttle: inputRef.current.throttle, speedKmh: Math.abs(s.v) * 3.6, horn: hornPressedRef.current });
+        const indicatorPhase = getTurnSignalFlash(s.signal, s.time).blinkOn;
+        if (indicatorPhase && !lastIndicatorPhaseRef.current) engineSoundRef.current?.clickIndicator();
+        lastIndicatorPhaseRef.current = indicatorPhase;
         const w = worldRef.current;
         const evalRes = evaluateAttempt(recorderRef.current.getEvents(), s.collisions, ruleRef.current);
 
