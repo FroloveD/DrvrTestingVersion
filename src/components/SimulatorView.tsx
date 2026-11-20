@@ -927,7 +927,7 @@ export function SimulatorView({
     const dz = z - gateZ;
     const manual = x > (SHIFTER_LAYOUT.mainRailX + SHIFTER_LAYOUT.manualRailX) * 0.5;
     if (manual) {
-      if (dz >= SHIFTER_LAYOUT.offMPlus + 0.02) return "M+";
+      if (dz >= SHIFTER_LAYOUT.offMPlus - 0.02) return "M+";
       if (dz <= SHIFTER_LAYOUT.offMMinus + 0.02) return "M-";
       return "M";
     }
@@ -1085,8 +1085,10 @@ export function SimulatorView({
         if (isManualGear(inputRef.current.gear)) engageCockpitShifter("D");
         else if (inputRef.current.gear === "D") engageCockpitShifter("M");
         else stepCockpitShifter(1);
+      } else if (sDrag.hit === "M" && isManualGear(inputRef.current.gear)) {
+        engageCockpitShifter("D");
       } else {
-        engageCockpitShifter(sDrag.hit === "M+" || sDrag.hit === "M-" ? sDrag.hit : sDrag.hit as ShifterTarget);
+        engageCockpitShifter(sDrag.hit as ShifterTarget);
       }
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
       const hit = pos && ctrl && cameraMode === "cockpit" ? ctrl.pickCockpitShifter(pos.x, pos.y) : null;
