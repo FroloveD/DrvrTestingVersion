@@ -69,6 +69,7 @@ import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../ren
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  newAttemptRequest: number;
   immersive: boolean;
   onToggleImmersive: () => void;
   scenarioId: ScenarioId;
@@ -187,6 +188,7 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  newAttemptRequest,
   immersive,
   onToggleImmersive,
   scenarioId,
@@ -670,7 +672,7 @@ export function SimulatorView({
     worldRef.current = world;
     sceneCtrlRef.current?.loadWorld(world);
     resetAttempt(world, COLD_START);
-  }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign]);
+  }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign, newAttemptRequest]);
 
   // === [SEC:sim-loop] Three.js, главный цикл с фиксированным шагом 1/60 с и запись заезда ===
   useEffect(() => {
