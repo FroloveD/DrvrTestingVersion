@@ -225,7 +225,8 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     } catch {
       // Window-level listeners remain available if pointer capture is unsupported.
     }
-    event.preventDefault();
+    // Do not cancel pointerdown: browsers otherwise suppress the compatibility mousedown
+    // event used by the desktop fallback below.
     event.stopPropagation();
   };
 
