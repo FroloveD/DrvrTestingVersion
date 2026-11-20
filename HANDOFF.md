@@ -30,7 +30,7 @@
 |---|---|
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
-| Тесты ядра | 33 автотеста ядра (T01–T33), прогоняются и в Node, и во вкладке «Тесты и Модули» |
+| Тесты ядра | 33 автотеста ядра (T01–T34), прогоняются и в Node, и во вкладке «Тесты и Модули» |
 | Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
@@ -91,14 +91,16 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | Путь | Роль |
 |---|---|
 | `src/sim/types.ts` | контракты: InputState, SimState, WorldData, SimEvent, CalibrationConfig |
-| `src/sim/vehicle.ts` | Kia Ceed: база 2,65 м, колея 1,57 м, Аккерман, выворот 33–42°, АКПП, фазы светофора, пешеход |
-| `src/sim/controls.ts` | чистые блокировки АКПП (`checkGearChange`) и стартера (`checkEngineToggle`) |
+| `src/sim/vehicle.ts` | физика пяти Kia, геометрия кузова, Аккерман, 6-ступенчатая АКПП, двигатель и тормоза |
+| `src/sim/playerCar.ts` | паспорта Picanto TA, Rio FB, Ceed JD, XCeed CD и Sorento MQ4; индивидуальные габариты и коэффициенты динамики |
+| `src/sim/cockpitLayout.ts` | координаты и hit-зоны интерактивных органов салона и селектора Shiftronic |
+| `src/sim/controls.ts` | блокировки селектора и стартера, секвентальное переключение M1–M6 и Shift Lock |
 | `src/sim/spatialGrid.ts` | сетка 10 м, OBB через SAT, insideBay, findBayLineCross, правый борт |
 | `src/sim/step.ts` | единственный шаг физики, детекторов и скоростных отрезков до перекрёстков; чистая функция, dt = 1/60 |
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 33 автотеста ядра (T01–T33) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 33 автотеста ядра (T01–T34) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
 | `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |
 | `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |
@@ -132,7 +134,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 1. **Координаты**: +Z вперёд, +X — левый борт, −X — правый, положительный heading — поворот влево.
 2. **Поворотники**: Q — левый, E — правый, Z — аварийка; цикл 700 мс от model time. При начале движения на маршруте аварийка не заменяет Q/E.
 3. **Педали**: W — газ, S — тормоз. В D тормоз гасит скорость до 0 и никогда не даёт реверс.
-4. **КПП**: P / R / N / D (F). P блокирует движение и включается только на остановке; выход из P — при запущенном ДВС; запуск ДВС — только из P или N (`src/sim/controls.ts`).
+4. **КПП**: P / R / N / D (F), ручной режим M1–M6 — Shift+↑/↓. P блокирует движение и включается только на остановке; запуск ДВС — только из P или N (`src/sim/controls.ts`).
 5. **Холодный старт**: ДВС заглушен, КПП в P, ручник затянут, ремень снят — при открытии и после «Сброс».
 6. **Фиксированный шаг** 1/60 с с аккумулятором; рендер интерполирует, физика — нет.
 7. **Чистое ядро**: в sim/scoring/maps/scenarios/analytics/storage/strategy запрещены three, window, document.
