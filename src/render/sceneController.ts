@@ -17,6 +17,7 @@ import * as THREE from "three";
 import { SIGN_SPEED_ZONE_PREFIX } from "../scenarios/signs";
 import {
   buildRealisticTree,
+  buildOsmTreeInstances,
   buildRussianBuilding,
   createCityEnvironmentPack,
   makeCloudySkyTexture,
@@ -654,6 +655,15 @@ export class SceneController {
       );
     }
 
+    // Деревья больших OSM-районов объединяются в InstancedMesh по пространственным ячейкам.
+    if (this.isLargeOsmWorld) {
+      buildOsmTreeInstances(
+        this.worldGroup,
+        world.obstacles.filter((obs) => obs.kind === "tree"),
+        cityEnv
+      );
+    }
+
     // Препятствия: автопарк, здания РФ/СНГ (панельные/кирпичные/адм.), многоярусные деревья и инфраструктура ГОСТ
     for (const obs of world.obstacles) {
       this.addObstacleMesh(obs, world, roadMats, cityEnv, shadowTex, learnerTex, civilPlateTex, clusterTex);
@@ -808,7 +818,9 @@ export class SceneController {
     }
 
     if (obs.kind === "tree") {
-      this.worldGroup.add(buildRealisticTree(obs.cx, obs.cz, Math.max(3.4, obs.height), cityEnv, obs.id));
+      if (!this.isLargeOsmWorld) {
+        this.worldGroup.add(buildRealisticTree(obs.cx, obs.cz, Math.max(3.4, obs.height), cityEnv, obs.id));
+      }
     }
   }
 
