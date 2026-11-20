@@ -9,22 +9,24 @@ import {
   clampVolume,
   formatTrackDuration,
   INTERNET_RADIO_STATIONS,
-  nextStationIndex,
   renderTrackWav,
   trackCacheKey,
+  type RadioStation,
 } from "../audio/radioCatalog";
 import * as trackStore from "../audio/trackStore";
 import { HEAD_UNIT_MODES, type HeadUnitState } from "../render/cockpitDisplays";
 
 type TrackMeta = Awaited<ReturnType<typeof trackStore.listTracks>>[number];
 
-export function HeadUnitPanel({ value, onChange }: { value: HeadUnitState; onChange: (next: HeadUnitState) => void }) {
+export function HeadUnitPanel({ value, onChange, stations = INTERNET_RADIO_STATIONS }: { value: HeadUnitState; onChange: (next: HeadUnitState) => void; stations?: readonly RadioStation[] }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [tracks, setTracks] = useState<TrackMeta[]>([]);
   const [message, setMessage] = useState("");
 
-  const station = INTERNET_RADIO_STATIONS[Math.max(0, Math.min(INTERNET_RADIO_STATIONS.length - 1, value.stationIndex))];
+  const stationIndex = stations.length ? ((value.stationIndex % stations.length) + stations.length) % stations.length : 0;
+  const station = stations[stationIndex] ?? INTERNET_RADIO_STATIONS[0];
+  const stepStation = (dir: 1 | -1) => stations.length ? (stationIndex + dir + stations.length) % stations.length : 0;
 
 
   useEffect(() => {
@@ -128,9 +130,9 @@ export function HeadUnitPanel({ value, onChange }: { value: HeadUnitState; onCha
           <div className="text-[10px] text-[#8fa2ae]">{station.genre} · {value.streamStatus === "live" ? "эфир" : value.streamStatus === "connecting" ? "подключение…" : value.streamStatus === "error" ? "ошибка" : "ожидание"}</div>
         </div>
         <div className="flex shrink-0 gap-1">
-          <button type="button" className="btn btn-mini" aria-label="Предыдущая станция" onClick={() => onChange({ ...value, stationIndex: nextStationIndex(value.stationIndex, -1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>◀</button>
+          <button type="button" className="btn btn-mini" aria-label="Предыдущая станция" onClick={() => onChange({ ...value, stationIndex: stepStation(-1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>◀</button>
           <button type="button" className="btn btn-mini" aria-label={value.radioPlaying ? "Пауза радио" : "Воспроизвести радио"} onClick={() => onChange({ ...value, mode: "radio", source: "stream", savedTrackKey: null, radioPlaying: !value.radioPlaying, streamStatus: "idle" })}>{value.radioPlaying ? "Ⅱ" : "▶"}</button>
-          <button type="button" className="btn btn-mini" aria-label="Следующая станция" onClick={() => onChange({ ...value, stationIndex: nextStationIndex(value.stationIndex, 1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>▶|</button>
+          <button type="button" className="btn btn-mini" aria-label="Следующая станция" onClick={() => onChange({ ...value, stationIndex: stepStation(1), source: "stream", savedTrackKey: null, radioPlaying: true, mode: "radio", streamStatus: "connecting" })}>▶|</button>
         </div>
       </div>
       <label className="block text-[10px] text-[#9bafbc] mb-2">
