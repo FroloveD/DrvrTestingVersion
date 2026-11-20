@@ -59,6 +59,8 @@ import { SteeringLimitControl } from "./SteeringLimitControl";
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  immersive: boolean;
+  onToggleImmersive: () => void;
   scenarioId: ScenarioId;
   onScenarioChange: (id: ScenarioId) => void;
   calibration: CalibrationConfig;
@@ -175,6 +177,8 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  immersive,
+  onToggleImmersive,
   scenarioId,
   onScenarioChange,
   calibration,
@@ -338,8 +342,8 @@ export function SimulatorView({
     setPedalVisual({ gas: false, brake: false });
   }, []);
   useEffect(() => {
-    if (!active || uiHidden) releasePedals();
-  }, [active, uiHidden, releasePedals]);
+    if (!active || uiHidden || immersive) releasePedals();
+  }, [active, uiHidden, immersive, releasePedals]);
   const latestViolationRef = useRef<HudSnapshot["latestViolation"]>(null);
   const optsRef = useRef({
     cameraMode,
@@ -1073,9 +1077,9 @@ export function SimulatorView({
   const needsPrep = !s.engineOn || s.handbrake || !s.belt || s.gear === "P";
 
   return (
-    <div className="space-y-3">
+    <div className={immersive ? "fixed inset-0 z-[100] h-screen w-screen overflow-hidden bg-[#0d1720]" : "space-y-3"}>
       {/* [SEC:sim-toolbar] Верхняя панель выбора сценария, импорта OSM и завершения попытки */}
-      <div className="flex flex-wrap items-center gap-2">
+      {!immersive && <div className="flex flex-wrap items-center gap-2">
         <div className="segmented flex-wrap">
           {([
             ["bay_90", "1 · Бокс 90°"],
@@ -1158,14 +1162,25 @@ export function SimulatorView({
             <Icon name="clipboard" size={13} /> Завершить → Разбор
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* Главная 3D-сцена с зеркалами, статусом экзаменатора и органами управления */}
       <div
         ref={containerRef}
         onContextMenu={(e) => e.preventDefault()}
-        className="relative w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"
+        className={immersive ? "relative w-full h-full min-h-0 max-h-none rounded-none overflow-hidden border-0 bg-[#0d1720] select-none" : "relative w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"}
       >
+        {immersive && (
+          <button
+            type="button"
+            onClick={onToggleImmersive}
+            aria-label="Выйти из полноэкранного режима"
+            title="Выйти из полноэкранного режима (Esc)"
+            className="absolute right-4 top-4 z-[60] rounded-full border border-white/20 bg-black/55 px-3 py-2 text-xs font-bold text-white/80 backdrop-blur hover:bg-black/80 hover:text-white"
+          >
+            Выйти · Esc
+          </button>
+        )}
         <canvas
           ref={canvasRef}
           data-testid="sim-canvas"
@@ -1196,7 +1211,7 @@ export function SimulatorView({
             <canvas ref={rearMirrorRef} role="img" aria-label="Отражение в зеркале заднего вида" width={320} height={96} className="block w-full h-auto" />
           </FloatingPanel>
         )}
-        {!webglFallback && showMirrors && (
+        {!immersive && !webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorLeft"
             layout={layout.mirrorLeft}
@@ -1226,7 +1241,7 @@ export function SimulatorView({
         )}
 
         {/* Рулевое колесо: перетаскивается и масштабируется; поворот мышью/тачем и клавишами A/D */}
-        {!uiHidden && !webglFallback && (
+        {!immersive && !uiHidden && !webglFallback && (
           <FloatingPanel
             id="steeringWheel"
             layout={layout.steeringWheel}
@@ -1287,7 +1302,7 @@ export function SimulatorView({
         )}
 
         {/* [SEC:sim-hud] Штрафы, знаки/светофор/FPS, статус экзаменатора, настройки, справка и камера */}
-        {!uiHidden && (
+        {!immersive && !uiHidden && (
           <FloatingPanel
             id="scorePanel"
             layout={layout.scorePanel}
@@ -1417,7 +1432,7 @@ export function SimulatorView({
         )}
 
         {/* Всплывающая карточка зафиксированного нарушения */}
-        {!uiHidden && hud.latestViolation && (
+        {!immersive && !uiHidden && hud.latestViolation && (
           <div className="absolute left-1/2 -translate-x-1/2 top-[210px] z-30 rounded-xl bg-[#2a0f14]/95 border border-[#ff6b6b]/60 px-3.5 py-2 shadow-2xl max-w-[90%] fade-in">
             <div className="flex items-center gap-2 text-[11px] font-extrabold text-[#ff8585]">
               <Icon name="alert" size={14} />
@@ -1428,7 +1443,7 @@ export function SimulatorView({
         )}
 
         {/* Настройки управления: скорость руления клавишами A/D и сброс раскладки окон */}
-        {showControls && !uiHidden && (
+        {!immersive && showControls && !uiHidden && (
           <div className="absolute right-3 top-16 z-40 w-[310px] max-h-[calc(100%-5rem)] overflow-y-auto scroll-thin rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-extrabold text-[#f5b942]">Управление</span>
@@ -1548,7 +1563,7 @@ export function SimulatorView({
         )}
 
         {/* Справка по клавишам */}
-        {showHelp && (
+        {!immersive && showHelp && (
           <div className="absolute right-3 top-16 z-30 w-[300px] rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
             <div className="flex items-center justify-between mb-2.5">
               <span className="text-xs font-extrabold text-[#f5b942]">Управление (инварианты v8)</span>
@@ -1872,7 +1887,7 @@ export function SimulatorView({
       </div>
 
       {/* Компактная нижняя строка метаданных: габариты, версия правил, обязательная атрибуция ODbL */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#7c909d] px-1">
+      {!immersive && <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#7c909d] px-1">
         <div className="flex flex-wrap items-center gap-2">
           <Chip tone="neutral">{CAR.model} · {CAR.length}×{CAR.width} м · Выворот {wheelLimit.toLocaleString("ru-RU")}°</Chip>
           <Chip tone={ruleSet.status === "instructor_signed" ? "mint" : "amber"}>
@@ -1893,7 +1908,7 @@ export function SimulatorView({
             ? `Данные карты ${world.mapMeta.attribution} (${world.mapMeta.license}) · офлайн`
             : "Учебный тренажёр · не заменяет экзамен в ГИБДД"}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
