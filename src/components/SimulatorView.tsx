@@ -575,6 +575,7 @@ export function SimulatorView({
         const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
         inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
+        inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.01);
         const boostTarget = (keys.ShiftLeft || keys.ShiftRight) && inp.throttle > 0 ? 2 : 1;
         throttleBoostRef.current += (boostTarget - throttleBoostRef.current) * Math.min(1, FIXED_DT * 3.5);
         inp.throttleMultiplier = throttleBoostRef.current;
