@@ -44,7 +44,7 @@ function makeRng(seedInit: number): () => number {
 }
 
 /** Живописное дневное небо средней полосы с мягкими слоисто-кучевыми облаками и дымкой у горизонта (512×256). */
-export function makeCloudySkyTexture(): THREE.CanvasTexture {
+export function makeCloudySkyTexture(equirectangular = true): THREE.CanvasTexture {
   const w = 512;
   const h = 256;
   const c = document.createElement("canvas");
@@ -53,11 +53,22 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
   const g = c.getContext("2d")!;
 
   const grad = g.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, "#2f6299");
-  grad.addColorStop(0.36, "#5d93c6");
-  grad.addColorStop(0.68, "#9ec3e2");
-  grad.addColorStop(0.88, "#cde0ef");
-  grad.addColorStop(1, "#e2ecf4");
+  if (equirectangular) {
+    grad.addColorStop(0, "#24558b");
+    grad.addColorStop(0.18, "#447db6");
+    grad.addColorStop(0.35, "#7cb0da");
+    grad.addColorStop(0.46, "#bdd8ec");
+    grad.addColorStop(0.5, "#dce9f3");
+    grad.addColorStop(0.53, "#bcc8ce");
+    grad.addColorStop(0.66, "#6f7b78");
+    grad.addColorStop(1, "#3f4847");
+  } else {
+    grad.addColorStop(0, "#2f6299");
+    grad.addColorStop(0.36, "#5d93c6");
+    grad.addColorStop(0.68, "#9ec3e2");
+    grad.addColorStop(0.88, "#cde0ef");
+    grad.addColorStop(1, "#e2ecf4");
+  }
   g.fillStyle = grad;
   g.fillRect(0, 0, w, h);
 
@@ -85,6 +96,7 @@ export function makeCloudySkyTexture(): THREE.CanvasTexture {
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  if (equirectangular) tex.mapping = THREE.EquirectangularReflectionMapping;
   return tex;
 }
 
