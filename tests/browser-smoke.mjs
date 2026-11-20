@@ -1423,7 +1423,8 @@ try {
     const cluster = page.locator('[data-hud-panel="cluster"]');
     await cluster.waitFor({ timeout: 5000 });
     await page.getByTestId("panel-collapse-cluster").click();
-    check("Q5 HUD-панель сворачивается", await page.getByTestId("panel-collapse-cluster").innerText() === "+");
+    const collapsed = await until(async () => await page.getByTestId("panel-collapse-cluster").innerText() === "+", 3000, 100);
+    check("Q5 HUD-панель сворачивается", collapsed);
     await page.getByTestId("panel-close-cluster").click();
     await cluster.waitFor({ state: "detached", timeout: 3000 });
     check("Q6 HUD-панель закрывается", await cluster.count() === 0);
