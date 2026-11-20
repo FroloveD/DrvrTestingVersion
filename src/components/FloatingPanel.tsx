@@ -100,6 +100,7 @@ type Props = {
   resizable?: boolean;
   panelName?: string;
   collapsed?: boolean;
+  hidden?: boolean;
   onToggleCollapse?: (id: string) => void;
   onClose?: (id: string) => void;
   onBringToFront?: (id: string) => void;
@@ -127,6 +128,7 @@ export function FloatingPanel({
   resizable = true,
   panelName = title ?? id,
   collapsed = false,
+  hidden = false,
   onToggleCollapse,
   onClose,
   onBringToFront,
@@ -137,6 +139,7 @@ export function FloatingPanel({
   const [armed, setArmed] = useState(false);
   const current: PanelLayout = layout ?? fallback ?? { x: 12, y: 12, w: minW };
   const mode = activation ?? (title ? "header" : "longPress");
+  if (hidden) return null;
   const dragRef = useRef<{
     mode: "move" | "resize";
     pointerId: number;
