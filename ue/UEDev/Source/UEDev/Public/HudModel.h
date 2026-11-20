@@ -25,22 +25,33 @@ inline double CheckpointDistance(const State& s, const TestRoute& route, const R
     // До границы зоны, не длина пути по дороге.
     return std::max(0.0,std::hypot(s.X-point.X,s.Z-point.Z)-point.Radius);
 }
-// Стрелки головы независимы от селектора: влево/вправо, скорость 85°/с.
+// Углы соответствуют направлениям от глаз (-30,-38,58) к боковым зеркалам.
+constexpr double LeftMirrorYaw=-32, RightMirrorYaw=55;
 inline double HeadYaw(double yaw, bool left, bool right, double dt) {
-    return std::clamp(yaw+((right ? 1.0 : 0.0)-(left ? 1.0 : 0.0))*85*std::clamp(dt,0.0,0.1),-110.0,110.0);
+    if (left==right) return yaw;
+    const double target=left ? LeftMirrorYaw : RightMirrorYaw;
+    const double amount=360*std::clamp(dt,0.0,0.1);
+    return yaw+std::clamp(target-yaw,-amount,amount);
 }
-// Стрелки действуют при удержании; после отпускания возвращаемся к дороге.
-// Свободный осмотр мышью сам по себе не запускает автовозврат.
 inline double HeadReturnRate(double value) {
     return std::isfinite(value) ? std::clamp(value,540.0,900.0) : 720.0;
 }
 struct HeadLook {
-    bool Returning=false;
+    bool Returning=false, WasLeft=false, WasRight=false;
+    int Locked=0, LastTap=0;
+    double Clock=0, LastTapTime=-1;
     double Step(double yaw, bool left, bool right, double dt, double returnRate = 720) {
-        if (left || right) {
-            Returning=true;
-            return HeadYaw(yaw,left,right,dt);
+        Clock+=std::max(0.0,dt);
+        const int pressed=left && !WasLeft && !right ? -1 : right && !WasRight && !left ? 1 : 0;
+        WasLeft=left; WasRight=right;
+        if (pressed) {
+            const bool twice=LastTap==pressed && Clock-LastTapTime<=0.28;
+            Locked=twice ? pressed : 0;
+            LastTap=twice ? 0 : pressed;
+            LastTapTime=Clock;
         }
+        if (Locked) return HeadYaw(yaw,Locked<0,Locked>0,dt);
+        if (left || right) { Returning=true; return HeadYaw(yaw,left,right,dt); }
         if (!Returning) return yaw;
         const double amount=HeadReturnRate(returnRate)*std::clamp(dt,0.0,0.1);
         const double next=yaw+std::clamp(-yaw,-amount,amount);

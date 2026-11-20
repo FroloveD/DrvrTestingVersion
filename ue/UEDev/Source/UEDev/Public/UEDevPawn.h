@@ -7,6 +7,7 @@
  */
 #pragma once
 #include "CoreMinimal.h"
+#include "Styling/SlateBrush.h"
 #include "GameFramework/Pawn.h"
 #include "InputCoreTypes.h"
 #include "DrivingModel.h"
@@ -16,6 +17,7 @@
 class USceneCaptureComponent2D;
 class UTextureRenderTarget2D;
 class UTextRenderComponent;
+class UWidgetComponent;
 class UBoxComponent;
 class USceneComponent;
 class USpringArmComponent;
@@ -55,6 +57,8 @@ private:
     UPROPERTY() TArray<TObjectPtr<USceneCaptureComponent2D>> MirrorCaptures;
     UPROPERTY() TArray<TObjectPtr<UTextureRenderTarget2D>> MirrorTargets;
     UPROPERTY() TObjectPtr<UTextRenderComponent> DashboardDisplay;
+    UPROPERTY() TArray<TObjectPtr<UWidgetComponent>> MirrorSurfaces;
+    TArray<FSlateBrush> MirrorBrushes;
     float MirrorElapsed = 0;
     bool MirrorEnabled[3] = {true,true,true};
     void ToggleRearMirror();

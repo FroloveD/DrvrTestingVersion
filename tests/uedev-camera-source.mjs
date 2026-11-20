@@ -64,3 +64,11 @@ console.log('PASS UEDev checked-format literal guards (Log-4 regression, not UE 
 assert(pawn.includes('DeltaSeconds,HeadReturnSpeed)'));
 assert(controller.includes('TEXT("HeadReturnRate")'));
 assert(controller.includes('SetHeadReturnRate(HeadReturnSetting)'));
+
+assert(hud.includes('if (!DrivingPawn->IsCabinView())'));
+assert(pawn.includes('SetWidgetSpace(EWidgetSpace::World)'));
+assert(pawn.includes('SetSlateWidget(SNew(SImage)'));
+assert(pawn.includes('SetUVRegion(FBox2f(FVector2f(1,0),FVector2f(0,1)))'));
+assert(pawn.includes('HideComponent(SurfaceWidget.Get())'));
+assert(pawn.includes('MirrorBrushes.SetNum(3)'));
+console.log('PASS physical mirror source guards (not Unreal compile/render)');

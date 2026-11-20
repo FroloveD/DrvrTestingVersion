@@ -113,15 +113,15 @@ int main() {
     State hydraulic; hydraulic.Engine=true; hydraulic.Selector=Gear::D;
     Step(hydraulic,{true,true,false,0});
     Check(hydraulic.BrakePressure>0 && hydraulic.BrakePressure<0.1 && hydraulic.Throttle==0,"hydraulic buildup and brake override");
-    Check(HeadYaw(0,true,false,0.1)==-8.5 && HeadYaw(0,false,true,0.1)==8.5,"head arrows left right signs");
+    Check(HeadYaw(0,true,false,0.1)==-32 && HeadYaw(0,false,true,0.1)==36,"head arrows left right signs");
     Check(HeadYaw(20,true,true,0.1)==20 && HeadYaw(20,false,false,0.1)==20,"head simultaneous arrows cancel and release holds");
-    Check(HeadYaw(109,false,true,0.1)==110 && HeadYaw(-109,true,false,0.1)==-110,"head limits");
-    Check(HeadYaw(0,false,true,10)==8.5 && HeadYaw(0,false,true,-1)==0,"head frame dt limits");
+    Check(HeadYaw(54,false,true,0.1)==55 && HeadYaw(-31,true,false,0.1)==-32,"head limits");
+    Check(HeadYaw(0,false,true,10)==36 && HeadYaw(0,false,true,-1)==0,"head frame dt limits");
     for (const double side : {-1.0,1.0}) {
         HeadLook look;
         double yaw=0;
         for (int i=0;i<10;++i) yaw=look.Step(yaw,side<0,side>0,0.1);
-        Check(yaw*side>80,"head turns while arrow held");
+        Check(yaw*side>=32,"head turns while arrow held");
         double previous=std::abs(yaw);
         for (int i=0;i<30;++i) {
             yaw=look.Step(yaw,false,false,0.1);
@@ -148,6 +148,20 @@ int main() {
         while (fastLook.Returning && elapsed<1) { yaw=fastLook.Step(yaw,false,false,Dt,rate); elapsed+=Dt; }
         Check(yaw==0 && elapsed>=110/rate-1e-9 && elapsed<=110/rate+Dt+1e-9,"fast return duration and no overshoot");
         Check(elapsed<=0.217,"return always quick");
+    }
+    for (const bool left : {true,false}) {
+        HeadLook locked; double yaw=0;
+        yaw=locked.Step(yaw,left,!left,0.05);
+        yaw=locked.Step(yaw,false,false,0.05);
+        yaw=locked.Step(yaw,left,!left,0.05);
+        for(int i=0;i<30;++i) yaw=locked.Step(yaw,false,false,Dt);
+        Check(locked.Locked==(left ? -1 : 1) && yaw==(left ? LeftMirrorYaw : RightMirrorYaw),"double tap locks at mirror on release");
+        yaw=locked.Step(yaw,!left,left,Dt);
+        Check(locked.Locked==0,"single opposite arrow cancels lock");
+        for(int i=0;i<30;++i) yaw=locked.Step(yaw,false,false,Dt);
+        Check(yaw==0,"release returns after cancel");
+        HeadLook slow; slow.Step(0,left,!left,0.01); slow.Step(0,false,false,0.4); slow.Step(0,left,!left,0.01);
+        Check(slow.Locked==0,"slow taps do not lock");
     }
     State hudState;
     Check(NextHint(hudState,false)==HudHint::StartEngine,"HUD cold start hint");

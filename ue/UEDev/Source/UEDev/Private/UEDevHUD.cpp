@@ -51,9 +51,11 @@ void AUEDevHUD::DrawHUD() {
             // Отрицательная ширина UV даёт именно зеркальное отражение по горизонтали.
             DrawTexture(Target,X*Scale,Y*Scale,W*Scale,H*Scale,1,0,-1,1,FLinearColor::White,BLEND_Opaque);
     };
+    if (!DrivingPawn->IsCabinView()) {
     Mirror(0,Width/2-160,142,320,96,TEXT("ЗАДНЕЕ ЗЕРКАЛО · F5"));
     Mirror(1,16,142,240,120,TEXT("ЛЕВОЕ ЗЕРКАЛО · F6"));
     Mirror(2,Width-256,142,240,120,TEXT("ПРАВОЕ ЗЕРКАЛО · F7"));
+    }
     if (!PanelsVisible) return;
 
     const auto& S = DrivingPawn->GetDrivingState();

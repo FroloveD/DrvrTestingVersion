@@ -8,6 +8,8 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/WidgetComponent.h"
+#include "Widgets/Images/SImage.h"
 #include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -94,6 +96,22 @@ AUEDevPawn::AUEDevPawn() {
     DashboardDisplay->SetTextRenderColor(FColor(100,240,210));
     DashboardDisplay->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     for (int Index=0;Index<3;++Index) {
+        const FVector Position = Index==0 ? FVector(65,0,62) : FVector(65,Index==1 ? -97 : 97,35);
+        const FRotator Facing = (FVector(-30,-38,58)-Position).Rotation();
+        Part(*FString::Printf(TEXT("InteriorMirrorFrame%d"),Index),Cube.Object,Position,
+            Index==0 ? FVector(0.05,0.27,0.095) : FVector(0.05,0.22,0.12),Facing);
+        auto* SurfaceWidget = CreateDefaultSubobject<UWidgetComponent>(*FString::Printf(TEXT("PhysicalMirror%d"),Index));
+        SurfaceWidget->SetupAttachment(Body);
+        SurfaceWidget->SetRelativeLocation(Position+Facing.Vector()*3);
+        SurfaceWidget->SetRelativeRotation(Facing);
+        SurfaceWidget->SetRelativeScale3D(FVector(Index==0 ? 0.075 : 0.06));
+        SurfaceWidget->SetWidgetSpace(EWidgetSpace::World);
+        SurfaceWidget->SetDrawSize(FVector2D(320,Index==0 ? 96 : 160));
+        SurfaceWidget->SetPivot(FVector2D(0.5,0.5));
+        SurfaceWidget->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        SurfaceWidget->SetCastShadow(false);
+        SurfaceWidget->SetTwoSided(true);
+        MirrorSurfaces.Add(SurfaceWidget);
         auto* Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(*FString::Printf(TEXT("MirrorCapture%d"),Index));
         Capture->SetupAttachment(Body);
         Capture->SetRelativeLocation(Index==0 ? FVector(0,0,62) : FVector(75,Index==1 ? -100 : 100,38));
@@ -157,12 +175,19 @@ void AUEDevPawn::BeginPlay() {
         Material->SetVectorParameterValue(TEXT("Color"), Color);
         if (Name == TEXT("LampRear")) RearLampMaterial = Material;
     }
+    MirrorBrushes.SetNum(3);
     for (int Index=0;Index<MirrorCaptures.Num();++Index) {
         auto* Target = NewObject<UTextureRenderTarget2D>(this);
         Target->RenderTargetFormat = RTF_RGBA8;
         Target->ClearColor = FLinearColor::Black;
         Target->InitAutoFormat(320,Index==0 ? 96 : 160);
         MirrorTargets.Add(Target);
+        MirrorBrushes[Index].SetResourceObject(Target);
+        MirrorBrushes[Index].ImageSize=FVector2D(320,Index==0 ? 96 : 160);
+        MirrorBrushes[Index].SetUVRegion(FBox2f(FVector2f(1,0),FVector2f(0,1)));
+        MirrorSurfaces[Index]->SetSlateWidget(SNew(SImage).Image(&MirrorBrushes[Index]));
+        // Ни одна зеркальная поверхность не попадает в другой capture (нет рекурсии).
+        for (const auto& SurfaceWidget : MirrorSurfaces) MirrorCaptures[Index]->HideComponent(SurfaceWidget.Get());
         MirrorCaptures[Index]->TextureTarget = Target;
         // В зеркале нет кабины/дисплея, но остаются кузов и колёса как ориентиры.
         for (const auto& Detail : CabinParts) MirrorCaptures[Index]->HideComponent(Detail.Get());
@@ -199,6 +224,7 @@ void AUEDevPawn::UpdateCabin(float DeltaSeconds) {
     DashboardDisplay->SetText(FText::FromString(FString::Printf(TEXT("%.0f км/ч   %s\n%.0f об/мин\n%s  %s\n%s"),
         FMath::Abs(Model.Speed)*3.6,*GearLabel,Model.Rpm,Model.Engine ? TEXT("ДВС ВКЛ") : TEXT("ДВС ВЫКЛ"),
         Model.Handbrake ? TEXT("РУЧНИК") : TEXT(""),Model.Belt ? TEXT("РЕМЕНЬ ДА") : TEXT("РЕМЕНЬ НЕТ"))));
+    for (int Index=0;Index<MirrorSurfaces.Num();++Index) MirrorSurfaces[Index]->SetVisibility(CabinView && MirrorEnabled[Index]);
     MirrorElapsed += DeltaSeconds;
     if (MirrorElapsed>=1.f/15.f) {
         MirrorElapsed=0;
@@ -211,6 +237,7 @@ void AUEDevPawn::ApplyCameraView() {
     Camera->SetActive(!CabinView);
     CabinCamera->SetActive(CabinView);
     DashboardDisplay->SetVisibility(CabinView);
+    for (int Index=0;Index<MirrorSurfaces.Num();++Index) MirrorSurfaces[Index]->SetVisibility(CabinView && MirrorEnabled[Index]);
     for (const auto& Detail : CabinParts) if (Detail) Detail->SetVisibility(CabinView);
     for (const auto& Detail : CabinOccluders) if (Detail) Detail->SetVisibility(!CabinView);
 }
