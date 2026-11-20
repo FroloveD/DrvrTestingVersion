@@ -372,10 +372,7 @@ export class SceneController {
     this.sideRT = new THREE.WebGLRenderTarget(320, 160, { depthBuffer: true });
     this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 105);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
-    this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
-    // Риг игрока (включая невидимые pick-меши органов салона) живёт на слое 1.
-    // Raycaster по умолчанию видит только слой 0: проекция работала, но все клики промахивались.
-    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
+    this.configurePlayerViewLayers();
 
     // Физические 3D-зеркала в салоне: повышенное разрешение, прямой GPU-рендер и единый ACES tone mapping со сценой
     this.cockpitRearRT = new THREE.WebGLRenderTarget(512, 160, { depthBuffer: true });
@@ -1605,6 +1602,16 @@ export class SceneController {
       dst[to + 3] = 255;
     }
     frame.ctx.putImageData(frame.image, 0, 0);
+  }
+
+  /** Основной вид видит весь автомобиль; отражения исключают собственную зеркальную оптику. */
+  private configurePlayerViewLayers(): void {
+    // Mesh-слои не наследуются от root: buildPlayerRigWith явно переводит кузов/салон
+    // на слой 1, а зеркала — на 2. Основная камера обязана видеть оба, не только мир (0).
+    this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
+    this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
+    this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
+    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
   }
 
   /**

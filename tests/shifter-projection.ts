@@ -39,3 +39,21 @@ for (const yaw of [0, 0.7, -1.2]) {
   }
 }
 console.log("PASS cockpit drag projection: P/D/M/+/−, 3 grab offsets, 3 chassis headings");
+
+// Layer regression: a correct projection/click does NOT imply the car is rendered.
+// Run the production layer setup without constructing a WebGLRenderer.
+Object.assign(ctrl, {
+  sideCam: new THREE.PerspectiveCamera(), rearCam: new THREE.PerspectiveCamera(),
+});
+ctrl["configurePlayerViewLayers"]();
+const world = new THREE.Layers();
+const body = new THREE.Layers(); body.set(1);
+const mirror = new THREE.Layers(); mirror.set(2);
+assert.ok(camera.layers.test(world), "main view must retain world visibility");
+assert.ok(camera.layers.test(body), "main view must show player body AND cockpit");
+assert.ok(camera.layers.test(mirror), "main view must show physical mirror hardware");
+assert.ok(ctrl.sideCam.layers.test(body), "side mirrors must show own car edge");
+assert.ok(!ctrl.sideCam.layers.test(mirror), "side mirrors must not render their own hardware");
+assert.ok(!ctrl.rearCam.layers.test(body), "rear mirror must not be blocked by own car");
+assert.ok(ctrl.shifterRaycaster.layers.test(body), "cabin pick meshes must remain interactive");
+console.log("PASS player camera layers: world, body/cockpit, mirrors and picking");
