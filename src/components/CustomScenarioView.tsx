@@ -10,7 +10,7 @@
  * - `[SEC:custom-preview]` — палитра классов, сетка/слои, Undo/Redo и интерактивный 2D-холст (`MapCanvasEditor`).
  * - `[SEC:custom-forms]`   — инспектор выбранного объекта, реестр объектов, параметры карты и памятка импорта OSM.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BOUNDARY_SHAPE_PRESETS, polygonArea, type BoundaryShapePreset } from "../maps/boundary";
 import { INTERNET_RADIO_STATIONS } from "../audio/radioCatalog";
 import {
@@ -289,7 +289,7 @@ function EditorPanelFrame({ id, title, collapsed, onToggle, onClose, children }:
   collapsed: boolean;
   onToggle: (id: string) => void;
   onClose: (id: string) => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div data-editor-panel={id} className="space-y-2">
