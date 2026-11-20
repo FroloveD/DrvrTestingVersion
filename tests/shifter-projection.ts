@@ -61,12 +61,15 @@ console.log("PASS player camera layers: world, body/cockpit, mirrors and picking
 // Own trunk is a lower-frame distance reference; the roof/interior stay excluded.
 const own = new THREE.Group();
 const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.588, 0.87));
-trunk.userData.rearMirrorReference = true;
+const deck = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.6));
+deck.userData.rearMirrorOnly = true;
 const roof = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.055, 2));
 const hardware = new THREE.Mesh(); hardware.layers.set(2);
-own.add(trunk, roof, hardware);
+own.add(trunk, deck, roof, hardware);
 ctrl["configurePlayerMeshLayers"](own);
-assert.ok(ctrl.rearCam.layers.test(trunk.layers), "rear mirror must show own trunk");
+assert.ok(ctrl.rearCam.layers.test(deck.layers), "rear mirror must show upper rear surface");
+assert.ok(!ctrl.rearCam.layers.test(trunk.layers), "solid trunk box must not appear as a floating block");
+assert.ok(!camera.layers.test(deck.layers), "mirror surface must not duplicate exterior geometry");
 assert.ok(!ctrl.rearCam.layers.test(roof.layers), "roof must not obscure rear view");
 assert.ok(!ctrl.rearCam.layers.test(hardware.layers), "no mirror self-reflection");
 assert.ok(camera.layers.test(trunk.layers), "trunk remains visible in main view");

@@ -1620,8 +1620,7 @@ export class SceneController {
   private configurePlayerMeshLayers(root: THREE.Object3D): void {
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
-        obj.layers.set(PLAYER_EXTERIOR_LAYER);
-        if (obj.userData.rearMirrorReference === true) obj.layers.enable(REAR_MIRROR_REFERENCE_LAYER);
+        obj.layers.set(obj.userData.rearMirrorOnly === true ? REAR_MIRROR_REFERENCE_LAYER : PLAYER_EXTERIOR_LAYER);
       }
     });
   }

@@ -596,8 +596,27 @@ export function buildDetailedCar(
     const trunk = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, lowerH * 0.98, trunkLen), paintMat);
     trunk.position.set(0, sillY + lowerH * 0.49, rearFaceZ + trunkLen / 2);
     trunk.castShadow = true;
-    // Только корма служит ориентиром в заднем зеркале; крыша и салон не должны закрывать обзор.
-    trunk.userData.rearMirrorReference = true;
+    // Для зеркала нужна верхняя поверхность кормы, а не передняя стенка грубого
+    // BoxGeometry (она скрыта салоном в обычном виде, но выглядит как висящий ящик
+    // при выборочном рендере). Отдельная поверхность — только для слоя отражения.
+    const rearReferenceGeometry = new THREE.BufferGeometry();
+    const refFrontZ = rearFaceZ + trunkLen * 0.78;
+    const refBackZ = rearFaceZ + 0.025;
+    const refY = sillY + lowerH * 0.98;
+    rearReferenceGeometry.setAttribute("position", new THREE.Float32BufferAttribute([
+      -W * 0.42, refY, refFrontZ,
+       W * 0.42, refY, refFrontZ,
+       W * 0.47, refY - 0.025, refBackZ,
+      -W * 0.42, refY, refFrontZ,
+       W * 0.47, refY - 0.025, refBackZ,
+      -W * 0.47, refY - 0.025, refBackZ,
+    ], 3));
+    rearReferenceGeometry.computeVertexNormals();
+    const rearReference = new THREE.Mesh(rearReferenceGeometry, paintMat);
+    rearReference.name = "rear-mirror-deck-reference";
+    rearReference.userData.rearMirrorOnly = true;
+    rearReference.receiveShadow = true;
+    chassis.add(rearReference);
     const diffuser = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.12, 0.18), darkTrimMat);
     diffuser.position.set(0, sillY + 0.05, rearFaceZ + 0.08);
     const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.14, 10), chromeMat);
