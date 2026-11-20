@@ -425,10 +425,10 @@ export default function App() {
                 <h2 className="text-xl font-extrabold">Сценарии</h2>
                 <p className="text-xs text-[#8fa2ae] mt-1">Создание собственных упражнений и управление маршрутами на OSM-картах.</p>
               </div>
-              <div className="inline-flex rounded-xl border border-white/10 bg-black/20 p-1 gap-1" role="tablist" aria-label="Разделы сценариев">
-                <button type="button" role="tab" aria-selected={scenarioSection === "editor"} onClick={() => setScenarioSection("editor")}
+              <div className="inline-flex rounded-xl border border-white/10 bg-black/20 p-1 gap-1" role="group" aria-label="Разделы сценариев">
+                <button type="button" aria-pressed={scenarioSection === "editor"} onClick={() => setScenarioSection("editor")}
                   className={`px-3 py-2 rounded-lg text-xs font-bold transition ${scenarioSection === "editor" ? "bg-[#f5b942]/15 text-[#f5b942] border border-[#f5b942]/40" : "text-[#9bafbc] hover:text-white"}`}>Конструктор</button>
-                <button type="button" role="tab" aria-label="Каталог маршрутов" aria-selected={scenarioSection === "routes"} onClick={() => setScenarioSection("routes")}
+                <button type="button" aria-label="Каталог маршрутов" aria-pressed={scenarioSection === "routes"} onClick={() => setScenarioSection("routes")}
                   className={`px-3 py-2 rounded-lg text-xs font-bold transition ${scenarioSection === "routes" ? "bg-[#f5b942]/15 text-[#f5b942] border border-[#f5b942]/40" : "text-[#9bafbc] hover:text-white"}`}><Icon name="route" size={14} /> Каталог маршрутов</button>
               </div>
             </div>
