@@ -1581,6 +1581,12 @@ export function SimulatorView({
         {!webglFallback && showRearMirror && (
           <FloatingPanel
             id="mirrorRear"
+            panelName="Зеркало заднего вида"
+            hidden={panelState.closed.includes("mirrorRear")}
+            collapsed={panelState.collapsed.includes("mirrorRear")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             title="Зеркало заднего вида"
             icon="eye"
             layout={layout.mirrorRear}
@@ -1589,7 +1595,7 @@ export function SimulatorView({
             maxW={640}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={26}
+            zIndex={resolvePanelZIndex("mirrorRear", 26, layerOrder)}
           >
             <canvas ref={rearMirrorRef} role="img" aria-label="Отражение в зеркале заднего вида" width={320} height={96} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1597,13 +1603,19 @@ export function SimulatorView({
         {!immersive && !webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorLeft"
+            panelName="Левое зеркало"
+            hidden={panelState.closed.includes("mirrorLeft")}
+            collapsed={panelState.collapsed.includes("mirrorLeft")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.mirrorLeft}
             defaults={(_cw, ch) => ({ x: 12, y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
             maxW={420}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={25}
+            zIndex={resolvePanelZIndex("mirrorLeft", 25, layerOrder)}
           >
             <canvas ref={leftMirrorRef} role="img" aria-label="Отражение в левом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1611,13 +1623,19 @@ export function SimulatorView({
         {!webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorRight"
+            panelName="Правое зеркало"
+            hidden={panelState.closed.includes("mirrorRight")}
+            collapsed={panelState.collapsed.includes("mirrorRight")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.mirrorRight}
             defaults={(cw, ch) => ({ x: Math.max(0, cw - 182), y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
             maxW={420}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={25}
+            zIndex={resolvePanelZIndex("mirrorRight", 25, layerOrder)}
           >
             <canvas ref={rightMirrorRef} role="img" aria-label="Отражение в правом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1627,6 +1645,12 @@ export function SimulatorView({
         {!immersive && !uiHidden && !webglFallback && (
           <FloatingPanel
             id="steeringWheel"
+            panelName="Рулевое колесо"
+            hidden={panelState.closed.includes("steeringWheel")}
+            collapsed={panelState.collapsed.includes("steeringWheel")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.steeringWheel}
             defaults={(cw, ch) => cw < 720
               ? {x: 8, y: ch - 162, w: 106}
@@ -1635,7 +1659,7 @@ export function SimulatorView({
             maxW={320}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={24}
+            zIndex={resolvePanelZIndex("steeringWheel", 24, layerOrder)}
           >
             <div className="p-2 flex flex-col gap-1.5">
               <svg
@@ -1688,13 +1712,19 @@ export function SimulatorView({
         {!immersive && !uiHidden && (
           <FloatingPanel
             id="scorePanel"
+            panelName="Оценка заезда"
+            hidden={panelState.closed.includes("scorePanel")}
+            collapsed={panelState.collapsed.includes("scorePanel")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.scorePanel}
             defaults={() => ({ x: 12, y: 12, w: 232 })}
             minW={190}
             maxW={460}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={resolvePanelZIndex("scorePanel", 20, layerOrder)}
           >
             <div className="px-3 py-2 pr-7">
             <div className="flex items-center gap-2">
@@ -1726,13 +1756,19 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="speedPanel"
+            panelName="Скорость и подсказки"
+            hidden={panelState.closed.includes("speedPanel")}
+            collapsed={panelState.collapsed.includes("speedPanel")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.speedPanel}
             defaults={(cw) => ({ x: Math.max(0, cw - 236), y: 12, w: 232 })}
             minW={150}
             maxW={480}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={resolvePanelZIndex("speedPanel", 20, layerOrder)}
           >
             <div className="flex items-center gap-2 px-8 py-1.5 flex-wrap">
             {hud.nextSignal && (
@@ -1777,13 +1813,19 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="statusBar"
+            panelName="Статус поездки"
+            hidden={panelState.closed.includes("statusBar")}
+            collapsed={panelState.collapsed.includes("statusBar")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.statusBar}
             defaults={(cw) => ({ x: Math.max(0, (cw - 540) / 2), y: 148, w: 540 })}
             minW={300}
             maxW={820}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={resolvePanelZIndex("statusBar", 20, layerOrder)}
           >
             <div className="px-8 py-1.5">
             <div
@@ -1989,6 +2031,12 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="camToggles"
+            panelName="Камеры и зеркала"
+            hidden={panelState.closed.includes("camToggles")}
+            collapsed={panelState.collapsed.includes("camToggles")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.camToggles}
             defaults={(cw, ch) => {
               const w = Math.min(660, cw - 16);
@@ -1998,7 +2046,7 @@ export function SimulatorView({
             maxW={680}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={21}
+            zIndex={resolvePanelZIndex("camToggles", 21, layerOrder)}
             resizable={false}
           >
             <div className="flex flex-wrap items-center justify-center gap-1.5 pl-2 pr-6 py-1.5">
@@ -2085,6 +2133,12 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="cluster"
+            panelName="Приборы и управление"
+            hidden={panelState.closed.includes("cluster")}
+            collapsed={panelState.collapsed.includes("cluster")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.cluster}
             defaults={(cw, ch) => {
               const w = Math.min(620, cw - 16);
@@ -2094,7 +2148,7 @@ export function SimulatorView({
             maxW={880}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={22}
+            zIndex={resolvePanelZIndex("cluster", 22, layerOrder)}
           >
             <div className="px-3 py-2 flex flex-wrap items-center justify-center gap-2 sm:gap-3 pr-7">
               {/* Левый поворотник */}
@@ -2271,11 +2325,17 @@ export function SimulatorView({
           const width = gas ? 76 : 84;
           return (
             <FloatingPanel key={id} id={id} activation="grip" resizable={false}
+              panelName={gas ? "Педаль газа" : "Педаль тормоза"}
+              hidden={panelState.closed.includes(id)}
+              collapsed={panelState.collapsed.includes(id)}
+              onToggleCollapse={togglePanelCollapse}
+              onClose={closePanel}
+              onBringToFront={bringPanelToFront}
               gripLabel={gas ? "Переместить педаль газа" : "Переместить педаль тормоза"}
               layout={layout[id]} defaults={(cw, ch) => ({
                 x: Math.max(0, cw - 12 - width - (gas ? 0 : 86)), y: Math.max(0, ch - 98), w: width,
               })}
-              minW={width} maxW={width} onChange={handleLayoutChange} containerRef={containerRef} zIndex={27}>
+              minW={width} maxW={width} onChange={handleLayoutChange} containerRef={containerRef} zIndex={resolvePanelZIndex(id, 27, layerOrder)}>
               <button type="button" {...bindPedal(which)} aria-label={gas ? "Газ" : "Тормоз"}
                 aria-pressed={pedalVisual[which]} title={gas ? "Газ: удерживайте кнопку или W" : "Тормоз: удерживайте кнопку или S"}
                 className={`pedal-face ${gas ? "pedal-gas" : "pedal-brake"}`}>
