@@ -174,12 +174,13 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     event.preventDefault();
   };
 
-  const handleCheckpointPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const handleCheckpointPointerMove = (event: ReactPointerEvent<SVGCircleElement>) => {
     const checkpointId = dragCheckpointRef.current;
-    if (!checkpointId || !editing) return;
-    const matrix = event.currentTarget.getScreenCTM();
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!checkpointId || !editing || !svg) return;
+    const matrix = svg.getScreenCTM();
     if (!matrix) return;
-    const point = event.currentTarget.createSVGPoint();
+    const point = svg.createSVGPoint();
     point.x = event.clientX;
     point.y = event.clientY;
     const local = point.matrixTransform(matrix.inverse());
@@ -189,7 +190,7 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     });
   };
 
-  const handleCheckpointPointerUp = (_event: ReactPointerEvent<SVGSVGElement>) => {
+  const handleCheckpointPointerUp = (_event: ReactPointerEvent<SVGCircleElement>) => {
     // The browser releases pointer capture automatically after pointerup.
     dragCheckpointRef.current = null;
   };
@@ -467,9 +468,6 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                       className="w-full h-[280px] touch-none"
                       role="img"
                       aria-label="Карта маршрута. Перетаскивайте маркеры контрольных точек."
-                      onPointerMove={handleCheckpointPointerMove}
-                      onPointerUp={handleCheckpointPointerUp}
-                      onPointerCancel={handleCheckpointPointerUp}
                     >
                       <rect x={route.scenarioSnapshot.bounds.minX} y={-route.scenarioSnapshot.bounds.maxZ}
                         width={route.scenarioSnapshot.bounds.maxX - route.scenarioSnapshot.bounds.minX}
@@ -486,7 +484,10 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                             cx={checkpoint.x} cy={-checkpoint.z} r={Math.max(5, checkpoint.radius)}
                             fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
                             stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }}
-                            onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)} />
+                            onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)}
+                            onPointerMove={handleCheckpointPointerMove}
+                            onPointerUp={handleCheckpointPointerUp}
+                            onPointerCancel={handleCheckpointPointerUp} />
                           <text x={checkpoint.x + Math.max(7, checkpoint.radius)} y={-checkpoint.z - Math.max(7, checkpoint.radius)}
                             fill="#ffffff" fontSize="12" fontWeight="bold" pointerEvents="none">{index + 1}</text>
                         </g>
