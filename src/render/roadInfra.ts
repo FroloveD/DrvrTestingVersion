@@ -329,8 +329,11 @@ export function buildWorldRoadsAndSidewalks(
     angle: number,
     recvShadow = false
   ) => {
-    // Прозрачные decals оставляем отдельными: у них важна сортировка по глубине.
-    if (mat.transparent || geo.groups.length > 0) {
+    // Прочие прозрачные decals оставляем отдельными из-за сортировки по глубине.
+    // Следы наката OSM-карт лежат на дорожной плоскости и объединяются по ячейкам:
+    // у них один материал и нет взаимного перекрытия с разными уровнями прозрачности.
+    const batchLaneWear = world.scenarioId === "city_osm" && mat === mats.laneWearMat;
+    if ((mat.transparent && !batchLaneWear) || geo.groups.length > 0) {
       const mesh = new THREE.Mesh(geo, mat);
       mesh.rotation.order = "YXZ";
       mesh.rotation.y = angle;
