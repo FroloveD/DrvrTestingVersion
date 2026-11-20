@@ -69,6 +69,7 @@ import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../ren
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  newAttemptRequest: number;
   immersive: boolean;
   onToggleImmersive: () => void;
   scenarioId: ScenarioId;
@@ -187,6 +188,7 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  newAttemptRequest,
   immersive,
   onToggleImmersive,
   scenarioId,
@@ -645,6 +647,13 @@ export function SimulatorView({
     },
     [releasePedals]
   );
+
+  const lastNewAttemptRequestRef = useRef(newAttemptRequest);
+  useEffect(() => {
+    if (lastNewAttemptRequestRef.current === newAttemptRequest) return;
+    lastNewAttemptRequestRef.current = newAttemptRequest;
+    resetAttempt(worldRef.current, COLD_START);
+  }, [newAttemptRequest, resetAttempt]);
 
   // Перезагрузка мира при смене сценария, калибровки или OSM-файла
   useEffect(() => {
