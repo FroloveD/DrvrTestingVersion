@@ -34,6 +34,8 @@ export type InputState = {
   belt: boolean;
   lights: boolean;
   signal: TurnSignal;
+  /** Быстрое нарастание тормозного усилия при энергичном нажатии педали. */
+  shiftBoost?: boolean;
 };
 
 export type Vec2 = { x: number; z: number };
