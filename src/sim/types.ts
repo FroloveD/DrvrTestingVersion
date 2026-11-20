@@ -14,7 +14,7 @@
  */
 
 /** P — Parking (стояночная блокировка АКПП), R/N/D — рабочие режимы, 1–3 — ручные ступени. */
-export type Gear = "P" | "R" | "N" | "D" | "1" | "2" | "3";
+export type Gear = "P" | "R" | "N" | "D" | "1" | "2" | "3" | "4" | "5" | "6";
 
 export type TurnSignal = "left" | "right" | "hazard" | null;
 
@@ -55,8 +55,12 @@ export type SimState = {
   /** Выбранная машина; отсутствует в старых реплеях — трактуется как Ceed JD. */
   carId?: PlayerCarId;
   prevGear: Gear;
-  autoSubGear: number; // 1..5 в режиме D
-  rpm: number; // 0 или 800..6500
+  autoSubGear: number; // 1..6 в режиме D
+  rpm: number; // 0 или 760..6500
+  /** Инерционное состояние дросселя, давления тормозов и переключения; старые реплеи мигрируют по умолчанию. */
+  throttlePos?: number;
+  brakePos?: number;
+  shiftTimer?: number;
   engineOn: boolean;
   handbrake: boolean;
   belt: boolean;
