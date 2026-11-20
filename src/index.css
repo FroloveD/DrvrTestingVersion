@@ -189,3 +189,8 @@ input[type="checkbox"] { accent-color: var(--mint); }
   border-radius: 0;
 }
 [data-testid="sim-viewport"]::backdrop { background: #0d1720; }
+/* The scene's z-index cannot escape main's stacking context (header is z-40).
+   Raise that context for the CSS fallback as well as the native fullscreen path. */
+body:has([data-testid="sim-viewport"][data-immersive="true"]) main {
+  z-index: 100;
+}
