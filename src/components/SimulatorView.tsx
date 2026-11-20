@@ -271,6 +271,8 @@ export function SimulatorView({
   const attemptSavedRef = useRef(onAttemptSaved);
   const rideDirtyRef = useRef(false);
   const recordingActiveRef = useRef(true);
+  // A cold-start idle screen is not an attempt until the learner explicitly starts it.
+  const rideStartedRef = useRef(false);
   const lastAutoSaveRef = useRef(0);
 
   useEffect(() => {
@@ -286,7 +288,7 @@ export function SimulatorView({
   useEffect(() => {
     const saveUnfinished = () => {
       const st = stateRef.current;
-      if (!recordingActiveRef.current || !rideDirtyRef.current || autoSavedRef.current) return;
+      if (!recordingActiveRef.current || !rideStartedRef.current || !rideDirtyRef.current || autoSavedRef.current) return;
       rideDirtyRef.current = false;
       lastAutoSaveRef.current = Date.now();
       // Любой записанный тик сохраняется: движение может ещё не превысить порог hasMoved.
@@ -438,6 +440,7 @@ export function SimulatorView({
       autoSavedRef.current = false;
       rideDirtyRef.current = false;
       recordingActiveRef.current = true;
+      rideStartedRef.current = false;
       keysRef.current = {};
       releasePedals();
       sceneCtrlRef.current?.resetOrbit();
@@ -988,6 +991,7 @@ export function SimulatorView({
   /** Явное действие ученика: переводит автомобиль из холодного старта P в рабочий режим. */
   const handleQuickStart = () => {
     if (quickStartUsed) return;
+    rideStartedRef.current = true;
     setQuickStartUsed(true);
     setShowQuickStartPrompt(false);
     const inp = inputRef.current;
