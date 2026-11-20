@@ -809,15 +809,84 @@ function addSignPoleHardware(g: THREE.Group, poleH: number, signY: number, mats:
   }
 }
 
+/**
+ * Инстансинг типовых стоек дорожных знаков для крупных OSM-сцен.
+ * Лицевые/обратные панели остаются отдельными объектами, чтобы сохранить уникальные текстуры.
+ */
+export function buildOsmSignSupportInstances(
+  group: THREE.Group,
+  signs: Array<{ x: number; z: number; h: number }>,
+  mats: RoadMaterialPack
+): void {
+  const cellSize = 96;
+  const cells = new Map<string, Array<{ x: number; z: number; h: number }>>();
+  for (const sign of signs) {
+    const key = `${Math.floor(sign.x / cellSize)},${Math.floor(sign.z / cellSize)}`;
+    const bucket = cells.get(key) ?? [];
+    bucket.push(sign);
+    cells.set(key, bucket);
+  }
+
+  const baseGeo = new THREE.CylinderGeometry(0.11, 0.14, 0.18, 10);
+  const poleGeo = new THREE.CylinderGeometry(0.036, 0.042, 2.86, 10);
+  const capGeo = new THREE.CylinderGeometry(0.044, 0.044, 0.04, 10);
+  const clampGeo = new THREE.BoxGeometry(0.12, 0.045, 0.09);
+  const dummy = new THREE.Object3D();
+
+  for (const [key, bucket] of cells) {
+    const [gx, gz] = key.split(",").map(Number);
+    const centerX = (gx + 0.5) * cellSize;
+    const centerZ = (gz + 0.5) * cellSize;
+    const make = (geometry: THREE.BufferGeometry, material: THREE.Material, count: number) => {
+      const mesh = new THREE.InstancedMesh(geometry, material, count);
+      mesh.position.set(centerX, 0, centerZ);
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      return mesh;
+    };
+    const bases = make(baseGeo, mats.concreteBaseMat, bucket.length);
+    const poles = make(poleGeo, mats.galvPoleMat, bucket.length);
+    const caps = make(capGeo, mats.darkIronMat, bucket.length);
+    const clamps = make(clampGeo, mats.darkIronMat, bucket.length * 2);
+
+    bucket.forEach((sign, index) => {
+      const x = sign.x - centerX;
+      const z = sign.z - centerZ;
+      const set = (mesh: THREE.InstancedMesh, slot: number, px: number, py: number, pz: number, yaw = sign.h) => {
+        dummy.position.set(x + px * Math.cos(sign.h) + pz * Math.sin(sign.h), py, z - px * Math.sin(sign.h) + pz * Math.cos(sign.h));
+        dummy.rotation.set(0, yaw, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(slot, dummy.matrix);
+      };
+      set(bases, index, 0, 0.09, 0);
+      set(poles, index, 0, 1.43, 0);
+      set(caps, index, 0, 2.875, 0);
+      set(clamps, index * 2, 0, 2.35, -0.02);
+      set(clamps, index * 2 + 1, 0, 2.69, -0.02);
+    });
+
+    for (const mesh of [bases, poles, caps, clamps]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
+  }
+  baseGeo.dispose();
+  poleGeo.dispose();
+  capGeo.dispose();
+  clampGeo.dispose();
+}
+
 /** Строит дорожный знак ГОСТ Р 52290-2004 на оцинкованной стойке с фигурной подложкой и хомутами. */
-export function buildGostRoadSign(group: THREE.Group, sign: RoadSignDef, mats: RoadMaterialPack): void {
+export function buildGostRoadSign(group: THREE.Group, sign: RoadSignDef, mats: RoadMaterialPack, includeHardware = true): void {
   const g = new THREE.Group();
   g.position.set(sign.x, 0, sign.z);
   g.rotation.y = sign.h;
 
   const size = sign.kind === "crosswalk" ? 0.84 : 0.74;
   const signY = 2.52;
-  addSignPoleHardware(g, 2.86, signY, mats);
+  if (includeHardware) addSignPoleHardware(g, 2.86, signY, mats);
 
   const front = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size),
@@ -842,7 +911,8 @@ export function buildGostSpeedSign(
   x: number,
   z: number,
   h: number,
-  mats: RoadMaterialPack
+  mats: RoadMaterialPack,
+  includeHardware = true
 ): void {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
@@ -850,7 +920,7 @@ export function buildGostSpeedSign(
 
   const size = 0.74;
   const signY = 2.52;
-  addSignPoleHardware(g, 2.86, signY, mats);
+  if (includeHardware) addSignPoleHardware(g, 2.86, signY, mats);
 
   const tex = makeGostSpeedLimitTexture(limitKmh);
   const faceMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.08 });
