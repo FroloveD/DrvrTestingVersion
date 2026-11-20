@@ -1567,7 +1567,7 @@ export function SimulatorView({
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
         {!webglFallback && showRearMirror && (
           <FloatingPanel
-            id="mirrorRear"
+            id="mirrorRear" {...panelProps("mirrorRear", "Заднее зеркало")}
             title="Зеркало заднего вида"
             icon="eye"
             layout={layout.mirrorRear}
@@ -1583,7 +1583,7 @@ export function SimulatorView({
         )}
         {!immersive && !webglFallback && showMirrors && (
           <FloatingPanel
-            id="mirrorLeft"
+            id="mirrorLeft" {...panelProps("mirrorLeft", "Левое зеркало")}
             layout={layout.mirrorLeft}
             defaults={(_cw, ch) => ({ x: 12, y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1597,7 +1597,7 @@ export function SimulatorView({
         )}
         {!webglFallback && showMirrors && (
           <FloatingPanel
-            id="mirrorRight"
+            id="mirrorRight" {...panelProps("mirrorRight", "Правое зеркало")}
             layout={layout.mirrorRight}
             defaults={(cw, ch) => ({ x: Math.max(0, cw - 182), y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1613,7 +1613,7 @@ export function SimulatorView({
         {/* Рулевое колесо: перетаскивается и масштабируется; поворот мышью/тачем и клавишами A/D */}
         {!immersive && !uiHidden && !webglFallback && (
           <FloatingPanel
-            id="steeringWheel"
+            id="steeringWheel" {...panelProps("steeringWheel", "Рулевое колесо")}
             layout={layout.steeringWheel}
             defaults={(cw, ch) => cw < 720
               ? {x: 8, y: ch - 162, w: 106}
@@ -1674,7 +1674,7 @@ export function SimulatorView({
         {/* [SEC:sim-hud] Штрафы, знаки/светофор/FPS, статус экзаменатора, настройки, справка и камера */}
         {!immersive && !uiHidden && (
           <FloatingPanel
-            id="scorePanel"
+            id="scorePanel" {...panelProps("scorePanel", "Оценка")}
             layout={layout.scorePanel}
             defaults={() => ({ x: 12, y: 12, w: 232 })}
             minW={190}
@@ -1712,7 +1712,7 @@ export function SimulatorView({
         {/* Правый верхний блок: знак скорости + светофор + FPS (перенос долгим нажатием) */}
         {!uiHidden && (
           <FloatingPanel
-            id="speedPanel"
+            id="speedPanel" {...panelProps("speedPanel", "Скорость")}
             layout={layout.speedPanel}
             defaults={(cw) => ({ x: Math.max(0, cw - 236), y: 12, w: 232 })}
             minW={150}
@@ -1763,7 +1763,7 @@ export function SimulatorView({
         {/* Строка статуса / задания экзаменатора (#status) */}
         {!uiHidden && (
           <FloatingPanel
-            id="statusBar"
+            id="statusBar" {...panelProps("statusBar", "Статус")}
             layout={layout.statusBar}
             defaults={(cw) => ({ x: Math.max(0, (cw - 540) / 2), y: 148, w: 540 })}
             minW={300}
@@ -2025,7 +2025,7 @@ export function SimulatorView({
         {/* Переключатели камеры, траектории, зеркал и качества (перенос долгим нажатием) */}
         {!uiHidden && (
           <FloatingPanel
-            id="camToggles"
+            id="camToggles" {...panelProps("camToggles", "Камеры")}
             layout={layout.camToggles}
             defaults={(cw, ch) => {
               const w = Math.min(660, cw - 16);
@@ -2121,7 +2121,7 @@ export function SimulatorView({
         {/* [SEC:sim-cluster] Приборная панель, селектор АКПП, кнопки I/РН/B/L и раздельные педали */}
         {!uiHidden && (
           <FloatingPanel
-            id="cluster"
+            id="cluster" {...panelProps("cluster", "Приборы и селектор")}
             layout={layout.cluster}
             defaults={(cw, ch) => {
               const w = Math.min(620, cw - 16);
@@ -2307,7 +2307,7 @@ export function SimulatorView({
           const id = gas ? "pedalGas" : "pedalBrake";
           const width = gas ? 76 : 84;
           return (
-            <FloatingPanel key={id} id={id} activation="grip" resizable={false}
+            <FloatingPanel key={id} id={id} {...panelProps(id, gas ? "Педаль газа" : "Педаль тормоза")} activation="grip" resizable={false}
               gripLabel={gas ? "Переместить педаль газа" : "Переместить педаль тормоза"}
               layout={layout[id]} defaults={(cw, ch) => ({
                 x: Math.max(0, cw - 12 - width - (gas ? 0 : 86)), y: Math.max(0, ch - 98), w: width,
