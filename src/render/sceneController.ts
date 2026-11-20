@@ -1,7 +1,7 @@
 /**
  * @module render/sceneController
  * @layer three-render
- * @role Изолированный 3D-рендер Three.js: процедурные текстуры и Kia Ceed JD, мир, 3 зеркала и освобождение GPU.
+ * @role Изолированный 3D-рендер Three.js: процедурные текстуры, парк Kia, OSM-мир, 3 зеркала и освобождение GPU.
  * @invariants #1 (координаты), #2 (поворотники от `simTime`), #8 (three из npm, без CDN), #13 (зеркала 320×96 и 320×160).
  * @tests Смоук A, K, M (`tests/browser-smoke.mjs`)
  *
