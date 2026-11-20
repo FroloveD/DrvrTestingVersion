@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
 import { HeadUnitPanel } from "./HeadUnitPanel";
 import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_MODES, type HeadUnitState } from "../render/cockpitDisplays";
-import { nextStationIndex } from "../audio/radioCatalog";
+import { INTERNET_RADIO_STATIONS, nextStationIndex, radioStationsFor } from "../audio/radioCatalog";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { EngineSound } from "../audio/engineSound";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
@@ -203,7 +203,12 @@ export function SimulatorView({
   const activeRef = useRef(true);
   const { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth } = calibration;
   // Новое значение выворота не изменяет площадку и не должно сбрасывать двигатель, позу или запись.
-  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
+  const [selectedPlayerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
+  const playerCarId: PlayerCarId = scenarioId === "custom" ? customDef.playerCarId ?? "ceed" : selectedPlayerCarId;
+  const radioStations = useMemo(
+    () => (scenarioId === "custom" ? radioStationsFor(customDef.radioStationIds) : [...INTERNET_RADIO_STATIONS]),
+    [scenarioId, customDef.radioStationIds]
+  );
   const world = useMemo(
     () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId }),
     [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth, playerCarId]
@@ -1400,7 +1405,9 @@ export function SimulatorView({
           <select
             value={playerCarId}
             onChange={(e) => setPlayerCarId(e.target.value as PlayerCarId)}
-            className="bg-[#111d28] text-[#e4edf3] rounded px-2 py-1 border border-white/10"
+            disabled={scenarioId === "custom"}
+            title={scenarioId === "custom" ? "Автомобиль задаётся в редакторе пользовательского сценария" : "Выбор автомобиля"}
+            className="bg-[#111d28] text-[#e4edf3] rounded px-2 py-1 border border-white/10 disabled:opacity-60"
             aria-label="Выбор автомобиля"
           >
             {PLAYER_CARS.map((car) => <option key={car.id} value={car.id}>{car.name}</option>)}
@@ -1772,7 +1779,7 @@ export function SimulatorView({
               </button>
             </div>
             <KeyBindingsEditor value={bindings} onChange={setBindings} />
-            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} />
+            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} stations={radioStations} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
