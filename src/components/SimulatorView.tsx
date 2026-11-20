@@ -429,7 +429,7 @@ export function SimulatorView({
     inp.gear = next;
     const nextSub = /^[1-6]$/.test(next) ? Number(next) : st.autoSubGear;
     setHud((current) => ({ ...current, state: { ...current.state, gear: next, autoSubGear: nextSub } }));
-  }, [onNotify]);
+  }, [liveBrakePressure, onNotify]);
 
 
 
