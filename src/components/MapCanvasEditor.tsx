@@ -100,6 +100,8 @@ type Props = {
   onCancelBoundary: () => void;
   /** Счётчик внешнего запроса «Вписать карту в экран» (при импорте или смене шаблона). */
   fitSignal: number;
+  /** Счётчик внешнего запроса центрирования карты на выбранном объекте. */
+  focusSignal: number;
   onSelect: (sel: EditorSelection | null) => void;
   /** Плавное обновление во время перетаскивания (без записи каждого кадра в историю). */
   onLiveChange: (next: CustomScenarioDef) => void;
@@ -253,6 +255,7 @@ export function MapCanvasEditor({
   layers,
   placeOptions,
   fitSignal,
+  focusSignal,
   onSelect,
   onLiveChange,
   onCommitChange,
@@ -349,6 +352,10 @@ export function MapCanvasEditor({
       y: -anchor.z - prev.h / 2,
     }));
   }, [def, selection]);
+
+  useEffect(() => {
+    if (focusSignal > 0) centerOnSelection();
+  }, [centerOnSelection, focusSignal]);
 
   const beginLotMove = (e: React.PointerEvent<SVGRectElement>) => {
     if (e.button !== 0 || tool !== "select") return;
