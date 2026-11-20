@@ -13,9 +13,11 @@
 #include "RouteRun.h"
 #include "UEDevPawn.generated.h"
 class UBoxComponent;
+class USceneComponent;
 class USpringArmComponent;
 class UCameraComponent;
 class USpotLightComponent;
+class UStaticMeshComponent;
 class UMaterialInstanceDynamic;
 UCLASS()
 class UEDEV_API AUEDevPawn : public APawn {
@@ -37,6 +39,15 @@ private:
     UPROPERTY() TObjectPtr<UBoxComponent> Body;
     UPROPERTY() TObjectPtr<USpringArmComponent> Arm;
     UPROPERTY() TObjectPtr<UCameraComponent> Camera;
+    UPROPERTY() TObjectPtr<UCameraComponent> CabinCamera;
+    UPROPERTY() TObjectPtr<USceneComponent> SteeringPivot;
+    UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> CabinParts;
+    UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> CabinOccluders;
+    bool CabinView = false;
+    void ToggleCamera();
+    void ExteriorView();
+    void InteriorView();
+    void ApplyCameraView();
     UPROPERTY() TArray<TObjectPtr<USpotLightComponent>> HeadLights;
     UPROPERTY() TArray<TObjectPtr<USpotLightComponent>> StopLights;
     UPROPERTY() TObjectPtr<USpotLightComponent> ReverseLight;

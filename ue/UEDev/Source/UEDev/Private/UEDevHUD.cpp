@@ -114,7 +114,7 @@ void AUEDevHUD::DrawHUD() {
         case uedev::HudHint::LeavePark: Hint=TEXT("Удерживайте S и выберите D клавишей F"); break;
         case uedev::HudHint::LeaveNeutral: Hint=TEXT("Селектор в N · F — вперёд, R — назад"); break;
         case uedev::HudHint::Finished: Hint=TEXT("Маршрут пройден · Esc → Завершить"); break;
-        default: Hint=TEXT("W/S — газ/тормоз · A/D или ЛКМ — руль · ПКМ — камера"); break;
+        default: Hint=TEXT("W/S — педали · A/D или ЛКМ — руль · C — камера (1/2) · ПКМ — взгляд"); break;
     }
     Text(Hint,30,Height-58,Amber,0.88f,Width-430);
     Text(TEXT("Esc · пауза   Backspace · сброс"),Width-376,Height-58,Muted,0.88f,340);

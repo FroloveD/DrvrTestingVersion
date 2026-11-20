@@ -2,6 +2,7 @@
 #include "UEDevPlayerController.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -32,6 +33,9 @@ AUEDevPawn::AUEDevPawn() {
         Detail->SetRelativeRotation(Rotation);
         Detail->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         Detail->SetGenerateOverlapEvents(false);
+        const FString PartName(Name);
+        if (PartName.StartsWith(TEXT("Interior"))) CabinParts.Add(Detail);
+        if (PartName==TEXT("PaintCabin") || PartName.StartsWith(TEXT("Glass"))) CabinOccluders.Add(Detail);
         return Detail;
     };
     Part(TEXT("PaintBody"), Cube.Object, FVector(0,0,-10), FVector(4.2,1.74,0.58));
@@ -48,6 +52,32 @@ AUEDevPawn::AUEDevPawn() {
     Part(TEXT("TireFR"), Cylinder.Object, FVector(130,82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
     Part(TEXT("TireRL"), Cylinder.Object, FVector(-135,-82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
     Part(TEXT("TireRR"), Cylinder.Object, FVector(-135,82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
+    // Простой салон: прозрачность стекла не требуется — проёмы открыты.
+    Part(TEXT("InteriorDash"),Cube.Object,FVector(73,0,12),FVector(0.55,1.42,0.22));
+    Part(TEXT("InteriorConsole"),Cube.Object,FVector(-10,0,-3),FVector(1.35,0.27,0.3));
+    Part(TEXT("InteriorDoorL"),Cube.Object,FVector(-24,-78,4),FVector(2.05,0.06,0.38));
+    Part(TEXT("InteriorDoorR"),Cube.Object,FVector(-24,78,4),FVector(2.05,0.06,0.38));
+    Part(TEXT("InteriorRoof"),Cube.Object,FVector(-25,0,73),FVector(2.12,1.56,0.05));
+    Part(TEXT("InteriorPillarL"),Cube.Object,FVector(78,-74,43),FVector(0.07,0.07,0.6));
+    Part(TEXT("InteriorPillarR"),Cube.Object,FVector(78,74,43),FVector(0.07,0.07,0.6));
+    Part(TEXT("InteriorRearPillarL"),Cube.Object,FVector(-129,-74,43),FVector(0.1,0.07,0.6));
+    Part(TEXT("InteriorRearPillarR"),Cube.Object,FVector(-129,74,43),FVector(0.1,0.07,0.6));
+    SteeringPivot = CreateDefaultSubobject<USceneComponent>(TEXT("SteeringPivot"));
+    SteeringPivot->SetupAttachment(Body);
+    SteeringPivot->SetRelativeLocation(FVector(38,-38,28));
+    for (int Index=0;Index<16;++Index) {
+        const double Angle=Index*2*uedev::Pi/16;
+        auto* Rim = Part(*FString::Printf(TEXT("InteriorRim%d"),Index),Cube.Object,FVector::ZeroVector,FVector(0.035,0.075,0.035));
+        Rim->SetupAttachment(SteeringPivot);
+        Rim->SetRelativeLocation(FVector(0,18*std::cos(Angle),18*std::sin(Angle)));
+        Rim->SetRelativeRotation(FRotator(0,0,Index*360.f/16+90));
+    }
+    auto* Hub = Part(TEXT("InteriorWheelHub"),Cube.Object,FVector::ZeroVector,FVector(0.06,0.12,0.1));
+    Hub->SetupAttachment(SteeringPivot);
+    auto* Spoke = Part(TEXT("InteriorWheelSpoke"),Cube.Object,FVector(0,0,-8),FVector(0.035,0.035,0.16));
+    Spoke->SetupAttachment(SteeringPivot);
+    auto* CrossSpoke = Part(TEXT("InteriorWheelCross"),Cube.Object,FVector::ZeroVector,FVector(0.035,0.33,0.035));
+    CrossSpoke->SetupAttachment(SteeringPivot);
     auto Beam = [&](const TCHAR* Name, FVector Position, FRotator Rotation, FLinearColor Color, float Intensity, float Radius) {
         auto* Light = CreateDefaultSubobject<USpotLightComponent>(Name);
         Light->SetupAttachment(Body);
@@ -76,6 +106,13 @@ AUEDevPawn::AUEDevPawn() {
     Arm->bDoCollisionTest = false;
     Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
     Camera->SetupAttachment(Arm);
+    CabinCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("CabinCamera"));
+    CabinCamera->SetupAttachment(Body);
+    CabinCamera->SetRelativeLocation(FVector(-30,-38,58));
+    CabinCamera->SetRelativeRotation(FRotator(-5,0,0));
+    CabinCamera->SetFieldOfView(85);
+    CabinCamera->SetAutoActivate(false);
+    CabinCamera->SetActive(false);
     AutoPossessPlayer = EAutoReceiveInput::Player0;
 }
 void AUEDevPawn::BeginPlay() {
@@ -86,7 +123,8 @@ void AUEDevPawn::BeginPlay() {
         if (!Material) continue;
         const FString Name = Detail->GetName();
         FLinearColor Color(0.04f,0.22f,0.48f);
-        if (Name.StartsWith(TEXT("Glass"))) Color = FLinearColor(0.025f,0.055f,0.08f);
+        if (Name.StartsWith(TEXT("Interior"))) Color = FLinearColor(0.035f,0.045f,0.055f);
+        else if (Name.StartsWith(TEXT("Glass"))) Color = FLinearColor(0.025f,0.055f,0.08f);
         else if (Name.StartsWith(TEXT("Tire")) || Name.StartsWith(TEXT("Trim"))) Color = FLinearColor(0.025f,0.025f,0.03f);
         else if (Name == TEXT("LampFront")) Color = FLinearColor(0.95f,0.9f,0.65f);
         else if (Name == TEXT("LampRear")) Color = FLinearColor(0.65f,0.015f,0.01f);
@@ -94,6 +132,7 @@ void AUEDevPawn::BeginPlay() {
         if (Name == TEXT("LampRear")) RearLampMaterial = Material;
     }
     Reset();
+    ApplyCameraView();
 }
 bool AUEDevPawn::Down(const FKey& Key) const {
     const auto* PC = Cast<APlayerController>(GetController());
@@ -107,6 +146,20 @@ void AUEDevPawn::UpdateLights() {
     if (RearLampMaterial) RearLampMaterial->SetVectorParameterValue(TEXT("Color"),
         Light.Stop ? FLinearColor(1.f,0.025f,0.01f) : FLinearColor(0.25f,0.008f,0.005f));
 }
+void AUEDevPawn::ApplyCameraView() {
+    Camera->SetActive(!CabinView);
+    CabinCamera->SetActive(CabinView);
+    for (const auto& Detail : CabinParts) if (Detail) Detail->SetVisibility(CabinView);
+    for (const auto& Detail : CabinOccluders) if (Detail) Detail->SetVisibility(!CabinView);
+}
+void AUEDevPawn::ToggleCamera() { CabinView = !CabinView; ApplyCameraView(); }
+void AUEDevPawn::ExteriorView() { CabinView = false; ApplyCameraView(); }
+void AUEDevPawn::InteriorView() {
+    CabinView = true;
+    CabinCamera->SetRelativeRotation(FRotator(-5,0,0));
+    CabinCamera->SetFieldOfView(85);
+    ApplyCameraView();
+}
 void AUEDevPawn::ToggleHud() {
     if (auto* PC = Cast<APlayerController>(GetController()))
         if (auto* Hud = PC->GetHUD()) Hud->ShowHUD();
@@ -117,6 +170,7 @@ void AUEDevPawn::Reset() {
     HeadlightsOn = false;
     Model = uedev::State{}; Accumulator = 0; Run = uedev::RouteRun{};
     Model.Z = ActiveRoute.StartZ;
+    SteeringPivot->SetRelativeRotation(FRotator::ZeroRotator);
     UpdateLights();
     SetActorLocationAndRotation(FVector(Model.Z * 100, 0, 71), FRotator::ZeroRotator, false);
 }
@@ -144,23 +198,39 @@ void AUEDevPawn::GearDown() {
         Choose(static_cast<uedev::Gear>(static_cast<int>(Model.Selector) - 1));
 }
 void AUEDevPawn::MouseX(float Value) {
-    if (Down(EKeys::RightMouseButton)) Arm->AddRelativeRotation(FRotator(0, Value * 0.25f, 0));
+    if (Down(EKeys::RightMouseButton)) {
+        if (CabinView) {
+            FRotator R = CabinCamera->GetRelativeRotation();
+            R.Yaw = FMath::Clamp(R.Yaw + Value*0.25f,-110.f,110.f);
+            CabinCamera->SetRelativeRotation(R);
+        } else Arm->AddRelativeRotation(FRotator(0, Value * 0.25f, 0));
+    }
     else if (Down(EKeys::LeftMouseButton)) Model.WheelDeg = FMath::Clamp(Model.WheelDeg - Value * 2.1, -540.0, 540.0);
 }
 void AUEDevPawn::MouseY(float Value) {
     if (!Down(EKeys::RightMouseButton)) return;
-    FRotator R = Arm->GetRelativeRotation();
-    R.Pitch = FMath::Clamp(R.Pitch + Value * 0.25f, -75.f, 10.f);
-    Arm->SetRelativeRotation(R);
+    if (CabinView) {
+        FRotator R = CabinCamera->GetRelativeRotation();
+        R.Pitch = FMath::Clamp(R.Pitch + Value*0.25f,-40.f,30.f);
+        CabinCamera->SetRelativeRotation(R);
+    } else {
+        FRotator R = Arm->GetRelativeRotation();
+        R.Pitch = FMath::Clamp(R.Pitch + Value * 0.25f, -75.f, 10.f);
+        Arm->SetRelativeRotation(R);
+    }
 }
 void AUEDevPawn::Zoom(float Value) {
     if (Down(EKeys::LeftControl) || Down(EKeys::RightControl)) {
         SetOrdinaryGas(OrdinaryGas + Value * 0.05);
         if (auto* PC = Cast<AUEDevPlayerController>(GetController())) PC->SavePreferences();
-    } else Arm->TargetArmLength = FMath::Clamp(Arm->TargetArmLength - Value * 50.f, 250.f, 1400.f);
+    } else if (CabinView) CabinCamera->SetFieldOfView(FMath::Clamp(CabinCamera->FieldOfView-Value*3.f,65.f,100.f));
+    else Arm->TargetArmLength = FMath::Clamp(Arm->TargetArmLength - Value * 50.f, 250.f, 1400.f);
 }
 void AUEDevPawn::SetupPlayerInputComponent(UInputComponent* Input) {
     Super::SetupPlayerInputComponent(Input);
+    Input->BindKey(EKeys::C, IE_Pressed, this, &AUEDevPawn::ToggleCamera);
+    Input->BindKey(EKeys::One, IE_Pressed, this, &AUEDevPawn::ExteriorView);
+    Input->BindKey(EKeys::Two, IE_Pressed, this, &AUEDevPawn::InteriorView);
     Input->BindKey(EKeys::H, IE_Pressed, this, &AUEDevPawn::ToggleHud);
     Input->BindKey(EKeys::L, IE_Pressed, this, &AUEDevPawn::ToggleHeadlights);
     Input->BindKey(EKeys::I, IE_Pressed, this, &AUEDevPawn::StartEngine);
@@ -203,5 +273,6 @@ void AUEDevPawn::Tick(float DeltaSeconds) {
         Run.Advance(ActiveRoute, PreviousX, PreviousZ, Model.X, Model.Z, Model.Speed, uedev::Dt);
         Accumulator -= uedev::Dt;
     }
+    SteeringPivot->SetRelativeRotation(FRotator(0,0,-Model.WheelDeg));
     UpdateLights();
 }

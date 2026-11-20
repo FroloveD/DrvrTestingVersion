@@ -1,9 +1,9 @@
 name: UEDev portable core (not Unreal build)
 on:
   push:
-    paths: ['ue/**', 'tests/uedev-powertrain-parity.mjs', 'src/sim/vehicle.ts', 'src/sim/playerCar.ts', '.github/workflows/uedev.yml']
+    paths: ['ue/**', 'tests/uedev-powertrain-parity.mjs', 'tests/uedev-camera-source.mjs', 'src/sim/vehicle.ts', 'src/sim/playerCar.ts', '.github/workflows/uedev.yml']
   pull_request:
-    paths: ['ue/**', 'tests/uedev-powertrain-parity.mjs', 'src/sim/vehicle.ts', 'src/sim/playerCar.ts', '.github/workflows/uedev.yml']
+    paths: ['ue/**', 'tests/uedev-powertrain-parity.mjs', 'tests/uedev-camera-source.mjs', 'src/sim/vehicle.ts', 'src/sim/playerCar.ts', '.github/workflows/uedev.yml']
 permissions:
   contents: read
 jobs:
@@ -24,3 +24,5 @@ jobs:
       - run: npm ci
       - name: Compare C++ longitudinal functions with browser TS
         run: node tests/uedev-powertrain-parity.mjs
+      - name: Camera adapter source guards (not Unreal runtime)
+        run: node tests/uedev-camera-source.mjs
