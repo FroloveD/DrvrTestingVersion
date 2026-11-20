@@ -94,7 +94,6 @@ export function FloatingPanel({
   children,
 }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  if (closed) return null;
   const [fallback, setFallback] = useState<PanelLayout | null>(null);
   const [armed, setArmed] = useState(false);
   const current: PanelLayout = layout ?? fallback ?? { x: 12, y: 12, w: minW };
@@ -284,6 +283,8 @@ export function FloatingPanel({
       window.removeEventListener("blur", cancelAll);
     };
   }, [clampPos, current, id, onChange]);
+
+  if (closed) return null;
 
   return (
     <div
