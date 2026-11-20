@@ -7,6 +7,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputCoreTypes.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
 AUEDevPawn::AUEDevPawn() {
     PrimaryActorTick.bCanEverTick = true;
@@ -14,12 +15,34 @@ AUEDevPawn::AUEDevPawn() {
     SetRootComponent(Body);
     Body->SetBoxExtent(FVector(215.5, 90, 70));
     Body->SetCollisionProfileName(TEXT("Pawn"));
-    auto* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Placeholder"));
-    Mesh->SetupAttachment(Body);
+    // Только визуальные детали: единый Body остаётся единственной коллизией.
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-    Mesh->SetStaticMesh(Cube.Object);
-    Mesh->SetRelativeScale3D(FVector(4.31, 1.8, 1.4));
-    Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+    auto Part = [&](const TCHAR* Name, UStaticMesh* Shape, FVector Position, FVector Scale, FRotator Rotation = FRotator::ZeroRotator) {
+        auto* Detail = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+        Detail->SetupAttachment(Body);
+        Detail->SetStaticMesh(Shape);
+        Detail->SetRelativeLocation(Position);
+        Detail->SetRelativeScale3D(Scale);
+        Detail->SetRelativeRotation(Rotation);
+        Detail->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Detail->SetGenerateOverlapEvents(false);
+        return Detail;
+    };
+    Part(TEXT("PaintBody"), Cube.Object, FVector(0,0,-10), FVector(4.2,1.74,0.58));
+    Part(TEXT("PaintCabin"), Cube.Object, FVector(-25,0,35), FVector(2.05,1.5,0.65));
+    Part(TEXT("GlassFront"), Cube.Object, FVector(79,0,38), FVector(0.025,1.38,0.48));
+    Part(TEXT("GlassRear"), Cube.Object, FVector(-129,0,38), FVector(0.025,1.38,0.48));
+    Part(TEXT("GlassLeft"), Cube.Object, FVector(-25,-76,38), FVector(1.83,0.025,0.48));
+    Part(TEXT("GlassRight"), Cube.Object, FVector(-25,76,38), FVector(1.83,0.025,0.48));
+    Part(TEXT("TrimFront"), Cube.Object, FVector(211,0,-22), FVector(0.08,1.65,0.18));
+    Part(TEXT("TrimRear"), Cube.Object, FVector(-211,0,-22), FVector(0.08,1.65,0.18));
+    Part(TEXT("LampFront"), Cube.Object, FVector(216,0,0), FVector(0.025,1.4,0.13));
+    Part(TEXT("LampRear"), Cube.Object, FVector(-216,0,0), FVector(0.025,1.4,0.13));
+    Part(TEXT("TireFL"), Cylinder.Object, FVector(130,-82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
+    Part(TEXT("TireFR"), Cylinder.Object, FVector(130,82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
+    Part(TEXT("TireRL"), Cylinder.Object, FVector(-135,-82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
+    Part(TEXT("TireRR"), Cylinder.Object, FVector(-135,82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
     Arm = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraArm"));
     Arm->SetupAttachment(Body);
     Arm->TargetArmLength = 650;
@@ -30,7 +53,22 @@ AUEDevPawn::AUEDevPawn() {
     Camera->SetupAttachment(Arm);
     AutoPossessPlayer = EAutoReceiveInput::Player0;
 }
-void AUEDevPawn::BeginPlay() { Super::BeginPlay(); Reset(); }
+void AUEDevPawn::BeginPlay() {
+    Super::BeginPlay();
+    TInlineComponentArray<UStaticMeshComponent*> Details(this);
+    for (auto* Detail : Details) {
+        auto* Material = Detail->CreateAndSetMaterialInstanceDynamic(0);
+        if (!Material) continue;
+        const FString Name = Detail->GetName();
+        FLinearColor Color(0.04f,0.22f,0.48f);
+        if (Name.StartsWith(TEXT("Glass"))) Color = FLinearColor(0.025f,0.055f,0.08f);
+        else if (Name.StartsWith(TEXT("Tire")) || Name.StartsWith(TEXT("Trim"))) Color = FLinearColor(0.025f,0.025f,0.03f);
+        else if (Name == TEXT("LampFront")) Color = FLinearColor(0.95f,0.9f,0.65f);
+        else if (Name == TEXT("LampRear")) Color = FLinearColor(0.65f,0.015f,0.01f);
+        Material->SetVectorParameterValue(TEXT("Color"), Color);
+    }
+    Reset();
+}
 bool AUEDevPawn::Down(const FKey& Key) const {
     const auto* PC = Cast<APlayerController>(GetController());
     return PC && PC->IsInputKeyDown(Key);
