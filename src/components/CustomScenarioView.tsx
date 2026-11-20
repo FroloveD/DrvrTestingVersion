@@ -829,6 +829,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         </div>
       )}
       {/* === [SEC:custom-car] Выбор автомобиля и доступных радиостанций сценария === */}
+      {!editorPanelState.closed.includes("carRadio") && <EditorPanelFrame id="carRadio" title="Автомобиль и радио" collapsed={editorPanelState.collapsed.includes("carRadio")} onToggle={toggleEditorCollapse} onClose={closeEditorPanel}>
       <section className="panel p-3.5 space-y-3" data-testid="editor-car-panel">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-extrabold">Автомобиль заезда</span>
@@ -887,8 +888,10 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           </div>
         </div>
       </section>
+      </EditorPanelFrame>}
 
       {/* === [SEC:custom-preview] Палитра классов, действия Undo/Redo и интерактивный 2D-холст === */}
+      {!editorPanelState.closed.includes("palette") && <EditorPanelFrame id="palette" title="Инструменты и 2D-холст" collapsed={editorPanelState.collapsed.includes("palette")} onToggle={toggleEditorCollapse} onClose={closeEditorPanel}>
       <div className="panel p-3.5 space-y-3">
         {/* Инструменты палитры + Undo/Redo/Дубль/Удалить */}
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1204,6 +1207,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           </div>
         </div>
       </div>
+      </EditorPanelFrame>}
 
       {/* Основная рабочая область: слева 2D-холст, справа инспектор выбранного объекта */}
       <div className="grid xl:grid-cols-[1fr_410px] gap-4 items-start">
@@ -1228,6 +1232,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         {/* === [SEC:custom-forms] Инспектор выбранного объекта, реестр и параметры карты === */}
         <div className="space-y-4 min-w-0">
           {/* Инспектор свойств выбранного объекта */}
+          {!editorPanelState.closed.includes("inspector") && <EditorPanelFrame id="inspector" title="Инспектор, объекты и параметры карты" collapsed={editorPanelState.collapsed.includes("inspector")} onToggle={toggleEditorCollapse} onClose={closeEditorPanel}>
           <div className="panel p-4 space-y-3" data-testid="editor-inspector">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -2469,6 +2474,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               />
             </div>
           </div>
+          </EditorPanelFrame>}
         </div>
       </div>
     </div>
