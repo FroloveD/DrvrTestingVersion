@@ -26,7 +26,7 @@ import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange, stepGearSequential } from "../sim/controls";
+import { applyShifterTarget, checkEngineToggle, checkGearChange, stepGearSequential, stepShifterGate, type ShifterTarget } from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
@@ -50,6 +50,7 @@ import {
   getCarCorners,
   getTrafficLightPhase,
   getTurnSignalFlash,
+  isManualGear,
   normalizeWheelLock,
   STEER_WHEEL,
 } from "../sim/vehicle";
@@ -57,6 +58,7 @@ import { Chip, Icon } from "./Icons";
 import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
+import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
 
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
@@ -203,6 +205,7 @@ export function SimulatorView({
   const wheelLimit = normalizeWheelLock(calibration.maxInnerWheelDeg);
 
   const [cameraMode, setCameraMode] = useState<CameraMode>("chase");
+  const [shifterGlance, setShifterGlance] = useState(false);
   const [quality, setQuality] = useState<QualityPreset>("medium");
   const [showTrajectory, setShowTrajectory] = useState(true);
   const [showMirrors, setShowMirrors] = useState(true);
@@ -432,6 +435,52 @@ export function SimulatorView({
   }, [liveBrakePressure, onNotify]);
 
 
+
+  const shifterNotifyAtRef = useRef(0);
+  const notifyShifterOnce = useCallback((msg: string, throttle = false) => {
+    const now = performance.now();
+    if (throttle && now - shifterNotifyAtRef.current < 900) return;
+    shifterNotifyAtRef.current = now;
+    onNotify(msg);
+  }, [onNotify]);
+
+  const engageCockpitShifter = useCallback((target: ShifterTarget, fromDrag = false) => {
+    const inp = inputRef.current;
+    const st = stateRef.current;
+    const { next, blockedReason } = applyShifterTarget(
+      { ...inp, brake: liveBrakePressure() }, st.v, st.autoSubGear, target
+    );
+    if (blockedReason) { notifyShifterOnce(blockedReason, fromDrag); return null; }
+    if (!next) return null;
+    inp.gear = next;
+    const nextSub = isManualGear(next) ? Number(next) : st.autoSubGear;
+    setHud(current => ({ ...current, state: { ...current.state, gear: next, autoSubGear: nextSub } }));
+    return next;
+  }, [liveBrakePressure, notifyShifterOnce]);
+
+  const stepCockpitShifter = useCallback((dir: 1 | -1) => {
+    const inp = inputRef.current;
+    const st = stateRef.current;
+    const { next, blockedReason } = stepShifterGate(
+      { ...inp, brake: liveBrakePressure() }, st.v, st.autoSubGear, dir
+    );
+    if (blockedReason) { notifyShifterOnce(blockedReason); return; }
+    if (!next) return;
+    inp.gear = next;
+    const nextSub = isManualGear(next) ? Number(next) : st.autoSubGear;
+    setHud(current => ({ ...current, state: { ...current.state, gear: next, autoSubGear: nextSub } }));
+  }, [liveBrakePressure, notifyShifterOnce]);
+
+  const toggleShifterGlance = useCallback(() => {
+    if (cameraMode !== "cockpit") {
+      setCameraMode("cockpit");
+      sceneCtrlRef.current?.toggleCockpitShifterView();
+      setShifterGlance(true);
+      return;
+    }
+    const looking = sceneCtrlRef.current?.toggleCockpitShifterView() ?? false;
+    setShifterGlance(looking);
+  }, [cameraMode]);
 
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
@@ -800,6 +849,16 @@ export function SimulatorView({
             return next;
           });
           break;
+        case "ArrowLeft":
+        case "ArrowRight":
+          if (cameraMode === "cockpit") {
+            sceneCtrlRef.current?.stepHeadDetent(code === "ArrowLeft" ? 1 : -1);
+            setShifterGlance(false);
+          }
+          break;
+        case "KeyG":
+          toggleShifterGlance();
+          break;
         case "KeyC":
           setCameraMode((prev) => {
             const order: CameraMode[] = ["chase", "cockpit", "top", "orbit"];
@@ -842,11 +901,35 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify]);
+  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify, cameraMode, toggleShifterGlance]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
   // Управление мышью включается отдельно в панели «Управление»; по умолчанию выключено.
   // ПКМ вращает камеру, колесо масштабирует её.
+  // 3D-селектор Shiftronic: отдельный pointer capture не конфликтует с мышиным рулём/орбитой.
+  const shifterDragRef = useRef<{ id: number; startX: number; startY: number; moved: boolean; hit: ShifterHitId; target: ShifterTarget | null } | null>(null);
+  const shifterHoverRef = useRef<ShifterHitId | null>(null);
+  const readCanvasNorm = (canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return { x: (clientX - rect.left) / rect.width, y: (clientY - rect.top) / rect.height };
+  };
+  const shifterTargetAt = (x: number, z: number): ShifterTarget => {
+    const anchor = sceneCtrlRef.current?.getShifterLocalAnchor();
+    const gateZ = anchor?.gateZ ?? 0;
+    const dz = z - gateZ;
+    const manual = x > (SHIFTER_LAYOUT.mainRailX + SHIFTER_LAYOUT.manualRailX) * 0.5;
+    if (manual) {
+      if (dz >= SHIFTER_LAYOUT.offMPlus + 0.02) return "M+";
+      if (dz <= SHIFTER_LAYOUT.offMMinus + 0.02) return "M-";
+      return "M";
+    }
+    if (dz >= (SHIFTER_LAYOUT.offP + SHIFTER_LAYOUT.offR) * 0.5) return "P";
+    if (dz >= (SHIFTER_LAYOUT.offR + SHIFTER_LAYOUT.offN) * 0.5) return "R";
+    if (dz >= (SHIFTER_LAYOUT.offN + SHIFTER_LAYOUT.offD) * 0.5) return "N";
+    return "D";
+  };
+
   const pressPedal = (which: "gas" | "brake", owner: number) => {
     if (pedalOwner.current[which] !== null) return;
     pedalOwner.current[which] = owner;
@@ -866,11 +949,16 @@ export function SimulatorView({
     if (!canvas) return;
     const onWheel = (e: WheelEvent) => {
       if (e.cancelable) e.preventDefault();
-      sceneCtrlRef.current?.adjustZoom(e.deltaY);
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      const hit = cameraMode === "cockpit" ? sceneCtrlRef.current?.pickCockpitShifter(x, y) : null;
+      if (hit) stepCockpitShifter(e.deltaY < 0 ? 1 : -1);
+      else sceneCtrlRef.current?.adjustZoom(e.deltaY);
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [cameraMode, stepCockpitShifter]);
 
   const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType !== "mouse" || !mouseSteerEnabled || mouseSteerMode !== "free") return;
@@ -879,12 +967,28 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerLeave = () => {
+    if (shifterDragRef.current) return;
+    shifterHoverRef.current = null;
+    sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
     if (pointerDragRef.current?.btn === 0) return;
     mouseSteerXRef.current = null;
     holdingSteerRef.current = false;
   };
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button === 0 && cameraMode === "cockpit") {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const ctrl = sceneCtrlRef.current;
+      const hit = pos && ctrl ? ctrl.pickCockpitShifter(pos.x, pos.y) : null;
+      if (hit && pos && ctrl) {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        shifterDragRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false, hit, target: null };
+        shifterHoverRef.current = hit;
+        ctrl.setShifterInteraction(hit, true, 0);
+        return;
+      }
+    }
     if (e.button === 1) {
       e.preventDefault();
       return;
@@ -916,6 +1020,22 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const sDrag = shifterDragRef.current;
+    const ctrl = sceneCtrlRef.current;
+    if (sDrag && sDrag.id === e.pointerId && ctrl) {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      if (!pos) return;
+      if (!sDrag.moved && Math.hypot(e.clientX - sDrag.startX, e.clientY - sDrag.startY) >= 5) sDrag.moved = true;
+      if (sDrag.moved) {
+        const local = ctrl.projectToShifterLocal(pos.x, pos.y);
+        if (local) {
+          sDrag.target = shifterTargetAt(local.x, local.z);
+          ctrl.setShifterInteraction(sDrag.target === "M+" ? "M+" : sDrag.target === "M-" ? "M-" : sDrag.target, true,
+            sDrag.target === "M+" ? 1 : sDrag.target === "M-" ? -1 : 0);
+        }
+      }
+      return;
+    }
     if (e.pointerType === "mouse" && mouseSteerEnabled) {
       const prevX = mouseSteerXRef.current;
       const activeDrag = pointerDragRef.current;
@@ -948,6 +1068,25 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const sDrag = shifterDragRef.current;
+    if (sDrag && sDrag.id === e.pointerId) {
+      shifterDragRef.current = null;
+      const ctrl = sceneCtrlRef.current;
+      if (sDrag.moved && sDrag.target) {
+        engageCockpitShifter(sDrag.target, true);
+      } else if (sDrag.hit === "lever") {
+        if (isManualGear(inputRef.current.gear)) engageCockpitShifter("D");
+        else if (inputRef.current.gear === "D") engageCockpitShifter("M");
+        else stepCockpitShifter(1);
+      } else {
+        engageCockpitShifter(sDrag.hit === "M+" || sDrag.hit === "M-" ? sDrag.hit : sDrag.hit as ShifterTarget);
+      }
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const hit = pos && ctrl && cameraMode === "cockpit" ? ctrl.pickCockpitShifter(pos.x, pos.y) : null;
+      shifterHoverRef.current = hit;
+      ctrl?.setShifterInteraction(hit, false, 0);
+      return;
+    }
     const drag = pointerDragRef.current;
     if (drag?.id !== e.pointerId) return;
     if (canvasGasHoldTimerRef.current !== null) {
@@ -1679,9 +1818,19 @@ export function SimulatorView({
                 {label}
               </button>
             ))}
+            {cameraMode === "cockpit" && (
+              <button
+                type="button"
+                onClick={toggleShifterGlance}
+                className="px-2 py-1 rounded-lg text-[10px] font-bold border bg-[#091017]/80 border-[rgba(148,176,194,.18)] text-[#f5b942]"
+                title="Быстро посмотреть на селектор АКПП (G)"
+              >
+                {shifterGlance ? "На дорогу" : "КПП · G"}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowTrajectory((v) => !v)}
+              onClick={() => setShowTrajectory((v) => !v)
               className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
                 showTrajectory
                   ? "bg-[#52d6bd]/20 border-[#52d6bd]/50 text-[#52d6bd]"
