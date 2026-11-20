@@ -630,11 +630,10 @@ export function SimulatorView({
   }, []);
 
   const cycleHeadUnitMode = useCallback(() => {
-    setHeadUnit((prev) => {
-      const index = HEAD_UNIT_MODES.findIndex((mode) => mode.id === prev.mode);
-      const mode = HEAD_UNIT_MODES[(index + 1) % HEAD_UNIT_MODES.length].id;
-      return { ...prev, mode, radioPlaying: mode === "radio" ? prev.radioPlaying : false };
-    });
+    const index = HEAD_UNIT_MODES.findIndex((mode) => mode.id === headUnitRef.current.mode);
+    const mode = HEAD_UNIT_MODES[(index + 1) % HEAD_UNIT_MODES.length].id;
+    if (mode !== "radio") radioAudioRef.current?.pause();
+    setHeadUnit((prev) => ({ ...prev, mode, radioPlaying: mode === "radio" ? prev.radioPlaying : false }));
   }, []);
 
   const pressCockpitControl = useCallback((id: CockpitControlId) => {
@@ -1851,7 +1850,7 @@ export function SimulatorView({
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3" data-testid="head-unit-settings">
               <div className="mono text-[10px] text-[#f5b942] mb-2">7″ ШГУ · МУЛЬТИМЕДИА</div>
               <div className="grid grid-cols-4 gap-1 mb-2">
-                {HEAD_UNIT_MODES.map((mode) => <button key={mode.id} type="button" className={`btn btn-mini ${headUnit.mode === mode.id ? "btn-primary" : ""}`} onClick={() => setHeadUnit((prev) => ({ ...prev, mode: mode.id, radioPlaying: mode.id === "radio" ? prev.radioPlaying : false }))}>{mode.short}</button>)}
+                {HEAD_UNIT_MODES.map((mode) => <button key={mode.id} type="button" className={`btn btn-mini ${headUnit.mode === mode.id ? "btn-primary" : ""}`} onClick={() => { if (mode.id !== "radio") radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, mode: mode.id, radioPlaying: mode.id === "radio" ? prev.radioPlaying : false })); }}>{mode.short}</button>)}
               </div>
               {headUnit.mode === "radio" && <>
                 <div className="flex items-center justify-between gap-2 text-[11px] mb-2">
