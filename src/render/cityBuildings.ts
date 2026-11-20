@@ -181,36 +181,6 @@ export function makeCloudySkyTexture(equirectangular = true): THREE.CanvasTextur
   return tex;
 }
 
-/** Текстура сине-белого домового аншлага (адресной таблички РФ, 128×48). */
-function makeAddressPlaqueTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 48;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#f8fafc";
-  g.fillRect(0, 0, 128, 48);
-  g.fillStyle = "#1d4ed8";
-  g.fillRect(3, 3, 122, 42);
-  g.strokeStyle = "#f8fafc";
-  g.lineWidth = 2;
-  g.strokeRect(6, 6, 116, 36);
-  // Белое поле номера дома справа (классический городской аншлаг РФ)
-  g.fillStyle = "#f8fafc";
-  g.fillRect(88, 7, 33, 34);
-  g.font = "800 11px system-ui, sans-serif";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText("УЛИЦА", 47, 18);
-  g.fillStyle = "#dbeafe";
-  g.fillRect(16, 28, 62, 5);
-  g.fillStyle = "#1e3a8a";
-  g.font = "900 18px system-ui, sans-serif";
-  g.fillText("12", 104, 25);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 /** Текстура коры берёзы (белая береста с характерными тёмными горизонтальными чечевичками). */
 function makeBirchBarkTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -456,15 +426,8 @@ function makeFacadeTile(style: BuildingStyle): { map: THREE.CanvasTexture; bumpM
   return { map, bumpMap };
 }
 
-/** Палитра реалистичных оттенков фасадов РФ/СНГ (без кислотных цветов, с хорошей читаемостью знаков). */
-const RU_PALETTES: Record<BuildingStyle, number[]> = {
-  panel: [0xcfd8df, 0xd8cfc2, 0xc3d2dc, 0xd4d8d2, 0xcbc7d4],
-  brick: [0xb97b63, 0xc89a78, 0xd4c3a3, 0xa86c58, 0xc7b59b],
-  civic: [0xdad2be, 0xc8d4dd, 0xd8dfd4, 0xdfd3c3],
-  commercial: [0xb8c2cc, 0xc6ccd2, 0xaab6c2],
-};
-
-/** Создаёт общий пул текстур, 17 фасадных материалов и прототипов деревьев на один вызов `loadWorld`. */export function createCityEnvironmentPack(): CityEnvironmentPack {
+/** Создаёт общий набор текстур и материалов зданий РФ/СНГ и деревьев на один вызов `loadWorld`. */
+export function createCityEnvironmentPack(): CityEnvironmentPack {
   return {
     facadeTemplates: {
       panel: makeFacadeTile("panel"),
