@@ -27,6 +27,11 @@ struct State {
     int AutoGear = 1;
     double Throttle = 0, BrakePressure = 0, Rpm = 0, ShiftTimer = 0;
 };
+// Визуальная политика прототипа: не изменяет состояние/динамику и не является оценкой.
+struct LightState { bool Head, Stop, Reverse; };
+inline LightState Lights(const State& s) {
+    return {s.Engine, s.BrakePressure > 0.02, s.Engine && s.Selector == Gear::R};
+}
 inline bool Select(State& s, Gear next, bool brake) {
     if (next == s.Selector) return true;
     const double speed = std::abs(s.Speed);

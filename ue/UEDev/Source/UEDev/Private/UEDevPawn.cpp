@@ -4,6 +4,8 @@
 #include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SpotLightComponent.h"
+#include "Materials/MaterialInterface.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputCoreTypes.h"
@@ -18,10 +20,12 @@ AUEDevPawn::AUEDevPawn() {
     // Только визуальные детали: единый Body остаётся единственной коллизией.
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+    static ConstructorHelpers::FObjectFinder<UMaterialInterface> Surface(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
     auto Part = [&](const TCHAR* Name, UStaticMesh* Shape, FVector Position, FVector Scale, FRotator Rotation = FRotator::ZeroRotator) {
         auto* Detail = CreateDefaultSubobject<UStaticMeshComponent>(Name);
         Detail->SetupAttachment(Body);
         Detail->SetStaticMesh(Shape);
+        if (Surface.Succeeded()) Detail->SetMaterial(0, Surface.Object);
         Detail->SetRelativeLocation(Position);
         Detail->SetRelativeScale3D(Scale);
         Detail->SetRelativeRotation(Rotation);
@@ -43,6 +47,26 @@ AUEDevPawn::AUEDevPawn() {
     Part(TEXT("TireFR"), Cylinder.Object, FVector(130,82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
     Part(TEXT("TireRL"), Cylinder.Object, FVector(-135,-82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
     Part(TEXT("TireRR"), Cylinder.Object, FVector(-135,82,-37), FVector(0.66,0.66,0.22), FRotator(0,0,90));
+    auto Beam = [&](const TCHAR* Name, FVector Position, FRotator Rotation, FLinearColor Color, float Intensity, float Radius) {
+        auto* Light = CreateDefaultSubobject<USpotLightComponent>(Name);
+        Light->SetupAttachment(Body);
+        Light->SetRelativeLocation(Position);
+        Light->SetRelativeRotation(Rotation);
+        Light->SetMobility(EComponentMobility::Movable);
+        Light->SetLightColor(Color);
+        Light->SetIntensity(Intensity);
+        Light->SetAttenuationRadius(Radius);
+        Light->SetInnerConeAngle(18.f);
+        Light->SetOuterConeAngle(40.f);
+        Light->SetCastShadows(false);
+        Light->SetVisibility(false);
+        return Light;
+    };
+    HeadLights.Add(Beam(TEXT("HeadLightL"),FVector(220,-60,-5),FRotator(-8,0,0),FLinearColor(1.f,0.94f,0.8f),18000.f,3500.f));
+    HeadLights.Add(Beam(TEXT("HeadLightR"),FVector(220,60,-5),FRotator(-8,0,0),FLinearColor(1.f,0.94f,0.8f),18000.f,3500.f));
+    StopLights.Add(Beam(TEXT("StopLightL"),FVector(-220,-60,-5),FRotator(-15,180,0),FLinearColor::Red,1500.f,350.f));
+    StopLights.Add(Beam(TEXT("StopLightR"),FVector(-220,60,-5),FRotator(-15,180,0),FLinearColor::Red,1500.f,350.f));
+    ReverseLight = Beam(TEXT("ReverseLight"),FVector(-220,0,-10),FRotator(-12,180,0),FLinearColor::White,3500.f,800.f);
     Arm = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraArm"));
     Arm->SetupAttachment(Body);
     Arm->TargetArmLength = 650;
@@ -66,6 +90,7 @@ void AUEDevPawn::BeginPlay() {
         else if (Name == TEXT("LampFront")) Color = FLinearColor(0.95f,0.9f,0.65f);
         else if (Name == TEXT("LampRear")) Color = FLinearColor(0.65f,0.015f,0.01f);
         Material->SetVectorParameterValue(TEXT("Color"), Color);
+        if (Name == TEXT("LampRear")) RearLampMaterial = Material;
     }
     Reset();
 }
@@ -73,17 +98,26 @@ bool AUEDevPawn::Down(const FKey& Key) const {
     const auto* PC = Cast<APlayerController>(GetController());
     return PC && PC->IsInputKeyDown(Key);
 }
+void AUEDevPawn::UpdateLights() {
+    const auto Light = uedev::Lights(Model);
+    for (const auto& Beam : HeadLights) if (Beam) Beam->SetVisibility(Light.Head);
+    for (const auto& Beam : StopLights) if (Beam) Beam->SetVisibility(Light.Stop);
+    if (ReverseLight) ReverseLight->SetVisibility(Light.Reverse);
+    if (RearLampMaterial) RearLampMaterial->SetVectorParameterValue(TEXT("Color"),
+        Light.Stop ? FLinearColor(1.f,0.025f,0.01f) : FLinearColor(0.25f,0.008f,0.005f));
+}
 void AUEDevPawn::ResetRide() { Reset(); }
 void AUEDevPawn::Reset() {
     Model = uedev::State{}; Accumulator = 0; Run = uedev::RouteRun{};
     Model.Z = ActiveRoute.StartZ;
+    UpdateLights();
     SetActorLocationAndRotation(FVector(Model.Z * 100, 0, 71), FRotator::ZeroRotator, false);
 }
-void AUEDevPawn::Ready() { Reset(); Model.Engine = true; Model.Handbrake = false; Model.Belt = true; Model.Selector = uedev::Gear::D; }
-void AUEDevPawn::StartEngine() { uedev::ToggleEngine(Model); }
+void AUEDevPawn::Ready() { Reset(); Model.Engine = true; Model.Handbrake = false; Model.Belt = true; Model.Selector = uedev::Gear::D; UpdateLights(); }
+void AUEDevPawn::StartEngine() { uedev::ToggleEngine(Model); UpdateLights(); }
 void AUEDevPawn::Handbrake() { Model.Handbrake = !Model.Handbrake; }
 void AUEDevPawn::Belt() { Model.Belt = !Model.Belt; }
-void AUEDevPawn::Choose(uedev::Gear Gear) { uedev::Select(Model, Gear, Down(EKeys::S)); }
+void AUEDevPawn::Choose(uedev::Gear Gear) { uedev::Select(Model, Gear, Down(EKeys::S)); UpdateLights(); }
 void AUEDevPawn::Park() { Choose(uedev::Gear::P); }
 void AUEDevPawn::Reverse() { Choose(uedev::Gear::R); }
 void AUEDevPawn::Neutral() { Choose(uedev::Gear::N); }
@@ -160,4 +194,5 @@ void AUEDevPawn::Tick(float DeltaSeconds) {
         Run.Advance(ActiveRoute, PreviousX, PreviousZ, Model.X, Model.Z, Model.Speed, uedev::Dt);
         Accumulator -= uedev::Dt;
     }
+    UpdateLights();
 }

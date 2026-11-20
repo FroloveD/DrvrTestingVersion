@@ -8,6 +8,7 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
@@ -52,12 +53,14 @@ void AUEDevGameMode::BuildRoute(int Id) {
     FlushPersistentDebugLines(World);
     const auto Route = uedev::Route(Id);
     UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+    UMaterialInterface* Surface = LoadObject<UMaterialInterface>(nullptr,TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
     auto Box = [&](FVector Position, FVector Scale, FLinearColor Color = FLinearColor(0.55f,0.58f,0.62f), bool Collision = true) {
         auto* Actor = World->SpawnActor<AStaticMeshActor>(Position, FRotator::ZeroRotator);
         if (!Actor) return;
         RouteActors.Add(Actor);
         Actor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
         Actor->GetStaticMeshComponent()->SetStaticMesh(Cube);
+        if (Surface) Actor->GetStaticMeshComponent()->SetMaterial(0,Surface);
         Actor->SetActorScale3D(Scale);
         Actor->GetStaticMeshComponent()->SetCollisionProfileName(Collision ? TEXT("BlockAll") : TEXT("NoCollision"));
         if (auto* Material = Actor->GetStaticMeshComponent()->CreateAndSetMaterialInstanceDynamic(0))
@@ -86,6 +89,7 @@ void AUEDevGameMode::BuildRoute(int Id) {
             auto* Mesh = Marker->GetStaticMeshComponent();
             Mesh->SetMobility(EComponentMobility::Movable);
             Mesh->SetStaticMesh(Cone);
+            if (Surface) Mesh->SetMaterial(0,Surface);
             Marker->SetActorScale3D(FVector(0.45,0.45,0.8));
             Mesh->SetCollisionProfileName(TEXT("NoCollision"));
             if (auto* Material = Mesh->CreateAndSetMaterialInstanceDynamic(0))

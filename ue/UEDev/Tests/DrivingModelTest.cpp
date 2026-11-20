@@ -112,6 +112,19 @@ int main() {
     State hydraulic; hydraulic.Engine=true; hydraulic.Selector=Gear::D;
     Step(hydraulic,{true,true,false,0});
     Check(hydraulic.BrakePressure>0 && hydraulic.BrakePressure<0.1 && hydraulic.Throttle==0,"hydraulic buildup and brake override");
+    State lamps;
+    Check(!Lights(lamps).Head && !Lights(lamps).Stop && !Lights(lamps).Reverse,"cold lights off");
+    lamps.Engine=true;
+    Check(Lights(lamps).Head && !Lights(lamps).Reverse,"engine headlights");
+    lamps.Selector=Gear::R;
+    Check(Lights(lamps).Reverse,"R reverse light");
+    lamps.BrakePressure=0.5;
+    Check(Lights(lamps).Stop && Lights(lamps).Reverse,"brake and reverse independent");
+    lamps.Engine=false;
+    Check(!Lights(lamps).Head && !Lights(lamps).Reverse && Lights(lamps).Stop,"stop independent of engine");
+    lamps.BrakePressure=0;
+    lamps.Handbrake=true;
+    Check(!Lights(lamps).Stop,"handbrake not stop lamp");
     std::cout << "PASS UEDev session flow + model: cold start, selector, gas, neutral, braking, coordinates\n";
     return 0;
 }

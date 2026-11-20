@@ -15,6 +15,8 @@
 class UBoxComponent;
 class USpringArmComponent;
 class UCameraComponent;
+class USpotLightComponent;
+class UMaterialInstanceDynamic;
 UCLASS()
 class UEDEV_API AUEDevPawn : public APawn {
     GENERATED_BODY()
@@ -34,6 +36,11 @@ private:
     UPROPERTY() TObjectPtr<UBoxComponent> Body;
     UPROPERTY() TObjectPtr<USpringArmComponent> Arm;
     UPROPERTY() TObjectPtr<UCameraComponent> Camera;
+    UPROPERTY() TArray<TObjectPtr<USpotLightComponent>> HeadLights;
+    UPROPERTY() TArray<TObjectPtr<USpotLightComponent>> StopLights;
+    UPROPERTY() TObjectPtr<USpotLightComponent> ReverseLight;
+    UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> RearLampMaterial;
+    void UpdateLights();
     uedev::State Model;
     uedev::TestRoute ActiveRoute = uedev::Route(0);
     uedev::RouteRun Run;
