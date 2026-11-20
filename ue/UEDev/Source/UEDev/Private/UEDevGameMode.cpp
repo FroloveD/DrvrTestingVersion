@@ -4,7 +4,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/SkyLight.h"
-#include "Atmosphere/SkyAtmosphere.h"
+#include "Components/SkyAtmosphereComponent.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -19,7 +19,14 @@ AUEDevGameMode::AUEDevGameMode() {
 }
 void AUEDevGameMode::BeginPlay() {
     Super::BeginPlay();
-    GetWorld()->SpawnActor<ASkyAtmosphere>();
+    // Компонент не требует отдельного заголовка актора ASkyAtmosphere.
+    if (auto* AtmosphereActor = GetWorld()->SpawnActor<AActor>()) {
+        auto* Atmosphere = NewObject<USkyAtmosphereComponent>(AtmosphereActor, TEXT("DayAtmosphere"));
+        AtmosphereActor->AddInstanceComponent(Atmosphere);
+        AtmosphereActor->SetRootComponent(Atmosphere);
+        Atmosphere->SetMobility(EComponentMobility::Movable);
+        Atmosphere->RegisterComponent();
+    }
     // Свет создаётся один раз, а не при каждом выборе маршрута.
     if (auto* Sun = GetWorld()->SpawnActor<ADirectionalLight>(FVector(0, 0, 1500), FRotator(-40, -30, 0))) {
         Sun->GetLightComponent()->SetMobility(EComponentMobility::Movable);
