@@ -86,6 +86,8 @@ import {
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
 import {
+  advanceKeyboardThrottle,
+  stepKeyboardGear,
   applyShifterTarget,
   checkEngineToggle,
   checkGearChange,
@@ -1383,6 +1385,42 @@ export const extraCases: SelfTestCase[] = [
         defaultSpeedLimitKmh: 200,
       };
       const grid = new SpatialGrid([], 10);
+
+      // Клавиатура: стрелки не являются педалями; Shift сам по себе — только модификатор.
+      const kb = { engineOn: true, brake: 1 };
+      assert(stepKeyboardGear({ ...kb, gear: "P" }, 0, 1, 1, false).next === "R", "↑: P→R");
+      assert(stepKeyboardGear({ ...kb, gear: "R" }, 0, 1, 1, false).next === "N", "↑: R→N");
+      assert(stepKeyboardGear({ ...kb, gear: "N" }, 0, 1, 1, false).next === "D", "↑: N→D, не M");
+      assert(stepKeyboardGear({ ...kb, gear: "D" }, 0, 1, -1, false).next === "N", "↓: D→N");
+      assert(stepKeyboardGear({ ...kb, gear: "D" }, 0, 1, 1, true).next === "1", "Shift+↑: D→M1");
+      assert(stepKeyboardGear({ ...kb, gear: "2" }, 3, 2, -1, true).next === "1", "Shift+↓: M2→M1");
+      assert(stepKeyboardGear({ ...kb, gear: "P", brake: 0 }, 0, 1, 1, false).next === null, "↑ сохраняет BTSI");
+      let soft = 0, kick = 0;
+      for (let i = 0; i < 12; i++) {
+        soft = advanceKeyboardThrottle(soft, true, false, FIXED_DT);
+        kick = advanceKeyboardThrottle(kick, true, true, FIXED_DT);
+      }
+      assert(soft > 0.2 && soft < 0.3 && kick === 1, "Газ нарастает плавно; Shift+газ быстро до пола");
+      assert(advanceKeyboardThrottle(kick, false, true, FIXED_DT) < kick, "Shift без газа не держит педаль");
+      let fine = 0;
+      for (let i = 0; i < 24; i++) fine = advanceKeyboardThrottle(fine, true, false, FIXED_DT / 2);
+      assert(Math.abs(fine - soft) < 1e-10, "Ход педали зависит от времени, не частоты вызова");
+
+      // Shift+газ в D вызывает существующий физический кикдаун, а не переводит селектор в M.
+      const runKick = (boosted: boolean) => {
+        let st = { ...createInitialState(track, true), gear: "D" as Gear, prevGear: "D" as Gear,
+          autoSubGear: 4, v: 60 / 3.6, throttlePos: 0 };
+        let pedal = 0;
+        for (let i = 0; i < 18; i++) {
+          pedal = advanceKeyboardThrottle(pedal, true, boosted, FIXED_DT);
+          st = stepSimulation(st, { ...createReadyInput("D"), throttle: pedal }, track, grid,
+            DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        }
+        return st;
+      };
+      const gentleDrive = runKick(false), kickDrive = runKick(true);
+      assert(kickDrive.gear === "D" && kickDrive.autoSubGear < gentleDrive.autoSubGear,
+        "Shift+газ должен понижать автоматическую ступень без перехода в M");
 
       // 1. Секвентальное переключение Shift (P ↔ R ↔ N ↔ M1..M6) и защитные блокировки (вкл. тормоз BTSI из P)
       assert(stepGearSequential({ gear: "P", engineOn: false, brake: 1 }, 0, 1, 1).next === null, "Shift из P без ДВС должен блокироваться");

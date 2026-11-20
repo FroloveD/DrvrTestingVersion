@@ -57,6 +57,8 @@ import {
   checkEngineToggle,
   checkGearChange,
   shiftLockState,
+  advanceKeyboardThrottle,
+  stepKeyboardGear,
   stepGearSequential,
   stepShifterGate,
   type ShifterTarget,
@@ -541,9 +543,11 @@ export function SimulatorView({
   }, []);
 
   const keysRef = useRef<Record<string, boolean>>({});
+  const keyboardThrottleRef = useRef(0);
   const touchPedalRef = useRef<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
   const pedalOwner = useRef<{ gas: number | null; brake: number | null }>({ gas: null, brake: null });
   const releasePedals = useCallback(() => {
+    keyboardThrottleRef.current = 0;
     pedalOwner.current = { gas: null, brake: null };
     touchPedalRef.current = { gas: false, brake: false };
     setPedalVisual({ gas: false, brake: false });
@@ -624,12 +628,12 @@ export function SimulatorView({
 
   // === [SEC:sim-actions] Команды поворотников, АКПП, стартера и сброса попытки ===
   /**
-   * Живое усилие на педали тормоза `0..1` из клавиатуры (S / ↓), экранной педали и USB-геймпада.
+   * Живое усилие на педали тормоза `0..1` из клавиатуры (S), экранной педали и USB-геймпада.
    * Нужно блокировке BTSI (`checkGearChange`): клавиша S должна снимать селектор с P ещё до следующего тика.
    */
   const liveBrakePressure = useCallback(() => {
     const keys = keysRef.current;
-    const pressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
+    const pressed = Boolean(keys.KeyS || touchPedalRef.current.brake);
     return Math.max(inputRef.current.brake, pressed ? 1 : 0);
   }, []);
 
@@ -1439,9 +1443,12 @@ export function SimulatorView({
 
       // Фиксированный шаг 1/60 с (детерминированное ядро)
       while (accumulator >= FIXED_DT) {
-        const gasPressed = Boolean(keys.KeyW || keys.ArrowUp || touchPedalRef.current.gas);
-        const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
-        inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
+        const gasPressed = Boolean(keys.KeyW || touchPedalRef.current.gas);
+        const brakePressed = Boolean(keys.KeyS || touchPedalRef.current.brake);
+        keyboardThrottleRef.current = advanceKeyboardThrottle(
+          keyboardThrottleRef.current, gasPressed, Boolean(keys.ShiftLeft || keys.ShiftRight), FIXED_DT
+        );
+        inp.throttle = Math.max(keyboardThrottleRef.current, pad.throttle);
         inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
         // Shift вместе с тормозом = энергичное нажатие: быстрый набор давления и +18 % замедления
         inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.05);
@@ -1688,18 +1695,20 @@ export function SimulatorView({
         case "KeyF":
           setGear("D");
           break;
-        case "ShiftLeft":
-          // Shift + тормоз — энергичный ход педали (усиление тормозного давления), без тормоза — ступень вверх.
-          // Повтор сюда не доходит (`e.repeat` отсекается выше), поэтому фронт нажатия определяется однозначно.
-          if (inp.brake > 0.05) {
-            onNotify("Энергичное торможение: давление в гидроприводе растёт вдвое быстрее");
-          } else {
-            shiftGear(1);
-          }
+        case "ArrowUp":
+        case "ArrowDown": {
+          const st = stateRef.current;
+          const { next, blockedReason } = stepKeyboardGear(
+            { ...inp, brake: liveBrakePressure() }, st.v, st.autoSubGear,
+            code === "ArrowUp" ? 1 : -1, e.shiftKey
+          );
+          if (blockedReason) onNotify(blockedReason);
+          else if (next) setGear(next);
           break;
+        }
+        case "ShiftLeft":
         case "ShiftRight":
-        case "KeyX":
-          shiftGear(-1);
+          // Сам Shift не меняет передачу: модификатор ручного переключения/педалей.
           break;
         case "KeyH":
           // H — сигнал (клаксон): удерживаем, как настоящий подрулевой штурвал
@@ -1773,6 +1782,7 @@ export function SimulatorView({
     setTurnSignal,
     setGear,
     shiftGear,
+    liveBrakePressure,
     toggleEngine,
     toggleShifterGlance,
     onNotify,
@@ -3382,13 +3392,14 @@ export function SimulatorView({
             {!helpCollapsed && (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
                 {[
-                  ["W / ↑", "Газ в выбранной передаче"],
-                  ["S / ↓", "Тормоз (в D не даёт реверс)"],
+                  ["W", "Плавный газ · Shift+W — кикдаун"],
+                  ["S", "Тормоз (в D не даёт реверс)"],
                   ["A / D", "Руль влево (+X) / вправо (−X)"],
                   ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
                   ["← / →", "Взгляд: левое зеркало → дорога → правое зеркало"],
                   ["ПКМ + колесо", "Свободный обзор головой (не возвращается) · зум камеры"],
-                  ["Shift / RShift·X", "Ручной режим M1–M6 (▲ / ▼)"],
+                  ["↑ / ↓", "Селектор P ↔ R ↔ N ↔ D"],
+                  ["Shift + ↑ / ↓", "Ручной режим M1–M6 (выше / ниже)"],
                   ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
                   ["G · 3D-рычаг", "Взгляд на АКПП и переключение мышью"],
                   ["I (в P/N)", "Запуск ДВС только из P или N"],
@@ -3926,10 +3937,10 @@ export function SimulatorView({
               <div>
                 <span className="mono font-bold text-[#f5b942]">Shift Lock (BTSI)</span> — выход из P и запуск{" "}
                 <span className="text-white">только с нажатой педалью тормоза</span>{" "}
-                <span className="text-[#52d6bd]">(S / ↓ / экранная педаль)</span>
+                <span className="text-[#52d6bd]">(S / экранная педаль)</span>
               </div>
               <div>
-                <span className="mono font-bold text-[#f5b942]">Shift ▲ / RShift·X ▼</span> — ручной паз{" "}
+                <span className="mono font-bold text-[#f5b942]">Shift+↑ / Shift+↓</span> — ручной паз{" "}
                 <span className="text-white">M1–M6</span> (защита от перекрута и заглохания)
               </div>
               <div>
@@ -4111,7 +4122,7 @@ export function SimulatorView({
                 </div>
                 <div>
                   <span className="text-white font-semibold">Колесо</span> — шаг передачи ·{" "}
-                  <span className="mono text-[#f5b942]">Shift / RShift·X</span> ·{" "}
+                  <span className="mono text-[#f5b942]">Shift+↑ / Shift+↓</span> ·{" "}
                   <span className="mono text-[#9bafbc]">G</span> — дорога
                 </div>
                 {!s.engineOn ? (

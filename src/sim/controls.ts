@@ -341,3 +341,16 @@ export function checkEngineToggle(inp: Pick<InputState, "gear" | "engineOn">): s
   }
   return null;
 }
+
+/** Клавиатура: ↑/↓ — селектор P/R/N/D; Shift+↑/↓ — ручные ступени. */
+export function stepKeyboardGear(inp: GearCheckInput, speedMs: number, autoSubGear: number, dir: 1 | -1, manual: boolean) {
+  if (manual) return stepGearSequential(inp, speedMs, autoSubGear, dir);
+  return stepShifterGate(isManualGear(inp.gear) ? { ...inp, gear: "D" } : inp, speedMs, autoSubGear, dir);
+}
+
+/** Ход цифровой педали за фиксированный тик: обычный газ ≈0,83 с до пола, Shift — ≈0,08 с. */
+export function advanceKeyboardThrottle(current: number, pressed: boolean, kickdown: boolean, dt: number): number {
+  const target = pressed ? 1 : 0;
+  const rate = pressed ? (kickdown ? 12 : 1.2) : 8;
+  return clamp(current + clamp(target - current, -rate * dt, rate * dt), 0, 1);
+}
