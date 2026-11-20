@@ -36,6 +36,8 @@ export type InputState = {
   signal: TurnSignal;
   /** Быстрое нарастание тормозного усилия при энергичном нажатии педали. */
   shiftBoost?: boolean;
+  /** Нажат сигнал (клаксон) — звуковое событие, на физику не влияет. */
+  horn?: boolean;
 };
 
 export type Vec2 = { x: number; z: number };
@@ -68,6 +70,8 @@ export type SimState = {
   belt: boolean;
   lights: boolean;
   signal: TurnSignal;
+  /** Клаксон удерживается в текущем тике; отсутствует в старых реплеях. */
+  horn?: boolean;
   wheelSpin: number; // рад
   pitch: number; // рад, тангаж кузова
   roll: number; // рад, крен кузова
