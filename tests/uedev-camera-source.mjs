@@ -60,3 +60,7 @@ for (const source of [pawn,controller,hud]) {
 }
 assert(body('UpdateCabin').includes('HeadControl.Step('));
 console.log('PASS UEDev checked-format literal guards (Log-4 regression, not UE compile)');
+
+assert(pawn.includes('DeltaSeconds,HeadReturnSpeed)'));
+assert(controller.includes('TEXT("HeadReturnRate")'));
+assert(controller.includes('SetHeadReturnRate(HeadReturnSetting)'));

@@ -28,7 +28,8 @@ with ZipFile(out, 'w', ZIP_DEFLATED) as archive:
             archive.write(path, 'UEDev-starter/' + path.relative_to(root).as_posix())
     archive.write(root / 'NOTICE', 'UEDev-starter/NOTICE')
     archive.writestr('UEDev-starter/START_HERE.txt', '''UEDev — UE 5.7 C++: стартовое меню, пауза и технический итог.
-Распакуйте архив целиком. Прочтите ue/README.md и ue/PLAN.md.
+Ревизия набора: fast-head-return-540-900; HUD TEXT-format fix Log-4/Log-5.
+Распакуйте архив целиком В НОВУЮ ПАПКУ. Прочтите ue/README.md и ue/PLAN.md.
 Откройте ue/UEDev/UEDev.uproject, соберите UEDevEditor.
 Play -> стартовое меню -> Начать заезд -> удерживать S и нажать Enter -> отпустить S -> W.
 Backspace — холодный сброс; Enter не сбрасывает заезд; L — фары.

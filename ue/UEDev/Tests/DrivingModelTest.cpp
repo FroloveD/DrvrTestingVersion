@@ -140,6 +140,15 @@ int main() {
     head=40;
     for (int i=0;i<10;++i) head=reversed.Step(head,true,false,0.1);
     Check(head<0,"opposite arrow is not center-latched");
+    Check(HeadReturnRate(0)==540 && HeadReturnRate(2000)==900 && HeadReturnRate(700)==700,"head return narrow range");
+    Check(HeadReturnRate(std::numeric_limits<double>::quiet_NaN())==720 && HeadReturnRate(std::numeric_limits<double>::infinity())==720,"head return invalid config default");
+    for (const double rate : {540.0,720.0,900.0}) for (const double side : {-1.0,1.0}) {
+        HeadLook fastLook; fastLook.Returning=true;
+        double yaw=110*side; double elapsed=0;
+        while (fastLook.Returning && elapsed<1) { yaw=fastLook.Step(yaw,false,false,Dt,rate); elapsed+=Dt; }
+        Check(yaw==0 && elapsed>=110/rate-1e-9 && elapsed<=110/rate+Dt+1e-9,"fast return duration and no overshoot");
+        Check(elapsed<=0.217,"return always quick");
+    }
     State hudState;
     Check(NextHint(hudState,false)==HudHint::StartEngine,"HUD cold start hint");
     hudState.Selector=Gear::D;

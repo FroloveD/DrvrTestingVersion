@@ -31,15 +31,18 @@ inline double HeadYaw(double yaw, bool left, bool right, double dt) {
 }
 // Стрелки действуют при удержании; после отпускания возвращаемся к дороге.
 // Свободный осмотр мышью сам по себе не запускает автовозврат.
+inline double HeadReturnRate(double value) {
+    return std::isfinite(value) ? std::clamp(value,540.0,900.0) : 720.0;
+}
 struct HeadLook {
     bool Returning=false;
-    double Step(double yaw, bool left, bool right, double dt) {
+    double Step(double yaw, bool left, bool right, double dt, double returnRate = 720) {
         if (left || right) {
             Returning=true;
             return HeadYaw(yaw,left,right,dt);
         }
         if (!Returning) return yaw;
-        const double amount=170*std::clamp(dt,0.0,0.1);
+        const double amount=HeadReturnRate(returnRate)*std::clamp(dt,0.0,0.1);
         const double next=yaw+std::clamp(-yaw,-amount,amount);
         if (next==0) Returning=false;
         return next;

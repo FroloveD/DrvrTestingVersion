@@ -20,22 +20,31 @@ void AUEDevPlayerController::LoadPreferences() {
     if (GConfig) {
         GConfig->GetInt(TEXT("UEDev"),TEXT("SelectedRoute"),SelectedRoute,GGameUserSettingsIni);
         GConfig->GetDouble(TEXT("UEDev"),TEXT("OrdinaryGas"),GasSetting,GGameUserSettingsIni);
+        GConfig->GetDouble(TEXT("UEDev"),TEXT("HeadReturnRate"),HeadReturnSetting,GGameUserSettingsIni);
     }
     SelectedRoute = FMath::Clamp(SelectedRoute,0,1);
     GasSetting = uedev::OrdinaryGasLimit(GasSetting);
+    HeadReturnSetting = uedev::HeadReturnRate(HeadReturnSetting);
 }
 void AUEDevPlayerController::SavePreferences() {
-    if (const auto* DrivingPawn = Cast<AUEDevPawn>(GetPawn())) GasSetting=DrivingPawn->GetOrdinaryGas();
+    if (const auto* DrivingPawn = Cast<AUEDevPawn>(GetPawn())) {
+        GasSetting=DrivingPawn->GetOrdinaryGas();
+        HeadReturnSetting=DrivingPawn->GetHeadReturnRate();
+    }
     if (!GConfig) return;
     GConfig->SetInt(TEXT("UEDev"),TEXT("SelectedRoute"),SelectedRoute,GGameUserSettingsIni);
     GConfig->SetDouble(TEXT("UEDev"),TEXT("OrdinaryGas"),GasSetting,GGameUserSettingsIni);
+    GConfig->SetDouble(TEXT("UEDev"),TEXT("HeadReturnRate"),HeadReturnSetting,GGameUserSettingsIni);
     GConfig->Flush(false,GGameUserSettingsIni);
 }
 void AUEDevPlayerController::BeginPlay() { Super::BeginPlay(); LoadPreferences(); SyncScreen(); }
 void AUEDevPlayerController::OnPossess(APawn* InPawn) {
     Super::OnPossess(InPawn);
     LoadPreferences();
-    if (auto* DrivingPawn=Cast<AUEDevPawn>(InPawn)) DrivingPawn->SetOrdinaryGas(GasSetting);
+    if (auto* DrivingPawn=Cast<AUEDevPawn>(InPawn)) {
+        DrivingPawn->SetOrdinaryGas(GasSetting);
+        DrivingPawn->SetHeadReturnRate(HeadReturnSetting);
+    }
     SyncScreen();
 }
 void AUEDevPlayerController::EndPlay(const EEndPlayReason::Type Reason) {
@@ -136,6 +145,21 @@ void AUEDevPlayerController::SyncScreen() {
             Items->AddSlot().AutoHeight()[SNew(STextBlock).Text_Lambda([this]() {
                 return FText::FromString(FString::Printf(TEXT("Обычный газ: %.0f %%"),GasSetting*100));
             })];
+            Text(TEXT("Возврат взгляда после отпускания стрелки: быстро — очень быстро (540–900°/с). Без сглаживания и медленного доворота."));
+            Items->AddSlot().AutoHeight().Padding(0,10)[SNew(SSlider)
+                .Value(static_cast<float>((HeadReturnSetting-540)/360))
+                .OnValueChanged_Lambda([this](float Value) {
+                    HeadReturnSetting=uedev::HeadReturnRate(540+Value*360);
+                    if (auto* DrivingPawn=Cast<AUEDevPawn>(GetPawn())) DrivingPawn->SetHeadReturnRate(HeadReturnSetting);
+                })];
+            Items->AddSlot().AutoHeight()[SNew(STextBlock).Text_Lambda([this]() {
+                return FText::FromString(FString::Printf(TEXT("Возврат: %.0f°/с · от крайнего взгляда около %.2f с"),HeadReturnSetting,110/HeadReturnSetting));
+            })];
+            Button(TEXT("Возврат по умолчанию — 720°/с"),[this]() {
+                HeadReturnSetting=720;
+                if (auto* DrivingPawn=Cast<AUEDevPawn>(GetPawn())) DrivingPawn->SetHeadReturnRate(HeadReturnSetting);
+                SavePreferences(); SyncScreen();
+            });
             Button(TEXT("Сохранить настройки"),[this]() { SavePreferences(); });
             Button(TEXT("Газ по умолчанию — 60 %"),[this]() {
                 GasSetting=0.6;

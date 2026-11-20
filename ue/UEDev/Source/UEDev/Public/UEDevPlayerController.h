@@ -28,6 +28,7 @@ private:
     FString Result;
     int32 SelectedRoute = 0;
     double GasSetting = 0.6;
+    double HeadReturnSetting = 720;
     bool PreferencesLoaded = false;
     TArray<FString> RecentResults;
     void LoadPreferences();

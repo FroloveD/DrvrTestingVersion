@@ -36,6 +36,8 @@ public:
     const uedev::TestRoute& GetRoute() const { return ActiveRoute; }
     const uedev::RouteRun& GetRouteRun() const { return Run; }
     void SetOrdinaryGas(double Value) { OrdinaryGas = uedev::OrdinaryGasLimit(Value); }
+    void SetHeadReturnRate(double Value) { HeadReturnSpeed = uedev::HeadReturnRate(Value); }
+    double GetHeadReturnRate() const { return HeadReturnSpeed; }
     double GetOrdinaryGas() const { return OrdinaryGas; }
     bool AreHeadlightsOn() const { return HeadlightsOn; }
     UTextureRenderTarget2D* GetMirror(int Index) const { return MirrorTargets.IsValidIndex(Index) ? MirrorTargets[Index].Get() : nullptr; }
@@ -61,6 +63,7 @@ private:
     void UpdateCabin(float DeltaSeconds);
     bool CabinView = false;
     uedev::HeadLook HeadControl;
+    double HeadReturnSpeed = 720;
     void ToggleCamera();
     void ExteriorView();
     void InteriorView();

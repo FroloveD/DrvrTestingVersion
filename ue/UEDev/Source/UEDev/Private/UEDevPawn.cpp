@@ -192,7 +192,7 @@ void AUEDevPawn::UpdateCabin(float DeltaSeconds) {
     // Стрелки поворачивают взгляд при удержании, отпускание возвращает к дороге.
     if (CabinView) {
         FRotator R = CabinCamera->GetRelativeRotation();
-        R.Yaw = HeadControl.Step(R.Yaw,Down(EKeys::Left),Down(EKeys::Right),DeltaSeconds);
+        R.Yaw = HeadControl.Step(R.Yaw,Down(EKeys::Left),Down(EKeys::Right),DeltaSeconds,HeadReturnSpeed);
         CabinCamera->SetRelativeRotation(R);
     }
     const FString GearLabel = Model.Selector==uedev::Gear::D ? FString::Printf(TEXT("D%d"),Model.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(Model.Selector)));
