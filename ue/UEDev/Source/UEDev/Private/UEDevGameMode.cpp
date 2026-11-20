@@ -123,7 +123,7 @@ void AUEDevHUD::DrawHUD() {
         S.Belt ? TEXT("ДА") : TEXT("НЕТ"), S.Throttle * 100, S.BrakePressure * 100), FLinearColor::White, 24, 50);
     DrawText(FString::Printf(TEXT("Обычный газ: %.0f%% · Ctrl+колесо: 10–60%% · Shift+W в D/M: полный газ"),
         Pawn->GetOrdinaryGas() * 100), FLinearColor::White, 24, 76);
-    DrawText(TEXT("Esc — пауза | Enter — быстрый старт | Backspace — холодный сброс"), FLinearColor::White, 24, 102);
+    DrawText(TEXT("Esc — пауза | S+Enter — подготовка без сброса | L — фары | Backspace — холодный сброс"), FLinearColor::White, 24, 102);
     const auto& Run=Pawn->GetRouteRun();
     const auto& Route=Pawn->GetRoute();
     DrawText(FString::Printf(TEXT("КТ %d/%d | %.1f с | %.0f м | %s"),Run.Next,Route.Count,Run.Seconds,Run.Distance,

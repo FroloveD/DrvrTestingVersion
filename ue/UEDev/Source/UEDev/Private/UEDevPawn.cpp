@@ -99,21 +99,23 @@ bool AUEDevPawn::Down(const FKey& Key) const {
     return PC && PC->IsInputKeyDown(Key);
 }
 void AUEDevPawn::UpdateLights() {
-    const auto Light = uedev::Lights(Model);
+    const auto Light = uedev::Lights(Model, HeadlightsOn);
     for (const auto& Beam : HeadLights) if (Beam) Beam->SetVisibility(Light.Head);
     for (const auto& Beam : StopLights) if (Beam) Beam->SetVisibility(Light.Stop);
     if (ReverseLight) ReverseLight->SetVisibility(Light.Reverse);
     if (RearLampMaterial) RearLampMaterial->SetVectorParameterValue(TEXT("Color"),
         Light.Stop ? FLinearColor(1.f,0.025f,0.01f) : FLinearColor(0.25f,0.008f,0.005f));
 }
+void AUEDevPawn::ToggleHeadlights() { HeadlightsOn = !HeadlightsOn; UpdateLights(); }
 void AUEDevPawn::ResetRide() { Reset(); }
 void AUEDevPawn::Reset() {
+    HeadlightsOn = false;
     Model = uedev::State{}; Accumulator = 0; Run = uedev::RouteRun{};
     Model.Z = ActiveRoute.StartZ;
     UpdateLights();
     SetActorLocationAndRotation(FVector(Model.Z * 100, 0, 71), FRotator::ZeroRotator, false);
 }
-void AUEDevPawn::Ready() { Reset(); Model.Engine = true; Model.Handbrake = false; Model.Belt = true; Model.Selector = uedev::Gear::D; UpdateLights(); }
+void AUEDevPawn::Ready() { uedev::PrepareDrive(Model, Down(EKeys::S)); UpdateLights(); }
 void AUEDevPawn::StartEngine() { uedev::ToggleEngine(Model); UpdateLights(); }
 void AUEDevPawn::Handbrake() { Model.Handbrake = !Model.Handbrake; }
 void AUEDevPawn::Belt() { Model.Belt = !Model.Belt; }
@@ -154,6 +156,7 @@ void AUEDevPawn::Zoom(float Value) {
 }
 void AUEDevPawn::SetupPlayerInputComponent(UInputComponent* Input) {
     Super::SetupPlayerInputComponent(Input);
+    Input->BindKey(EKeys::L, IE_Pressed, this, &AUEDevPawn::ToggleHeadlights);
     Input->BindKey(EKeys::I, IE_Pressed, this, &AUEDevPawn::StartEngine);
     Input->BindKey(EKeys::Enter, IE_Pressed, this, &AUEDevPawn::Ready);
     Input->BindKey(EKeys::BackSpace, IE_Pressed, this, &AUEDevPawn::Reset);

@@ -29,8 +29,8 @@ struct State {
 };
 // Визуальная политика прототипа: не изменяет состояние/динамику и не является оценкой.
 struct LightState { bool Head, Stop, Reverse; };
-inline LightState Lights(const State& s) {
-    return {s.Engine, s.BrakePressure > 0.02, s.Engine && s.Selector == Gear::R};
+inline LightState Lights(const State& s, bool headlights = false) {
+    return {headlights, s.BrakePressure > 0.02, s.Engine && s.Selector == Gear::R};
 }
 inline bool Select(State& s, Gear next, bool brake) {
     if (next == s.Selector) return true;
@@ -53,6 +53,17 @@ inline bool Select(State& s, Gear next, bool brake) {
 inline bool ToggleEngine(State& s) {
     if (!s.Engine && s.Selector != Gear::P && s.Selector != Gear::N) return false;
     s.Engine = !s.Engine;
+    return true;
+}
+// Подготовка на месте: не сброс. На ходу/R/M — отказ без частичных изменений.
+inline bool PrepareDrive(State& s, bool brake) {
+    if (std::abs(s.Speed) > 0.35 || (s.Selector != Gear::P && s.Selector != Gear::N && s.Selector != Gear::D)) return false;
+    State next = s;
+    if (!next.Engine && !ToggleEngine(next)) return false;
+    if (!Select(next, Gear::D, brake)) return false;
+    next.Handbrake = false;
+    next.Belt = true;
+    s = next;
     return true;
 }
 inline void Step(State& s, const Input& in) {

@@ -41,6 +41,8 @@ private:
     UPROPERTY() TObjectPtr<USpotLightComponent> ReverseLight;
     UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> RearLampMaterial;
     void UpdateLights();
+    void ToggleHeadlights();
+    bool HeadlightsOn = false;
     uedev::State Model;
     uedev::TestRoute ActiveRoute = uedev::Route(0);
     uedev::RouteRun Run;

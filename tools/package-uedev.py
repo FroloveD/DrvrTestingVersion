@@ -30,7 +30,8 @@ with ZipFile(out, 'w', ZIP_DEFLATED) as archive:
     archive.writestr('UEDev-starter/START_HERE.txt', '''UEDev — UE 5.7 C++: стартовое меню, пауза и технический итог.
 Распакуйте архив целиком. Прочтите ue/README.md и ue/PLAN.md.
 Откройте ue/UEDev/UEDev.uproject, соберите UEDevEditor.
-Play -> стартовое меню -> Начать заезд -> Enter -> W.
+Play -> стартовое меню -> Начать заезд -> удерживать S и нажать Enter -> отпустить S -> W.
+Backspace — холодный сброс; Enter не сбрасывает заезд; L — фары.
 Esc в Standalone: пауза (в PIE редактор может перехватить Esc).
 Два тестовых маршрута, настройки газа, итоги в памяти; low-poly машина и дневной свет.
 Полный редактор, постоянный журнал и реплей ещё не портированы.
