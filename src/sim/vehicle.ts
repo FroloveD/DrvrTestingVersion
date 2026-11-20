@@ -175,7 +175,7 @@ export function normalizeWheelLock(value: unknown): number {
 /** Из предела внутреннего колеса получаем предельный угол велосипедной модели. */
 export function centralSteerLimit(innerWheelDeg?: number, geo: CarGeometry = BASE_GEOMETRY): number {
   const inner = normalizeWheelLock(innerWheelDeg);
-  if (inner === WHEEL_LOCK.defaultDeg && geo === BASE_GEOMETRY) return CAR.maxSteer;
+  if (inner === WHEEL_LOCK.defaultDeg && geo.track === CAR.track && geo.wheelbase === CAR.wheelbase) return CAR.maxSteer;
   const cotInner = 1 / Math.tan((inner * Math.PI) / 180);
   return Math.atan(1 / (cotInner + geo.track / (2 * geo.wheelbase)));
 }
