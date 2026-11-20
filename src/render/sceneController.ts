@@ -31,6 +31,7 @@ import {
   buildGostStreetProp,
   buildOsmStreetLightInstances,
   buildGostTrafficSignal,
+  buildOsmTrafficSignalSupportInstances,
   buildWorldRoadsAndSidewalks,
   createRoadMaterialPack,
   type GostSignalVisualHandle,
@@ -675,9 +676,13 @@ export class SceneController {
       batch.mesh.computeBoundingSphere();
     }
 
-    // Светофоры ГОСТ Р 52282 (Т.1 + Г-консоль + П.1 + табличка 6.16 «СТОП») и стоп-линии 1.12
+    // Светофоры ГОСТ Р 52282: несущие конструкции больших OSM-сцен инстансируются отдельно,
+    // сигнальные головки и управляемые линзы остаются индивидуальными.
+    if (this.isLargeOsmWorld) {
+      buildOsmTrafficSignalSupportInstances(this.worldGroup, world.signals, roadMats);
+    }
     for (const sig of world.signals) {
-      this.signalVisuals.push(buildGostTrafficSignal(this.worldGroup, sig, roadMats));
+      this.signalVisuals.push(buildGostTrafficSignal(this.worldGroup, sig, roadMats, !this.isLargeOsmWorld));
     }
 
     // Пешеходные переходы ГОСТ 1.14.1 (бело-жёлтая «зебра», тактильная плитка, знаки 5.19.1/5.19.2) и пешеходы
