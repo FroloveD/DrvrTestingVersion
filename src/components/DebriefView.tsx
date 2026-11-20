@@ -26,7 +26,7 @@ import {
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialState, createReadyInput, stepSimulation } from "../sim/step";
 import type { CalibrationConfig } from "../sim/types";
-import { carGeometry, centralSteerLimit, FIXED_DT, getCarCorners } from "../sim/vehicle";
+import { CAR, carGeometry, centralSteerLimit, FIXED_DT, getCarCorners } from "../sim/vehicle";
 import { getPlayerCar } from "../sim/playerCar";
 import { Chip, downloadJson, Icon } from "./Icons";
 
