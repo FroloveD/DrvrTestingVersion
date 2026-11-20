@@ -125,8 +125,8 @@ export const DEFAULT_VOLUME = 0.7;
 export const VOLUME_STEP = 0.1;
 
 /** Переход к следующей (`+1`) или предыдущей (`−1`) станции по кругу. */
-export function nextStationIndex(current: number, dir: 1 | -1): number {
-  const total = INTERNET_RADIO_STATIONS.length;
+export function nextStationIndex(current: number, dir: 1 | -1, stations: readonly RadioStation[] = INTERNET_RADIO_STATIONS): number {
+  const total = stations.length;
   if (total === 0) return 0;
   return ((Math.round(current) + dir) % total + total) % total;
 }
