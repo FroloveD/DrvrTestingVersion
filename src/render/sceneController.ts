@@ -26,6 +26,7 @@ import {
 import {
   buildGostCrosswalk,
   buildGostRoadSign,
+  buildOsmSignSupportInstances,
   buildGostSpeedSign,
   buildGostStreetProp,
   buildOsmStreetLightInstances,
@@ -687,11 +688,28 @@ export class SceneController {
       this.pedVisuals.push(pedVis);
     });
 
-    // Дорожные знаки ГОСТ Р 52290-2004 (все 12 классов, фигурная подложка, хомуты и ориентация по потоку sign.h)
+    // Дорожные знаки ГОСТ Р 52290-2004. В больших OSM-сценах типовые стойки вынесены в spatial InstancedMesh.
     const renderedSignIds = new Set<string>();
-    for (const sign of world.signs ?? []) {
+    const osmSignDefs = world.signs ?? [];
+    const osmSpeedSignDefs = world.speedZones.filter((sz) => !osmSignDefs.some((sign) =>
+      sign.id === sz.id.replace(SIGN_SPEED_ZONE_PREFIX, "")
+    ));
+    if (this.isLargeOsmWorld) {
+      const supportDefs = [
+        ...osmSignDefs.map(({ x, z, h }) => ({ x, z, h })),
+        ...osmSpeedSignDefs.map((sz) => {
+          const aimH = Math.atan2(sz.x - sz.signX, sz.z - sz.signZ);
+          const h = Math.abs(Math.cos(aimH)) >= Math.abs(Math.sin(aimH))
+            ? (Math.cos(aimH) >= 0 ? 0 : Math.PI)
+            : (Math.sin(aimH) >= 0 ? Math.PI / 2 : -Math.PI / 2);
+          return { x: sz.signX, z: sz.signZ, h };
+        })
+      ];
+      buildOsmSignSupportInstances(this.worldGroup, supportDefs, roadMats);
+    }
+    for (const sign of osmSignDefs) {
       renderedSignIds.add(`${SIGN_SPEED_ZONE_PREFIX}${sign.id}`);
-      buildGostRoadSign(this.worldGroup, sign, roadMats);
+      buildGostRoadSign(this.worldGroup, sign, roadMats, !this.isLargeOsmWorld);
     }
 
     // Знаки ограничения скорости 3.24 (для встроенных сценариев без дублирования world.signs)
@@ -702,7 +720,7 @@ export class SceneController {
       const snappedH = Math.abs(Math.cos(aimH)) >= Math.abs(Math.sin(aimH))
         ? (Math.cos(aimH) >= 0 ? 0 : Math.PI)
         : (Math.sin(aimH) >= 0 ? Math.PI / 2 : -Math.PI / 2);
-      buildGostSpeedSign(this.worldGroup, sz.limitKmh, sz.signX, sz.signZ, snappedH, roadMats);
+      buildGostSpeedSign(this.worldGroup, sz.limitKmh, sz.signX, sz.signZ, snappedH, roadMats, !this.isLargeOsmWorld);
     }
 
     // Контрольные точки маршрута (двойной дорожный маркер с красным контуром для STOP и бирюзовым для финиша)
