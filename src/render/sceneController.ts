@@ -237,6 +237,7 @@ export class SceneController {
   private readonly cockpitLookWorld = new THREE.Vector3();
   private readonly shifterRaycaster = new THREE.Raycaster();
   private readonly shifterNdc = new THREE.Vector2();
+  private readonly shifterProjTmp = new THREE.Vector3();
   private readonly shifterInvChassis = new THREE.Matrix4();
   private readonly shifterLocalRay = new THREE.Ray();
   private readonly shifterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -SHIFTER_LAYOUT.knobPlaneY);
