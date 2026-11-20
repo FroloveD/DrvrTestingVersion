@@ -49,7 +49,7 @@ import {
 } from "../scenarios/editorOps";
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
-import { checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
+import { applyShifterTarget, checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
@@ -1054,7 +1054,16 @@ export const extraCases: SelfTestCase[] = [
         "Первая передача должна иметь большую тягу, чем шестая");
       assert(computeRoadDragDecel(10, 0, 1, "D", true, 1) > computeRoadDragDecel(10, 0, 0, "N", true, 1),
         "Включённая передача должна создавать engine braking сильнее нейтрали");
-      return "5 моделей · габариты, 6 ступеней и engine braking соответствуют модели";
+      const parkRelease = applyShifterTarget({ gear: "P", engineOn: true, brake: 1 }, 0, 1, "R");
+      assert(parkRelease.next === "R", "Физический селектор должен выводить P в R при нажатом тормозе");
+      const engageManual = applyShifterTarget({ gear: "D", engineOn: true, brake: 0 }, 5, 1, "M");
+      assert(engageManual.next === "1", "Боковой паз M должен включать текущую ручную ступень");
+      const upshift = applyShifterTarget({ gear: "1", engineOn: true, brake: 0 }, 5, 1, "M+");
+      assert(upshift.next === "2", "Положение M+ должно повышать ступень");
+      const unsafeReverse = applyShifterTarget({ gear: "D", engineOn: true, brake: 1 }, 3, 1, "R");
+      assert(unsafeReverse.next === null && Boolean(unsafeReverse.blockedReason),
+        "Селектор не должен включать R на скорости вперёд");
+      return "5 моделей · габариты, 6 ступеней, Shiftronic и engine braking OK";
     },
   },
 ];
