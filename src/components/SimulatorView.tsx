@@ -226,10 +226,10 @@ export function SimulatorView({
   const activeRef = useRef(true);
   const { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth } = calibration;
   // Новое значение выворота не изменяет площадку и не должно сбрасывать двигатель, позу или запись.
-  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>(customDef.playerCarId ?? "ceed");
-  useEffect(() => { if (customDef.playerCarId) setPlayerCarId(customDef.playerCarId); }, [customDef.playerCarId]);
+  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>(scenarioId === "custom" ? customDef.playerCarId ?? "ceed" : "ceed");
+  useEffect(() => { if (scenarioId === "custom" && customDef.playerCarId) setPlayerCarId(customDef.playerCarId); }, [scenarioId, customDef.playerCarId]);
   const world = useMemo(
-    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId: customDef.playerCarId ?? playerCarId }),
+    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId: scenarioId === "custom" ? customDef.playerCarId ?? playerCarId : playerCarId }),
     [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth, playerCarId]
   );
   const wheelLimit = normalizeWheelLock(calibration.maxInnerWheelDeg);
@@ -252,7 +252,7 @@ export function SimulatorView({
   const bindingsRef = useRef(bindings);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
   const [soundVolume, setSoundVolume] = useState(0.5);
-  const [radioStations, setRadioStations] = useState<RadioStation[]>(() => radioStationsFor(customDef.radioStationIds));
+  const [radioStations, setRadioStations] = useState<RadioStation[]>(() => radioStationsFor(scenarioId === "custom" ? customDef.radioStationIds : undefined));
   const radioStationsRef = useRef(radioStations);
   const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
     try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, stationIndex: clamp(Math.round(Number(saved.stationIndex) || 0), 0, Math.max(0, radioStations.length - 1)), clipIndex: clamp(Math.round(Number(saved.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1), volume: clampVolume(Number(saved.volume ?? DEFAULT_HEAD_UNIT_STATE.volume)), radioPlaying: false, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
@@ -329,13 +329,13 @@ export function SimulatorView({
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
   useEffect(() => {
-    const stations = radioStationsFor(customDef.radioStationIds);
+    const stations = radioStationsFor(scenarioId === "custom" ? customDef.radioStationIds : undefined);
     radioStationsRef.current = stations;
     setRadioStations(stations);
     setActiveRadioStations(stations);
     radioAudioRef.current?.pause();
     setHeadUnit((prev) => ({ ...prev, stationIndex: Math.min(prev.stationIndex, stations.length - 1), radioPlaying: false, source: "stream", savedTrackKey: null, streamStatus: "idle" }));
-  }, [customDef.radioStationIds]);
+  }, [scenarioId, customDef.radioStationIds]);
 
   useEffect(() => {
     radioStationsRef.current = radioStations;
