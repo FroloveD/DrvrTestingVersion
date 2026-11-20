@@ -18,6 +18,7 @@ import {
   buildPerpendicularScenario,
 } from "../scenarios/catalog";
 import {
+  buildCustomWorld,
   customFromWorld,
   defaultCustomScenario,
   emptyCustomScenario,
@@ -62,7 +63,8 @@ import type {
   RoadSignKind,
   Vec2,
 } from "../sim/types";
-import { VEHICLE_DIMS } from "../sim/vehicle";
+import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
+import { SpatialGrid } from "../sim/spatialGrid";
 import { Chip, downloadJson, Icon } from "./Icons";
 import { DEFAULT_LAYERS, MapCanvasEditor, type LayerVisibility } from "./MapCanvasEditor";
 
@@ -81,6 +83,85 @@ const degToRad = (deg: number) => (deg * Math.PI) / 180;
 const hexFromNum = (c: number | undefined, fallback: number): string =>
   `#${((c ?? fallback) & 0xffffff).toString(16).padStart(6, "0")}`;
 const numFromHex = (hex: string): number => Number.parseInt(hex.replace("#", ""), 16) || 0x94a3b8;
+
+type CollisionTarget = {
+  kind: "obstacle" | "bay";
+  id: string | number;
+  car: { x: number; z: number; h: number };
+  center: { x: number; z: number };
+  halfX: number;
+  halfZ: number;
+};
+
+function getCollisionTarget(def: CustomScenarioDef, message: string): CollisionTarget | null {
+  const label = message.match(/контакт с:\s*(.+?)(?:\.|$)/i)?.[1]?.trim();
+  if (!label) return null;
+
+  const bayNumber = message.match(/В боксе\s*№\s*(\d+)/i)?.[1];
+  const carBay = bayNumber ? def.bays.find((b) => b.id === Number(bayNumber)) : null;
+  const car = carBay
+    ? { x: carBay.cx, z: carBay.cz, h: carBay.h }
+    : /На старте/i.test(message)
+      ? def.start
+      : null;
+  if (!car) return null;
+
+  const obstacle = def.obstacles.find((o) => o.id === label || o.label === label);
+  if (obstacle) {
+    return {
+      kind: "obstacle",
+      id: obstacle.id,
+      car,
+      center: { x: obstacle.cx, z: obstacle.cz },
+      halfX: obstacle.halfX,
+      halfZ: obstacle.halfZ,
+    };
+  }
+
+  // Припаркованный автомобиль в занятом боксе создаётся автоматически из данных бокса.
+  const parkedBayNumber = label.match(/место\s*№\s*(\d+)/i)?.[1];
+  const parkedBay = parkedBayNumber ? def.bays.find((b) => b.id === Number(parkedBayNumber) && b.occupied) : null;
+  if (parkedBay) {
+    return {
+      kind: "bay",
+      id: parkedBay.id,
+      car,
+      center: { x: parkedBay.cx, z: parkedBay.cz },
+      halfX: parkedBay.width / 2,
+      halfZ: parkedBay.length / 2,
+    };
+  }
+
+  return null;
+}
+
+/** Ищет безопасную позицию для перемещения объекта, проверяя её тем же SAT-тестом, что и валидатор. */
+function suggestCollisionMove(def: CustomScenarioDef, target: CollisionTarget): { x: number; z: number } | null {
+  const carRadius = Math.hypot(CAR.length / 2, CAR.width / 2);
+  const targetRadius = Math.hypot(target.halfX, target.halfZ);
+  const minDistance = carRadius + targetRadius + 0.75;
+  const baseAngle = Math.atan2(target.center.z - target.car.z, target.center.x - target.car.x);
+
+  for (const extra of [0, 2, 4, 7, 10, 14]) {
+    const distance = minDistance + extra;
+    for (let i = 0; i < 24; i++) {
+      const angle = baseAngle + (i * Math.PI * 2) / 24;
+      const x = Number((target.car.x + Math.cos(angle) * distance).toFixed(2));
+      const z = Number((target.car.z + Math.sin(angle) * distance).toFixed(2));
+      if (x < def.bounds.minX || x > def.bounds.maxX || z < def.bounds.minZ || z > def.bounds.maxZ) continue;
+
+      const candidate: CustomScenarioDef =
+        target.kind === "obstacle"
+          ? { ...def, obstacles: def.obstacles.map((o) => o.id === target.id ? { ...o, cx: x, cz: z } : o) }
+          : { ...def, bays: def.bays.map((b) => b.id === target.id ? { ...b, cx: x, cz: z } : b) };
+      const world = buildCustomWorld(candidate);
+      if (!new SpatialGrid(world.obstacles, 10).queryCarHit(target.car.x, target.car.z, target.car.h).hit) {
+        return { x, z };
+      }
+    }
+  }
+  return null;
+}
 
 // === [SEC:custom-fields] Вспомогательные поля ввода и справочники редактора ===
 function NumField({
@@ -336,6 +417,37 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     setSelection(res.selection);
     onNotify("Объект удалён");
   }, [commitChange, def, onNotify, selection]);
+
+  const handleDeleteCollisionTarget = useCallback((message: string) => {
+    const target = getCollisionTarget(def, message);
+    if (!target) return;
+    const selectionToDelete: EditorSelection = target.kind === "obstacle"
+      ? { kind: "obstacle", id: String(target.id) }
+      : { kind: "bay", id: Number(target.id) };
+    const res = deleteSelected(def, selectionToDelete);
+    commitChange(res.def, def);
+    setSelection(res.selection);
+    onNotify(target.kind === "obstacle" ? "Препятствие удалено. Проверка коллизий обновлена." : "Бокс и автоматически созданный припаркованный автомобиль удалены.");
+  }, [commitChange, def, onNotify]);
+
+  const handleMoveCollisionTarget = useCallback((message: string) => {
+    const target = getCollisionTarget(def, message);
+    if (!target) return;
+    const suggested = suggestCollisionMove(def, target);
+    if (!suggested) {
+      onNotify("Не найдено свободное место в пределах карты. Переместите объект вручную.");
+      return;
+    }
+    const next: CustomScenarioDef = target.kind === "obstacle"
+      ? { ...def, obstacles: def.obstacles.map((o) => o.id === target.id ? { ...o, cx: suggested.x, cz: suggested.z } : o) }
+      : { ...def, bays: def.bays.map((b) => b.id === target.id ? { ...b, cx: suggested.x, cz: suggested.z } : b) };
+    commitChange(next, def);
+    setSelection(target.kind === "obstacle"
+      ? { kind: "obstacle", id: String(target.id) }
+      : { kind: "bay", id: Number(target.id) });
+    setTool("select");
+    onNotify(`Объект перемещён в безопасную позицию: X ${suggested.x}, Z ${suggested.z} м.`);
+  }, [commitChange, def, onNotify]);
 
   const handleQuickRotate = useCallback(
     (deltaDeg: number) => {
@@ -627,19 +739,45 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               <Icon name="crosshair" size={13} className="shrink-0 mt-0.5 ml-auto opacity-60" />
             </button>
           ))}
-          {validation.warnings.map((w, i) => (
-            <button
-              key={`w${i}`}
-              type="button"
-              onClick={() => focusValidationIssue(w)}
-              title="Перейти к объекту или области карты, связанной с замечанием"
-              className="w-full flex gap-2 text-left text-[12px] text-[#f5d78a] hover:bg-[#f5d78a]/10 rounded px-1.5 py-1 transition-colors cursor-pointer"
-            >
-              <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
-              <span>{w}</span>
-              <Icon name="crosshair" size={13} className="shrink-0 mt-0.5 ml-auto opacity-60" />
-            </button>
-          ))}
+          {validation.warnings.map((w, i) => {
+            const collisionTarget = getCollisionTarget(def, w);
+            const suggestedMove = collisionTarget ? suggestCollisionMove(def, collisionTarget) : null;
+            return (
+              <div key={`w${i}`} className="rounded-lg px-1.5 py-1 hover:bg-[#f5d78a]/5">
+                <button
+                  type="button"
+                  onClick={() => focusValidationIssue(w)}
+                  title="Перейти к объекту или области карты, связанной с замечанием"
+                  className="w-full flex gap-2 text-left text-[12px] text-[#f5d78a] cursor-pointer"
+                >
+                  <Icon name="alert" size={14} className="shrink-0 mt-0.5" />
+                  <span>{w}</span>
+                  <Icon name="crosshair" size={13} className="shrink-0 mt-0.5 ml-auto opacity-60" />
+                </button>
+                {collisionTarget && (
+                  <div className="flex flex-wrap gap-1.5 pl-5 pt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleMoveCollisionTarget(w)}
+                      disabled={!suggestedMove}
+                      title={suggestedMove ? `Предлагаемая позиция: X ${suggestedMove.x}, Z ${suggestedMove.z} м` : "В пределах карты не найдено свободной позиции"}
+                      className="btn btn-mini disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Переместить {collisionTarget.kind === "bay" ? "бокс" : "препятствие"}
+                      {suggestedMove ? ` → X ${suggestedMove.x}, Z ${suggestedMove.z}` : ""}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCollisionTarget(w)}
+                      className="btn btn-mini text-[#ff9494]"
+                    >
+                      Удалить {collisionTarget.kind === "bay" ? "бокс" : "препятствие"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
