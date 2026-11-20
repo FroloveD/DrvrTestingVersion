@@ -18,6 +18,7 @@
  * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EngineSound } from "../audio/engineSound";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
 import { parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
@@ -274,6 +275,8 @@ export function SimulatorView({
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
+  const engineSoundRef = useRef<EngineSound | null>(null);
+  const lastEngineSoundAtRef = useRef(0);
   const worldRef = useRef<WorldData>(world);
   const gridRef = useRef<SpatialGrid>(new SpatialGrid(world.obstacles, 10));
   const calRef = useRef<CalibrationConfig>(calibration);
@@ -498,6 +501,8 @@ export function SimulatorView({
       return;
     }
     inp.engineOn = !inp.engineOn;
+    if (!engineSoundRef.current) engineSoundRef.current = new EngineSound();
+    engineSoundRef.current.ensureStarted();
     setHud((current) => ({
       ...current,
       state: { ...current.state, engineOn: inp.engineOn },
@@ -686,6 +691,20 @@ export function SimulatorView({
         accumulator -= FIXED_DT;
       }
 
+      const soundNow = performance.now();
+      if (soundNow - lastEngineSoundAtRef.current >= 55) {
+        lastEngineSoundAtRef.current = soundNow;
+        const soundState = stateRef.current;
+        if (engineSoundRef.current) {
+          engineSoundRef.current.update({
+            engineOn: soundState.engineOn,
+            rpm: soundState.rpm,
+            throttle: inputRef.current.throttle,
+            speedKmh: Math.abs(soundState.v) * 3.6,
+          });
+        }
+      }
+
       if (newEventsBatch.length > 0) {
         const lastEv = newEventsBatch[newEventsBatch.length - 1];
         const rule = ruleRef.current.rules.find((r) => r.code === lastEv.code && r.enabled);
@@ -779,6 +798,8 @@ export function SimulatorView({
       cancelAnimationFrame(rafId);
       ro.disconnect();
       ctrl?.dispose();
+      engineSoundRef.current?.dispose();
+      engineSoundRef.current = null;
       sceneCtrlRef.current = null;
     };
     // Сцена создаётся один раз; актуальные колбэки берутся из ref.
@@ -1178,6 +1199,8 @@ export function SimulatorView({
     const inp = inputRef.current;
     const targetGear: Gear = defaultGearForWorld(worldRef.current);
     inp.engineOn = true;
+    if (!engineSoundRef.current) engineSoundRef.current = new EngineSound();
+    engineSoundRef.current.ensureStarted();
     inp.belt = true;
     inp.handbrake = false;
     inp.lights = true;
