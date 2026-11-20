@@ -464,7 +464,7 @@ export const extraCases: SelfTestCase[] = [
       // 1. Блокировки селектора АКПП и запуска двигателя (src/sim/controls.ts)
       assert(checkGearChange({ gear: "D", engineOn: true }, 1.2, "P") !== null, "P на ходу должен блокироваться");
       assert(checkGearChange({ gear: "R", engineOn: true }, -(PARK_LOCK_MAX_SPEED_MS + 0.05), "P") !== null, "P при откате назад должен блокироваться");
-      assert(checkGearChange({ gear: "D", engineOn: true }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
+      assert(checkGearChange({ gear: "D", engineOn: true, brake: 1 }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
       assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться даже с тормозом");
       assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
       assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "D") !== null, "Выход из P без нажатого тормоза (BTSI) должен блокироваться");
@@ -472,6 +472,14 @@ export const extraCases: SelfTestCase[] = [
       assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "N") !== null, "Переход P → N без тормоза должен блокироваться");
       assert(checkGearChange({ gear: "P", engineOn: true, brake: SHIFT_LOCK_MIN_BRAKE }, 0, "D") === null, "Выход из P с запущенным ДВС и нажатым тормозом разрешён");
       assert(checkGearChange({ gear: "P", engineOn: true, brake: 1 }, 0, "R") === null, "Переход P → R с нажатым тормозом разрешён");
+      for (const [from, to] of [["D", "N"], ["N", "D"], ["R", "N"], ["N", "R"]] as const) {
+        assert(checkGearChange({ gear: from, engineOn: true, brake: 0 }, 0, to) === null, `${from}→${to}: N без тормоза`);
+      }
+      for (const [from, to] of [["P", "N"], ["N", "P"], ["D", "P"], ["R", "P"], ["D", "R"], ["R", "D"]] as const) {
+        assert(checkGearChange({ gear: from, engineOn: true, brake: 0 }, 0, to) !== null, `${from}→${to}: нужен тормоз`);
+        assert(checkGearChange({ gear: from, engineOn: true, brake: 1 }, 0, to) === null, `${from}→${to}: с тормозом разрешено`);
+        assert(shiftLockState({ gear: from, engineOn: true, brake: 0 }, 0, to).locked, `${from}→${to}: индикация блокировки`);
+      }
       assert(checkEngineToggle({ gear: "D", engineOn: false }) !== null, "Запуск ДВС в D запрещён");
       assert(checkEngineToggle({ gear: "R", engineOn: false }) !== null, "Запуск ДВС в R запрещён");
       assert(checkEngineToggle({ gear: "P", engineOn: false }) === null && checkEngineToggle({ gear: "N", engineOn: false }) === null, "Запуск ДВС в P и N разрешён");
@@ -1442,7 +1450,7 @@ export const extraCases: SelfTestCase[] = [
       assert(stepGearSequential({ gear: "1", engineOn: true }, 6, 1, -1).next === null, "На ходу M1 не должна сбрасываться в N");
       // На месте полный спуск M6 → ... → P
       for (let i = 0; i < 8; i++) {
-        const res = stepGearSequential({ gear: cur, engineOn: true }, 0, 1, -1);
+        const res = stepGearSequential({ gear: cur, engineOn: true, brake: 1 }, 0, 1, -1);
         assert(res.next !== null, `Ожидалось понижение с ${cur}`);
         cur = res.next!;
       }
