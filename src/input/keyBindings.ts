@@ -15,7 +15,7 @@ export const KEY_ACTIONS = [
   ["ArrowLeft", "Руль влево / взгляд влево"], ["ArrowRight", "Руль вправо / взгляд вправо"],
   ["KeyG", "Взгляд на рычаг"], ["KeyC", "Следующая камера"],
   ["Digit1", "Камера сзади"], ["Digit2", "Камера салона"], ["Digit3", "Камера сверху"], ["Digit4", "Камера орбиты"],
-  ["Backspace", "Сброс попытки"], ["KeyH", "Скрыть / показать интерфейс"], ["KeyO", "Открыть / закрыть настройки"],
+  ["Backspace", "Сброс попытки"], ["KeyH", "Сигнал (удержание)"], ["KeyV", "Скрыть / показать интерфейс"], ["KeyO", "Открыть / закрыть настройки"], ["KeyU", "Полный экран"],
 ] as const;
 export type KeyBindings = Record<string, string>;
 export const defaultKeyBindings = (): KeyBindings => Object.fromEntries(KEY_ACTIONS.map(([code]) => [code, code]));
