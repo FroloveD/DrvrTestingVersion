@@ -168,6 +168,32 @@ try {
   await page.getByTestId("sim-fullscreen-exit").click();
   check("A2g fullscreen exit button works without native API",
     await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false");
+
+  // HUD hiding is independent of fullscreen and has an always reachable restore control.
+  await page.getByTestId("sim-hud-toggle").click();
+  check("A2h HUD can be hidden without entering fullscreen",
+    await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false" && await page.locator('[data-hud-panel="scorePanel"]').count() === 0);
+  await page.getByTestId("sim-hud-toggle").click();
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Назначить: Полный экран", exact: true }).click();
+  await page.keyboard.press("KeyY");
+  await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
+  await page.keyboard.press("KeyU");
+  check("A2i old fullscreen binding is disabled", await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false");
+  await page.keyboard.press("KeyY");
+  check("A2j remapped fullscreen key works", await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "true");
+  await page.keyboard.press("KeyY");
+  const savedKeys = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.keybindings.v1") || "{}"));
+  check("A2k bindings persisted", savedKeys.KeyU === "KeyY");
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Сбросить назначения клавиш", exact: true }).click();
+  await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
+  await page.getByTestId("app-menu-hide").click();
+  await page.getByTestId("app-menu-show").click();
+  await page.getByTestId("sim-toolbar-toggle").click();
+  await page.getByTestId("sim-toolbar-toggle").click();
   await page.evaluate(() => { delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen; });
 
 

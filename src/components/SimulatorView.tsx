@@ -17,6 +17,8 @@
  * - `[SEC:sim-hud]`      — штрафы, знаки/светофор/FPS, строка экзаменатора, настройки управления, справка, камера.
  * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
  */
+import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { keyLabel, loadKeyBindings, logicalKey } from "../input/keyBindings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
@@ -315,6 +317,10 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [bindings, setBindings] = useState(loadKeyBindings);
+  const bindingsRef = useRef(bindings);
+  const [toolbarHidden, setToolbarHidden] = useState(false);
+
   const [showHelp, setShowHelp] = useState(false);
   const [helpCollapsed, setHelpCollapsed] = useState(false);
   const [controlsCollapsed, setControlsCollapsed] = useState(false);
@@ -587,6 +593,17 @@ export function SimulatorView({
   }, []);
 
   const keysRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    bindingsRef.current = bindings;
+    keysRef.current = {};
+    inputRef.current.throttle = 0;
+    keyboardThrottleRef.current = 0;
+    inputRef.current.brake = 0;
+    releaseHorn();
+    try { localStorage.setItem("cdt.keybindings.v1", JSON.stringify(bindings)); }
+    catch { onNotify("Не удалось сохранить клавиши: хранилище браузера недоступно"); }
+  }, [bindings]);
+
   const keyboardThrottleRef = useRef(0);
   const touchPedalRef = useRef<{ gas: boolean; brake: boolean }>({ gas: false, brake: false });
   const pedalOwner = useRef<{ gas: number | null; brake: number | null }>({ gas: null, brake: null });
@@ -1684,7 +1701,7 @@ export function SimulatorView({
         e.target.type === "range" &&
         (/^Key[A-Z]$/.test(e.code) || e.code === "ShiftLeft" || e.code === "ShiftRight");
       if (isEditable(e.target) && !drivingFromSlider) return;
-      const code = e.code;
+      const code = logicalKey(bindingsRef.current, e.code);
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
         e.preventDefault();
       }
@@ -1744,7 +1761,7 @@ export function SimulatorView({
           const st = stateRef.current;
           const { next, blockedReason } = stepKeyboardGear(
             { ...inp, brake: liveBrakePressure() }, st.v, st.autoSubGear,
-            code === "ArrowUp" ? 1 : -1, e.shiftKey
+            code === "ArrowUp" ? 1 : -1, Boolean(keysRef.current.ShiftLeft || keysRef.current.ShiftRight)
           );
           if (blockedReason) onNotify(blockedReason);
           else if (next) setGear(next);
@@ -1757,6 +1774,13 @@ export function SimulatorView({
         case "KeyH":
           // H — сигнал (клаксон): удерживаем, как настоящий подрулевой штурвал
           pressHorn(false);
+          break;
+        case "KeyV":
+          setUiHidden((hidden) => !hidden);
+          break;
+        case "KeyO":
+          setControlsCollapsed(false);
+          setShowControls((shown) => !shown);
           break;
         case "KeyU":
           // Та же команда, что у кнопки: полноэкранная сцена, а не только скрытие HUD.
@@ -1793,8 +1817,9 @@ export function SimulatorView({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
-      if (e.code === "KeyH") releaseHorn();
+      const code = logicalKey(bindingsRef.current, e.code);
+      keysRef.current[code] = false;
+      if (code === "KeyH") releaseHorn();
     };
 
     const onBlur = () => {
@@ -2365,7 +2390,9 @@ export function SimulatorView({
   return (
     <div className="space-y-3">
       {/* [SEC:sim-toolbar] Верхняя панель выбора сценария, импорта OSM и завершения попытки */}
-      <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="btn btn-mini" data-testid="sim-toolbar-toggle" aria-expanded={!toolbarHidden}
+        onClick={() => setToolbarHidden((v) => !v)}>{toolbarHidden ? "Показать панель сценариев" : "Скрыть панель сценариев"}</button>
+      <div className="flex flex-wrap items-center gap-2" style={toolbarHidden ? { display: "none" } : undefined}>
         <div className="segmented flex-wrap">
           {([
             ["bay_90", "1 · Бокс 90°"],
@@ -2664,6 +2691,13 @@ export function SimulatorView({
         onContextMenu={(e) => e.preventDefault()}
         className="relative isolate w-full h-[560px] lg:h-[calc(100vh-152px)] min-h-[520px] max-h-[820px] rounded-2xl overflow-hidden border hairline bg-[#0d1720] select-none"
       >
+        <div className="absolute bottom-2 left-2 z-[10001] flex gap-1" data-testid="sim-quick-menu">
+          <button type="button" className="btn btn-mini" data-testid="sim-hud-toggle" aria-pressed={uiHidden}
+            onClick={() => setUiHidden((v) => !v)}>{uiHidden ? "Показать интерфейс" : "Скрыть интерфейс"} · {keyLabel(bindings.KeyV)}</button>
+          <button type="button" className="btn btn-mini" onClick={() => { setControlsCollapsed(false); setShowControls((v) => !v); }}>
+            Настройки · {keyLabel(bindings.KeyO)}
+          </button>
+        </div>
         {immersive && (
           <button
             type="button"
@@ -2672,7 +2706,7 @@ export function SimulatorView({
             className="absolute right-3 top-3 z-[10000] rounded-lg border border-white/20 bg-[#0b131b]/90 px-3 py-2 text-xs text-white shadow-lg hover:border-[#f5b942]"
             title="Выйти из полноэкранного режима (Esc)"
           >
-            ✕ Выйти · Esc <span className="text-[#9bafbc]">/ U</span>
+            ✕ Выйти · Esc <span className="text-[#9bafbc]">/ {keyLabel(bindings.KeyU)}</span>
           </button>
         )}
         <canvas
@@ -3094,8 +3128,8 @@ export function SimulatorView({
         )}
 
         {/* Настройки управления: выворот, скорость руления, элементы HUD и сброс раскладки */}
-        {showControls && !uiHidden && (
-          <div className="absolute right-3 top-16 z-50 w-[310px] max-h-[calc(100%-5rem)] overflow-y-auto scroll-thin rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
+        {showControls && (
+          <div className="absolute right-3 top-16 z-[10002] w-[310px] max-h-[calc(100%-5rem)] overflow-y-auto scroll-thin rounded-2xl bg-[#0b131b]/96 backdrop-blur-md border hairline p-4 shadow-2xl fade-in">
             <div className={`flex items-center justify-between ${controlsCollapsed ? "" : "mb-3"}`}>
               <span className="text-xs font-extrabold text-[#f5b942]">Управление</span>
               <div className="flex items-center gap-1.5">
@@ -3115,6 +3149,7 @@ export function SimulatorView({
             </div>
             {!controlsCollapsed && (
               <>
+            <KeyBindingsEditor value={bindings} onChange={setBindings} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <label className="block text-[11px] text-[#d3e0e7] mb-1.5" htmlFor="key-steer-rate">
               Скорость руления клавишами A / D:{" "}
@@ -3454,21 +3489,23 @@ export function SimulatorView({
             {!helpCollapsed && (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]">
                 {[
-                  ["W", "Плавный газ · Shift+W — кикдаун"],
-                  ["S", "Тормоз (в D не даёт реверс)"],
-                  ["A / D", "Руль влево (+X) / вправо (−X)"],
+                  [keyLabel(bindings.KeyW), "Плавный газ · с модификатором — кикдаун"],
+                  [keyLabel(bindings.KeyS), "Тормоз (в D не даёт реверс)"],
+                  [`${keyLabel(bindings.KeyA)} / ${keyLabel(bindings.KeyD)}`, "Руль влево (+X) / вправо (−X)"],
                   ["ЛКМ / SVG", "Плавное вращение руля ±540°"],
                   ["← / →", "Взгляд: левое зеркало → дорога → правое зеркало"],
                   ["ПКМ + колесо", "Свободный обзор головой (не возвращается) · зум камеры"],
-                  ["↑ / ↓", "Селектор P ↔ R ↔ N ↔ D"],
-                  ["Shift + ↑ / ↓", "Ручной режим M1–M6 (выше / ниже)"],
+                  [`${keyLabel(bindings.ArrowUp)} / ${keyLabel(bindings.ArrowDown)}`, "Селектор P ↔ R ↔ N ↔ D"],
+                  [`${keyLabel(bindings.ShiftLeft)} + ${keyLabel(bindings.ArrowUp)} / ${keyLabel(bindings.ArrowDown)}`, "Ручной режим M1–M6 (выше / ниже)"],
                   ["P / R / N / F", "Паркинг / Задний / Нейтраль / Авто D"],
                   ["G · 3D-рычаг", "Взгляд на АКПП и переключение мышью"],
                   ["I (в P/N)", "Запуск ДВС только из P или N"],
                   ["Q / E / Z", "Поворотники лев. / прав. / аварийка"],
                   ["I / Space / B", "Двигатель / Ручник / Ремень"],
-                  ["L · H", "Фары · Сигнал"],
-                  ["U", "Полный экран — включить / выключить (Esc — выйти)"],
+                  [`${keyLabel(bindings.KeyL)} · ${keyLabel(bindings.KeyH)}`, "Фары · Сигнал"],
+                  [keyLabel(bindings.KeyU), "Полный экран — включить / выключить (Esc — выйти)"],
+                  [keyLabel(bindings.KeyV), "Скрыть / показать интерфейс"],
+                  [keyLabel(bindings.KeyO), "Настройки и назначение клавиш"],
                   ["− / ×", "Свернуть / закрыть любую панель"],
                   ["1–4 / C", "Вид: сзади, салон, сверху, орбита"],
                 ].map(([k, d]) => (

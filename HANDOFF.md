@@ -114,6 +114,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/audio/radioCatalog.ts` | каталог реальных интернет-радиостанций (MP3/AAC-потоки), громкость, ключи кэша и детерминированный офлайн-рендер трека в WAV |
 | `src/audio/trackStore.ts` | кэш сохранённых треков в IndexedDB `cdt-audio` с деградацией в память |
 | `src/audio/engineSound.ts` | процедурный звук ДВС 1.6 MPI и шин на Web Audio (без внешних файлов) |
+| `src/input/keyBindings.ts`, `src/components/KeyBindingsEditor.tsx` | сохраняемое переназначение клавиш, обмен конфликтов, сброс; настройки доступны и при скрытом HUD |
 | `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |
 | `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |
 | `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |

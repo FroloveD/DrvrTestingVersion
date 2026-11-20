@@ -1,5 +1,6 @@
 // Regression for cockpit dragging: exercise the actual renderer projection methods without WebGL/DOM.
 import assert from "node:assert/strict";
+import { defaultKeyBindings, bindKey, logicalKey } from "../src/input/keyBindings";
 import * as THREE from "three";
 import { SceneController } from "../src/render/sceneController";
 import { SHIFTER_LAYOUT as L } from "../src/render/vehiclesAndPeds";
@@ -82,3 +83,16 @@ rear.updateMatrixWorld(true);
 const trunkTop = new THREE.Vector3(0, 0.24 + 0.588, -1.6).project(rear);
 assert.ok(trunkTop.y > -1 && trunkTop.y < -0.25, "trunk reference is visible in lower mirror, not covering road");
 console.log("PASS rear mirror: trunk visible below road, roof/interior excluded");
+
+
+const defaults = defaultKeyBindings();
+const remapped = bindKey(defaults, "KeyW", "KeyT");
+assert.equal(logicalKey(remapped, "KeyT"), "KeyW", "new gas key works");
+assert.equal(logicalKey(remapped, "KeyW"), "unbound", "old gas key no longer drives");
+const swapped = bindKey(defaults, "KeyW", "KeyS");
+assert.equal(logicalKey(swapped, "KeyS"), "KeyW");
+assert.equal(logicalKey(swapped, "KeyW"), "KeyS");
+assert.equal(new Set(Object.values(swapped)).size, Object.keys(swapped).length, "no duplicate bindings");
+assert.deepEqual(bindKey(defaults, "KeyW", "Escape"), defaults, "Escape stays reserved for exit");
+assert.deepEqual(bindKey(defaults, "unknown", "KeyT"), defaults, "ignore unknown action");
+console.log("PASS key bindings: remap, swap, reserved Escape and unbound old key");
