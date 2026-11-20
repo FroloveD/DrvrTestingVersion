@@ -187,6 +187,28 @@ try {
   await page.getByTestId("sim-hud-toggle").click();
   await page.getByRole("button", { name: "Управление", exact: true }).click();
   await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Назначить: Газ", exact: true }).click();
+  await page.keyboard.press("KeyS");
+  const conflictMessage = await page.getByTestId("keybindings-message").innerText();
+  const rejectedKeys = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.keybindings.v1") || "{}"));
+  check("A2o occupied brake key cannot also become throttle", conflictMessage.includes("уже назначена") && rejectedKeys.KeyW === "KeyW" && rejectedKeys.KeyS === "KeyS");
+  // Free Space, then assign it to fullscreen. Native HTML activation must NOT fire too.
+  await page.getByRole("button", { name: "Назначить: Ручник", exact: true }).click();
+  await page.keyboard.press("KeyT");
+  await page.getByRole("button", { name: "Назначить: Полный экран", exact: true }).click();
+  await page.keyboard.press("Space");
+  await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
+  await page.getByTestId("sim-hud-toggle").focus();
+  await page.keyboard.down("Space");
+  await page.keyboard.down("Space");
+  check("A2p remapped Space runs one action, not native button click or autorepeat",
+    await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "true" &&
+    await page.locator('[data-hud-panel="scorePanel"]').count() === 0);
+  await page.keyboard.up("Space");
+  await page.keyboard.press("Space");
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Сбросить назначения клавиш", exact: true }).click();
   await page.getByRole("button", { name: "Назначить: Полный экран", exact: true }).click();
   await page.keyboard.press("KeyY");
   await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();

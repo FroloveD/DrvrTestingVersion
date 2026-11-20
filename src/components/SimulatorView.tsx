@@ -1705,11 +1705,14 @@ export function SimulatorView({
         (/^Key[A-Z]$/.test(e.code) || e.code === "ShiftLeft" || e.code === "ShiftRight");
       if (isEditable(e.target) && !drivingFromSlider) return;
       const code = logicalKey(bindingsRef.current, e.code);
-      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
-        e.preventDefault();
-      }
+      if (code === "unbound") return;
+      // Любая назначенная клавиша принадлежит только управлению. В частности, физический
+      // Space после переназначения не должен ещё и активировать сфокусированную HTML-кнопку.
+      e.preventDefault();
+      if (e.repeat) return; // повтор после захвата клавиши в настройках не должен включать педаль
+      const alreadyHeld = keysRef.current[code];
       keysRef.current[code] = true;
-      if (e.repeat) return;
+      if (alreadyHeld) return;
 
       const inp = inputRef.current;
       // ←/→ — три точки внимания водителя: левое зеркало → дорога (+ салонное зеркало) → правое.

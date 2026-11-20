@@ -1,7 +1,7 @@
 /**
  * @module input/keyBindings
  * @layer input
- * @role Сохраняемая клавиатурная раскладка: физические коды, обмен конфликтующих назначений, проверка сохранённых данных.
+ * @role Сохраняемая клавиатурная раскладка: физические коды, проверка конфликтующих назначений, проверка сохранённых данных.
  * @invariants Уникальные назначения; Escape зарезервирован для выхода; раскладка не меняет физику.
  * @tests tests/shifter-projection.ts, Browser Smoke A2h–A2k.
  */
@@ -20,25 +20,43 @@ export const KEY_ACTIONS = [
 export type KeyBindings = Record<string, string>;
 export const defaultKeyBindings = (): KeyBindings => Object.fromEntries(KEY_ACTIONS.map(([code]) => [code, code]));
 export const validBinding = (code: string) => /^(Key[A-Z]|Digit[0-9]|Arrow(Up|Down|Left|Right)|Shift(Left|Right)|Space|Backspace)$/.test(code);
+/** Полная проверка раскладки, в том числе вручную повреждённого localStorage. */
+export function bindingErrors(bindings: KeyBindings): string[] {
+  const errors: string[] = [];
+  const owners = new Map<string, string>();
+  for (const [action, label] of KEY_ACTIONS) {
+    const code = bindings[action];
+    if (typeof code !== "string" || !validBinding(code)) { errors.push(`${label}: недопустимая клавиша`); continue; }
+    const owner = owners.get(code);
+    if (owner) errors.push(`${keyLabel(code)}: ${owner} / ${label}`);
+    else owners.set(code, label);
+  }
+  for (const action of Object.keys(bindings)) {
+    if (!KEY_ACTIONS.some(([key]) => key === action)) errors.push(`Неизвестная команда: ${action}`);
+  }
+  return errors;
+}
+export function bindingConflict(bindings: KeyBindings, action: string, code: string): string | null {
+  const owner = KEY_ACTIONS.find(([key]) => key !== action && bindings[key] === code);
+  return owner ? `Клавиша ${keyLabel(code)} уже назначена: «${owner[1]}». Сначала освободите её.` : null;
+}
 export function bindKey(bindings: KeyBindings, action: string, code: string): KeyBindings {
-  if (!(action in defaultKeyBindings()) || !validBinding(code)) return bindings;
-  const next = { ...bindings };
-  const conflict = Object.keys(next).find((key) => next[key] === code && key !== action);
-  if (conflict) next[conflict] = next[action]; // swap: no duplicate assignments or unreachable commands
-  next[action] = code;
-  return next;
+  if (!KEY_ACTIONS.some(([key]) => key === action) || !validBinding(code) || bindingErrors(bindings).length || bindingConflict(bindings, action, code)) return bindings;
+  return { ...bindings, [action]: code };
 }
 export function logicalKey(bindings: KeyBindings, physical: string): string {
-  return Object.keys(bindings).find((action) => bindings[action] === physical) ?? "unbound";
+  const matches = KEY_ACTIONS.filter(([action]) => bindings[action] === physical);
+  // Fail closed: даже повреждённая раскладка не выбирает произвольную команду из конфликта.
+  return matches.length === 1 ? matches[0][0] : "unbound";
+}
+export function restoreKeyBindings(saved: unknown): KeyBindings {
+  const defaults = defaultKeyBindings();
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return defaults;
+  const merged = { ...defaults, ...saved } as KeyBindings;
+  return bindingErrors(merged).length ? defaults : merged;
 }
 export function loadKeyBindings(): KeyBindings {
-  let result = defaultKeyBindings();
-  try {
-    const saved = JSON.parse(localStorage.getItem("cdt.keybindings.v1") || "null");
-    if (saved && typeof saved === "object") for (const [action, code] of Object.entries(saved)) {
-      if (typeof code === "string") result = bindKey(result, action, code);
-    }
-  } catch { /* corrupt/blocked storage: defaults */ }
-  return result;
+  try { return restoreKeyBindings(JSON.parse(localStorage.getItem("cdt.keybindings.v1") || "null")); }
+  catch { return defaultKeyBindings(); }
 }
 export const keyLabel = (code: string) => ({ ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→", Space: "Пробел" }[code] ?? code.replace(/^Key|^Digit/, ""));

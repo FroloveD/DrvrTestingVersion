@@ -1,6 +1,6 @@
 // Regression for cockpit dragging: exercise the actual renderer projection methods without WebGL/DOM.
 import assert from "node:assert/strict";
-import { defaultKeyBindings, bindKey, logicalKey } from "../src/input/keyBindings";
+import { defaultKeyBindings, bindKey, logicalKey, bindingErrors, restoreKeyBindings, KEY_ACTIONS } from "../src/input/keyBindings";
 import * as THREE from "three";
 import { SceneController } from "../src/render/sceneController";
 import { SHIFTER_LAYOUT as L } from "../src/render/vehiclesAndPeds";
@@ -89,10 +89,20 @@ const defaults = defaultKeyBindings();
 const remapped = bindKey(defaults, "KeyW", "KeyT");
 assert.equal(logicalKey(remapped, "KeyT"), "KeyW", "new gas key works");
 assert.equal(logicalKey(remapped, "KeyW"), "unbound", "old gas key no longer drives");
-const swapped = bindKey(defaults, "KeyW", "KeyS");
-assert.equal(logicalKey(swapped, "KeyS"), "KeyW");
-assert.equal(logicalKey(swapped, "KeyW"), "KeyS");
-assert.equal(new Set(Object.values(swapped)).size, Object.keys(swapped).length, "no duplicate bindings");
+const rejected = bindKey(defaults, "KeyW", "KeyS");
+assert.deepEqual(rejected, defaults, "occupied brake key cannot also become gas");
+assert.equal(logicalKey(rejected, "KeyS"), "KeyS");
 assert.deepEqual(bindKey(defaults, "KeyW", "Escape"), defaults, "Escape stays reserved for exit");
 assert.deepEqual(bindKey(defaults, "unknown", "KeyT"), defaults, "ignore unknown action");
-console.log("PASS key bindings: remap, swap, reserved Escape and unbound old key");
+const damaged = { ...defaults, KeyW: "KeyS" };
+assert.ok(bindingErrors(damaged).length > 0, "duplicate detected");
+assert.equal(logicalKey(damaged, "KeyS"), "unbound", "ambiguous key runs neither command");
+assert.deepEqual(restoreKeyBindings(damaged), defaults, "corrupt storage falls back safely");
+assert.deepEqual(restoreKeyBindings({ ...defaults, unknown: "KeyT" }), defaults);
+assert.deepEqual(restoreKeyBindings(remapped), remapped, "valid saved layout survives reload");
+for (const [action] of KEY_ACTIONS) for (const [other] of KEY_ACTIONS) {
+  const result = bindKey(defaults, action, defaults[other]);
+  assert.equal(bindingErrors(result).length, 0, `${action}/${other}: no duplicates`);
+  for (const [command] of KEY_ACTIONS) assert.equal(logicalKey(result, result[command]), command);
+}
+console.log("PASS key bindings: all action pairs, conflict rejection, fail-closed dispatch, storage validation");

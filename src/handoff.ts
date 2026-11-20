@@ -134,7 +134,7 @@ L.push("| `src/render/sceneController.ts`, `src/render/staticBatcher.ts`, `src/r
 L.push("| `src/audio/radioCatalog.ts` | каталог реальных интернет-радиостанций (MP3/AAC-потоки), громкость, ключи кэша и детерминированный офлайн-рендер трека в WAV |");
 L.push("| `src/audio/trackStore.ts` | кэш сохранённых треков в IndexedDB `cdt-audio` с деградацией в память |");
 L.push("| `src/audio/engineSound.ts` | процедурный звук ДВС 1.6 MPI и шин на Web Audio (без внешних файлов) |");
-L.push("| `src/input/keyBindings.ts`, `src/components/KeyBindingsEditor.tsx` | сохраняемое переназначение клавиш, обмен конфликтов, сброс; настройки доступны и при скрытом HUD |");
+L.push("| `src/input/keyBindings.ts`, `src/components/KeyBindingsEditor.tsx` | сохраняемое переназначение клавиш, запрет конфликтов, проверка хранилища и сброс; настройки доступны и при скрытом HUD |");
 L.push("| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |");
 L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |");
 L.push("| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |");
