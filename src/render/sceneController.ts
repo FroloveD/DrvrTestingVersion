@@ -169,6 +169,7 @@ export class SceneController {
   private playerRig: CarRig;
   private playerCarId = "ceed";
   private readonly cockpitDisplays: CockpitDisplayController;
+  private envMapRT: THREE.WebGLRenderTarget | null = null;
   private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
   private cockpitControlHover: CockpitControlId | null = null;
   private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
@@ -289,6 +290,28 @@ export class SceneController {
     this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
     this.scene.fog = new THREE.Fog(0xc6dbed, 80, 235);
+
+    // PBR Image-Based Lighting: один PMREM от той же equirectangular sky-текстуры.
+    // На SwiftShader/llvmpipe пропускаем дорогой PMREM и оставляем дневные источники света.
+    let softwareRenderer = false;
+    try {
+      const gl = this.renderer.getContext();
+      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+      const rendererName = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : "";
+      softwareRenderer = /swiftshader|llvmpipe|softpipe|software/i.test(rendererName);
+    } catch { softwareRenderer = false; }
+    if (!softwareRenderer) {
+      let pmrem: THREE.PMREMGenerator | null = null;
+      try {
+        pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envMapRT = pmrem.fromEquirectangular(skyTex);
+        this.scene.environment = this.envMapRT.texture;
+        this.scene.environmentIntensity = 0.56;
+      } catch {
+        this.envMapRT?.dispose();
+        this.envMapRT = null;
+      } finally { pmrem?.dispose(); }
+    }
 
     this.camera = new THREE.PerspectiveCamera(56, 16 / 9, 0.12, 420);
 
@@ -1566,6 +1589,8 @@ export class SceneController {
     this.disposeGroup(this.worldGroup);
     this.disposeGroup(this.playerRig.root);
     this.cockpitDisplays.dispose();
+    this.envMapRT?.dispose();
+    this.envMapRT = null;
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();
