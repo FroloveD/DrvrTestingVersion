@@ -124,6 +124,18 @@ try {
   const lay = await layoutOverlaps(page);
   check("A2b раскладка по умолчанию: зеркало не закрывает строку задания", lay.found && !lay.mirrorStatus, JSON.stringify(lay));
   check("A2c раскладка по умолчанию: руль не закрывает спидометр и кнопки камеры", lay.found && !lay.wheelSpeed && !lay.wheelCamera, JSON.stringify(lay));
+
+  await page.getByRole("button", { name: "2 Салон" }).click();
+  const cockpitClass = await page.getByRole("button", { name: "2 Салон" }).getAttribute("class");
+  check("A2c1 камера переключается в вид из салона", Boolean(cockpitClass && cockpitClass.includes("text-[#f5b942]")));
+  await page.keyboard.press("KeyG");
+  await sleep(220);
+  await page.keyboard.press("KeyG");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await page.getByRole("button", { name: "1 Сзади" }).click();
+  check("A2c2 быстрый взгляд на селектор и управление точками внимания не ломают сцену", (await page.getByTestId("sim-canvas").count()) === 1);
+
   const nav1440 = await navFits(page);
   check("A2d навигация: все 7 вкладок видны на экране 1440 px", nav1440.ok, `нужно ${nav1440.need}px, есть ${nav1440.have}px`);
   await page.screenshot({ path: `${shotDir}/layout.png` });
