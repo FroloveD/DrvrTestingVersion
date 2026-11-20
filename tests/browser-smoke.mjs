@@ -1402,7 +1402,7 @@ try {
     await page.getByRole("button", { name: /Управление/ }).click();
     const settings = page.getByTestId("head-unit-settings");
     await settings.waitFor({ timeout: 5000 });
-    await settings.getByRole("button", { name: "РАДИО" }).click();
+    await settings.getByRole("button", { name: "FM" }).click();
     await page.getByTestId("radio-save-track").click();
     const saved = await until(async () => await settings.getByText("СОХРАНЁННЫЕ ТРЕКИ").count() > 0, 7000, 150);
     check("Q3 ШГУ создаёт офлайн WAV и показывает список сохранённых треков", saved);
