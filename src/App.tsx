@@ -104,6 +104,7 @@ function errorText(err: unknown): string {
 
 export default function App() {
   const [headerHidden, setHeaderHidden] = useState(false);
+  const [newAttemptRequest, setNewAttemptRequest] = useState(0);
   const [tab, setTab] = useState<TabId>("sim");
   const [scenarioId, setScenarioId] = useState<ScenarioId>("bay_90");
   const [ruleSet, setRuleSet] = useState<RuleSet>(loadStoredRules);
@@ -414,6 +415,7 @@ export default function App() {
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
             active={tab === "sim"}
+            newAttemptRequest={newAttemptRequest}
             menusHidden={headerHidden}
             onToggleMenus={() => setHeaderHidden((hidden) => !hidden)}
             scenarioId={scenarioId}
@@ -481,6 +483,11 @@ export default function App() {
             onGenerateDemoAttempt={(att) => handleAttemptSaved({ ...att, student: DEMO_STUDENT }, true)}
             loadAllAttempts={loadAllAttempts}
             onClearJournal={clearJournal}
+            onNewAttempt={() => {
+              setNewAttemptRequest((request) => request + 1);
+              setTab("sim");
+              notify("Новый заезд: исходная позиция, двигатель заглушен, КПП P");
+            }}
             onBackToSim={() => setTab("sim")}
             onNotify={notify}
           />

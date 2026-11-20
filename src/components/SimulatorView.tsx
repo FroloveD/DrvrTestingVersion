@@ -116,6 +116,7 @@ import { SteeringLimitControl } from "./SteeringLimitControl";
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  newAttemptRequest: number;
   menusHidden: boolean;
   onToggleMenus: () => void;
   scenarioId: ScenarioId;
@@ -286,6 +287,7 @@ const HUD_PANEL_CATALOG: ReadonlyArray<{ id: string; label: string; group: "hud"
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  newAttemptRequest,
   menusHidden,
   onToggleMenus,
   scenarioId,
@@ -1406,6 +1408,13 @@ export function SimulatorView({
       recordingActiveRef.current = true;
       keysRef.current = {};
       releasePedals();
+      releaseHorn();
+      holdingSteerRef.current = false;
+      pointerDragRef.current = null;
+      shifterDragRef.current = null;
+      shifterHoverRef.current = null;
+      setCockpitShifterUi(null);
+      sceneCtrlRef.current?.setShifterInteraction(null, false);
       sceneCtrlRef.current?.resetOrbit();
       setHud((prev) => ({
         ...prev,
@@ -1416,15 +1425,16 @@ export function SimulatorView({
         latestViolation: null,
       }));
     },
-    [releasePedals]
+    [releasePedals, releaseHorn]
   );
 
-  // Перезагрузка мира при смене сценария, калибровки или OSM-файла
+  // Перезагрузка мира при смене сценария/калибровки/OSM и явном «Новом заезде».
+  // Простое переключение вкладок не сбрасывает продолжающуюся попытку.
   useEffect(() => {
     worldRef.current = world;
     sceneCtrlRef.current?.loadWorld(world);
     resetAttempt(world, COLD_START);
-  }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign]);
+  }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign, newAttemptRequest]);
 
   // === [SEC:sim-loop] Three.js, главный цикл с фиксированным шагом 1/60 с и запись заезда ===
   useEffect(() => {

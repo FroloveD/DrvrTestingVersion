@@ -307,6 +307,15 @@ try {
   check("A8  вердикт инструктора записан и сравнён с симулятором", text.includes("иванов и.и.") && (text.includes("расхождение с симулятором") || text.includes("совпало с симулятором")));
   await page.screenshot({ path: `${shotDir}/debrief.png`, fullPage: true });
 
+  await page.getByTestId("debrief-new-attempt").click();
+  const freshAttempt = await until(() => page.evaluate(() => {
+    const api = window.__cdtCockpit;
+    const st = api?.state?.();
+    return st && api.engineOn() === false && api.gear() === "P" && st.v === 0 && st.collisions === 0 &&
+      st.hasMoved === false && st.handbrake === true && !st.finished;
+  }), 5000);
+  check("A8b Новый заезд creates a cold-start attempt, not just a tab switch", freshAttempt);
+
   await tab(page, "Статистика");
   await sleep(500);
   text = await low(page);
