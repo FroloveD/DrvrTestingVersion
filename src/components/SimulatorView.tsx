@@ -20,9 +20,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
 import { EngineSound } from "../audio/engineSound";
-import { clampVolume, nextStationIndex, renderTrackWav, trackCacheKey } from "../audio/radioCatalog";
+import { clampVolume, nextStationIndex, radioStationsFor, renderTrackWav, trackCacheKey, type RadioStation } from "../audio/radioCatalog";
 import * as trackStore from "../audio/trackStore";
-import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_CLIPS, HEAD_UNIT_MODES, RADIO_STATIONS, type HeadUnitState } from "../render/cockpitDisplays";
+import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_CLIPS, HEAD_UNIT_MODES, setActiveRadioStations, type HeadUnitState } from "../render/cockpitDisplays";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
@@ -226,9 +226,10 @@ export function SimulatorView({
   const activeRef = useRef(true);
   const { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth } = calibration;
   // Новое значение выворота не изменяет площадку и не должно сбрасывать двигатель, позу или запись.
-  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
+  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>(customDef.playerCarId ?? "ceed");
+  useEffect(() => { if (customDef.playerCarId) setPlayerCarId(customDef.playerCarId); }, [customDef.playerCarId]);
   const world = useMemo(
-    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId }),
+    () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId: customDef.playerCarId ?? playerCarId }),
     [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth, playerCarId]
   );
   const wheelLimit = normalizeWheelLock(calibration.maxInnerWheelDeg);
@@ -251,8 +252,10 @@ export function SimulatorView({
   const bindingsRef = useRef(bindings);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
   const [soundVolume, setSoundVolume] = useState(0.5);
+  const [radioStations, setRadioStations] = useState<RadioStation[]>(() => radioStationsFor(customDef.radioStationIds));
+  const radioStationsRef = useRef(radioStations);
   const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
-    try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, stationIndex: clamp(Math.round(Number(saved.stationIndex) || 0), 0, RADIO_STATIONS.length - 1), clipIndex: clamp(Math.round(Number(saved.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1), volume: clampVolume(Number(saved.volume ?? DEFAULT_HEAD_UNIT_STATE.volume)), radioPlaying: false, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
+    try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, stationIndex: clamp(Math.round(Number(saved.stationIndex) || 0), 0, Math.max(0, radioStations.length - 1)), clipIndex: clamp(Math.round(Number(saved.clipIndex) || 0), 0, HEAD_UNIT_CLIPS.length - 1), volume: clampVolume(Number(saved.volume ?? DEFAULT_HEAD_UNIT_STATE.volume)), radioPlaying: false, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
     catch { return DEFAULT_HEAD_UNIT_STATE; }
   });
   const headUnitRef = useRef(headUnit);
@@ -325,6 +328,19 @@ export function SimulatorView({
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
+  useEffect(() => {
+    const stations = radioStationsFor(customDef.radioStationIds);
+    radioStationsRef.current = stations;
+    setRadioStations(stations);
+    setActiveRadioStations(stations);
+    radioAudioRef.current?.pause();
+    setHeadUnit((prev) => ({ ...prev, stationIndex: Math.min(prev.stationIndex, stations.length - 1), radioPlaying: false, source: "stream", savedTrackKey: null, streamStatus: "idle" }));
+  }, [customDef.radioStationIds]);
+
+  useEffect(() => {
+    radioStationsRef.current = radioStations;
+  }, [radioStations]);
+
   useEffect(() => {
     headUnitRef.current = headUnit;
     sceneCtrlRef.current?.setHeadUnitState(headUnit);
@@ -590,7 +606,7 @@ export function SimulatorView({
   }, [onNotify]);
 
   const stepRadioStation = useCallback((dir: 1 | -1) => {
-    const next = nextStationIndex(headUnitRef.current.stationIndex, dir);
+    const next = nextStationIndex(headUnitRef.current.stationIndex, dir, radioStationsRef.current);
     radioAudioRef.current?.pause();
     setHeadUnit((prev) => ({ ...prev, stationIndex: next, mode: "radio", radioPlaying: false, source: "stream", savedTrackKey: null, streamStatus: "idle" }));
   }, []);
@@ -603,7 +619,7 @@ export function SimulatorView({
       setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "idle" }));
       return;
     }
-    const station = RADIO_STATIONS[headUnitRef.current.stationIndex];
+    const station = radioStationsRef.current[headUnitRef.current.stationIndex];
     audio.src = station.streamUrl;
     audio.volume = headUnitRef.current.volume;
     engineSoundRef.current?.ensureStarted();
@@ -1834,7 +1850,7 @@ export function SimulatorView({
               {headUnit.mode === "radio" && <>
                 <div className="flex items-center justify-between gap-2 text-[11px] mb-2">
                   <button type="button" className="btn btn-mini" aria-label="Предыдущая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, -1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>◀ TUNE</button>
-                  <span className="text-center min-w-0"><b>{RADIO_STATIONS[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{RADIO_STATIONS[headUnit.stationIndex]?.freq} FM</span></span>
+                  <span className="text-center min-w-0"><b>{radioStations[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{RADIO_STATIONS[headUnit.stationIndex]?.freq} FM</span></span>
                   <button type="button" className="btn btn-mini" aria-label="Следующая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, 1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>TUNE ▶</button>
                 </div>
                 <div className="flex items-center gap-2 mb-2">
