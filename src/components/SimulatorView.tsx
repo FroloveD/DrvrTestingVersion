@@ -2391,13 +2391,13 @@ export function SimulatorView({
   const needsPrep = !s.engineOn || s.handbrake || !s.belt || s.gear === "P";
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {/* [SEC:sim-toolbar] Верхняя панель выбора сценария, импорта OSM и завершения попытки */}
-      <div data-testid="sim-toolbar" hidden={menusHidden} className="flex flex-wrap items-center gap-2" style={menusHidden ? { display: "none" } : undefined}>
-        <div className="segmented flex-wrap">
+      <div data-testid="sim-toolbar" hidden={menusHidden} className="sim-toolbar scroll-thin" style={menusHidden ? { display: "none" } : undefined}>
+        <div className="segmented">
           {([
             ["bay_90", "1 · Бокс 90°"],
-            ["parallel_v2", "2 · Параллельная (v2)"],
+            ["parallel_v2", "2 · Параллельная"],
             ["city_osm", "3 · Город OSM"],
             ["custom", "4 · Свой сценарий"],
           ] as const).map(([id, label]) => (
@@ -2441,10 +2441,7 @@ export function SimulatorView({
           </button>
         )}
 
-        <div className="flex items-center gap-2 ml-auto">
-          <span className="hidden xl:inline-flex items-center gap-1.5 text-[11px] text-[#9bafbc] px-2 mono">
-            Старт: ДВС заглушен · P
-          </span>
+        <div className="sim-toolbar-actions">
           <button
             type="button"
             className="btn btn-mini"

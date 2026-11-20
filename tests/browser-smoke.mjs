@@ -143,6 +143,17 @@ try {
   check("A2c раскладка по умолчанию: руль не закрывает спидометр и кнопки камеры", lay.found && !lay.wheelSpeed && !lay.wheelCamera, JSON.stringify(lay));
   const nav1440 = await navFits(page);
   check("A2d навигация: все 7 вкладок видны на экране 1440 px", nav1440.ok, `нужно ${nav1440.need}px, есть ${nav1440.have}px`);
+  await page.setViewportSize({ width: 1200, height: 900 });
+  const toolbarRow = await page.evaluate(() => {
+    const bar = document.querySelector('[data-testid="sim-toolbar"]');
+    const boxes = [...bar.querySelectorAll("button")].filter(b => b.getClientRects().length).map(b => b.getBoundingClientRect());
+    const centers = boxes.map(b => b.y + b.height / 2);
+    return { height: bar.getBoundingClientRect().height, spread: Math.max(...centers) - Math.min(...centers),
+      fits: bar.scrollWidth <= bar.clientWidth + 1,
+      renamed: bar.innerText.includes("Параллельная") && !bar.innerText.includes("(v2)") };
+  });
+  check("A2n scenario/actions toolbar fits in one compact row at 1200px", toolbarRow.height <= 40 && toolbarRow.spread < 3 && toolbarRow.fits && toolbarRow.renamed, JSON.stringify(toolbarRow));
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: `${shotDir}/layout.png` });
 
   // Fullscreen remains usable in embedded previews even when the browser denies the API.

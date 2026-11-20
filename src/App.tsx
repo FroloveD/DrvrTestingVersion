@@ -409,7 +409,7 @@ export default function App() {
       </header>
 
       {/* Основная рабочая область */}
-      <main className={headerHidden && tab === "sim" ? "relative z-10 flex-1 w-full p-2" : "relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-4 sm:px-6 py-4"}>
+      <main className={headerHidden && tab === "sim" ? "relative z-10 flex-1 w-full p-2" : "relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-3 sm:px-4 py-2"}>
         {/* Тренажёр остаётся примонтированным: переключение вкладок не прерывает заезд */}
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
