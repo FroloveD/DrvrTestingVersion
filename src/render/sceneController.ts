@@ -344,9 +344,7 @@ export class SceneController {
     this.cockpitRearMat = new THREE.MeshBasicMaterial({ map: this.cockpitRearRT.texture, color: 0xf6fafd });
     this.cockpitLeftMat = new THREE.MeshBasicMaterial({ map: this.cockpitLeftRT.texture, color: 0xf6fafd });
     this.cockpitRightMat = new THREE.MeshBasicMaterial({ map: this.cockpitRightRT.texture, color: 0xf6fafd });
-    this.mirrorIdleMat =
-      (this.playerRig.rearMirrorGlass?.material as THREE.Material | undefined) ??
-      new THREE.MeshStandardMaterial({ color: 0x7d93a6, metalness: 0.88, roughness: 0.12 });
+    this.mirrorIdleMat = new THREE.MeshStandardMaterial({ color: 0x7d93a6, metalness: 0.88, roughness: 0.12 });
 
     // LUT linear → sRGB с небольшим усилением экспозиции
     this.srgbLut = new Uint8Array(256);
@@ -1308,7 +1306,9 @@ export class SceneController {
       if (mesh.material) {
         const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const m of list) {
-          materials.add(m);
+          if (m !== this.mirrorIdleMat && m !== this.cockpitRearMat && m !== this.cockpitLeftMat && m !== this.cockpitRightMat) {
+            materials.add(m);
+          }
           const std = m as THREE.MeshStandardMaterial;
           for (const tex of [std.map, std.bumpMap, std.roughnessMap, std.emissiveMap, std.alphaMap]) {
             if (tex && !this.sharedTextures.includes(tex)) textures.add(tex);
