@@ -49,7 +49,7 @@ import {
   type DetailedCarRig,
   type DetailedPedestrianVisual,
 } from "./vehiclesAndPeds";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "./vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "./vehiclesAndPeds";
 import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
 import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
@@ -170,6 +170,8 @@ export class SceneController {
   private playerCarId = "ceed";
   private readonly cockpitDisplays: CockpitDisplayController;
   private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
+  private cockpitControlHover: CockpitControlId | null = null;
+  private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
 
   // Прогнозная траектория Аккермана
   private readonly trajGroup = new THREE.Group();
@@ -566,6 +568,48 @@ export class SceneController {
     this.scene.add(this.playerRig.root);
     this.playerCarId = carId;
     this.setPlayerCarFraming(carId);
+  }
+
+  /** Подсветка наведения и короткий импульс нажатия физического органа салона. */
+  setCockpitControlInteraction(hovered: CockpitControlId | null, pressed: CockpitControlId | null = null): void {
+    this.cockpitControlHover = hovered;
+    if (pressed) this.controlPressAnim[pressed] = 1;
+  }
+
+  /** Raycast по интерактивным органам салона: ШГУ, шайбы, свет, аварийка, стартер, ручник и сигнал. */
+  pickCockpitControl(normX: number, normY: number): CockpitControlId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets?.length) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    const hit = this.shifterRaycaster.intersectObjects(targets, false)[0];
+    return (hit?.object.userData.cockpitControl as CockpitControlId | undefined) ?? null;
+  }
+
+  getCockpitControlScreenPoint(id: CockpitControlId): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const obj = this.playerRig.cockpitPickTargets?.find((target) => target.userData.cockpitControl === id);
+    if (!obj) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    obj.getWorldPosition(this.shifterProjTmp);
+    this.shifterProjTmp.project(this.camera);
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (this.shifterProjTmp.z < -1 || this.shifterProjTmp.z > 1 || normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
+  }
+
+  /** Переводит взгляд на центральную консоль, не меняя орбиту внешней камеры. */
+  lookAtHeadUnit(): boolean {
+    if (this.lastCameraMode !== "cockpit") return false;
+    this.headYawTarget = -0.62;
+    this.headPitchTarget = -0.34;
+    this.cockpitFov = 66;
+    return true;
   }
 
   /** Передаёт состояние мультимедиа на живые дисплеи приборной панели и ШГУ. */
@@ -1089,6 +1133,21 @@ export class SceneController {
     // Поворотники (период 700 мс, как в v8)
     const { blinkOn, leftLit, rightLit } = getTurnSignalFlash(state.signal, state.time);
     if (opts.cameraMode === "cockpit") this.cockpitDisplays.update(state, world, leftLit, rightLit, this.headUnit, isBraking, now / 1000);
+    const controlDt = Math.min(0.1, Math.max(0, dtMs) / 1000);
+    for (const key of Object.keys(this.controlPressAnim) as CockpitControlId[]) {
+      const value = this.controlPressAnim[key] ?? 0;
+      if (value <= 0) delete this.controlPressAnim[key];
+      else this.controlPressAnim[key] = Math.max(0, value - controlDt * 2.6);
+    }
+    const pressOf = (id: CockpitControlId) => this.controlPressAnim[id] ?? 0;
+    if (rig.headUnitKnobL) { rig.headUnitKnobL.rotation.y = this.headUnit.stationIndex * 0.42 + pressOf("vol") * 0.9; rig.headUnitKnobL.scale.setScalar(1 + (this.cockpitControlHover === "vol" ? 0.16 : 0) + pressOf("vol") * 0.12); }
+    if (rig.headUnitKnobR) { rig.headUnitKnobR.rotation.y = (this.cockpitControlHover === "tune" ? 0.22 : 0) + pressOf("tune") * 0.6; rig.headUnitKnobR.scale.setScalar(1 + (this.cockpitControlHover === "tune" ? 0.16 : 0) + pressOf("tune") * 0.12); }
+    if (rig.headlightSwitchPivot) rig.headlightSwitchPivot.rotation.z = state.lights ? -0.62 - pressOf("headlight") * 0.2 : pressOf("headlight") * -0.18;
+    if (rig.headlightSwitchMat) rig.headlightSwitchMat.color.setHex(state.lights ? 0x22c55e : this.cockpitControlHover === "headlight" ? 0x64748b : 0x334155);
+    if (rig.headUnitScreen) (rig.headUnitScreen.material as THREE.MeshBasicMaterial).color.setHex(this.headUnit.mode === "off" ? 0x51606e : this.cockpitControlHover === "headunit" || this.cockpitControlHover === "vol" || this.cockpitControlHover === "tune" ? 0xa9d4e6 : 0xffffff);
+    if (rig.startBtnMat && pressOf("start") > 0) rig.startBtnMat.color.setHex(0xfef08a);
+    if (rig.hazardBtnMat && (pressOf("hazard") > 0 || this.cockpitControlHover === "hazard") && state.signal !== "hazard") rig.hazardBtnMat.color.setHex(0xb91c1c);
+    if (rig.handbrakePivot) rig.handbrakePivot.rotation.x = state.handbrake ? -0.42 : 0;
     for (const m of rig.blinkLeftMats) m.color.setHex(leftLit ? 0xffb020 : 0x9a621e);
     for (const m of rig.blinkRightMats) m.color.setHex(rightLit ? 0xffb020 : 0x9a621e);
 
