@@ -252,6 +252,7 @@ export function DebriefView({
   loadAllAttempts,
   onClearJournal,
   onBackToSim,
+  onNewAttempt,
   onNotify,
 }: Props) {
   const [cursor, setCursor] = useState(0);
