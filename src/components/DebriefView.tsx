@@ -51,6 +51,7 @@ type Props = {
   loadAllAttempts: () => Promise<RecordedAttempt[]>;
   onClearJournal: () => void;
   onBackToSim: () => void;
+  onNewAttempt: () => void;
   onNotify: (msg: string) => void;
 };
 
@@ -498,7 +499,7 @@ export function DebriefView({
           >
             <Icon name="layers" size={13} /> {exporting ? "Собираю…" : `Golden-набор (${journal.length || 1})`}
           </button>
-          <button type="button" className="btn btn-primary btn-mini" onClick={onBackToSim}>
+          <button type="button" data-testid="debrief-new-attempt" className="btn btn-primary btn-mini" onClick={onNewAttempt}>
             <Icon name="car" size={13} /> Новый заезд
           </button>
         </div>
