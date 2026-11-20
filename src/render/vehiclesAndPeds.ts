@@ -7,6 +7,8 @@
  */
 import * as THREE from "three";
 import type { ParkedModelKey } from "../sim/types";
+import { HORN_PICK } from "../sim/cockpitLayout";
+import { getPlayerCar } from "../sim/playerCar";
 import { CAR, VEHICLE_DIMS } from "../sim/vehicle";
 
 export type DetailedCarRig = {
@@ -73,7 +75,8 @@ export type CockpitControlId =
   | "headlight"
   | "hazard"
   | "start"
-  | "handbrake";
+  | "handbrake"
+  | "horn";
 
 /** Геометрия кулисы 6АКПП Shiftronic в локальных координатах кузова (`+X` к водителю, `+Z` вперёд). */
 export const SHIFTER_LAYOUT = {
@@ -97,7 +100,7 @@ export const SHIFTER_LAYOUT = {
  * Текстура подсвеченной кулисы 6АКПП Shiftronic `P – R – N – D` + боковой ручной паз `+ / M / −`
  * на центральном тоннеле Kia Ceed JD (160×320; `u=0` слева — сторона водителя `+X`, `v=1` сверху — вперёд `+Z`).
  */
-function makeShifterGateTexture(): THREE.CanvasTexture {
+function makeShifterGateTextureRaw(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 160;
   c.height = 320;
@@ -187,7 +190,7 @@ function makeShifterGateTexture(): THREE.CanvasTexture {
 }
 
 /** Текстура мягкого светового пятна ближнего света фар на дорожном полотне (128×256). */
-function makeHeadlightBeamTexture(): THREE.CanvasTexture {
+function makeHeadlightBeamTextureRaw(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 128;
   c.height = 256;
@@ -367,7 +370,40 @@ function createDetailedWheelMesh(radius: number, width: number): THREE.Group {
   return g;
 }
 
-/** Строит детализированный учебный Kia Ceed JD (`isPlayer = true`) или автомобиль припаркованного автопарка. */
+/**
+ * Текстуры кулисы и светового пятна не зависят от машины, поэтому создаются один раз на вкладку:
+ * парк из пяти машин не плодит по копии canvas-текстуры на каждый кадр (и GPU-память не утекает
+ * при пересборке рига). Общая текстура освобождается вместе со сценой.
+ */
+let shifterGateTexCache: THREE.CanvasTexture | null = null;
+let headlightBeamTexCache: THREE.CanvasTexture | null = null;
+
+function makeShifterGateTexture(): THREE.CanvasTexture {
+  if (!shifterGateTexCache) shifterGateTexCache = makeShifterGateTextureRaw();
+  return shifterGateTexCache;
+}
+
+function makeHeadlightBeamTexture(): THREE.CanvasTexture {
+  if (!headlightBeamTexCache) headlightBeamTexCache = makeHeadlightBeamTextureRaw();
+  return headlightBeamTexCache;
+}
+
+/** Освобождает общие текстуры кулисы и лучей (вызывается при полном dispose сцены). */
+export function disposeSharedVehicleTextures(): void {
+  shifterGateTexCache?.dispose();
+  headlightBeamTexCache?.dispose();
+  shifterGateTexCache = null;
+  headlightBeamTexCache = null;
+}
+
+/**
+ * Строит детализированный автомобиль (`isPlayer = true` — машина игрока с полным салоном)
+ * или припаркованный автомобиль автопарка.
+ *
+ * Для машины игрока `model` — это её паспортный ключ парка (Picanto, Rio, Ceed, XCeed, Sorento):
+ * габариты кузова, база, колея, радиус колеса и предел выворота берутся из `sim/playerCar.ts`,
+ * поэтому риг совпадает с физикой (столкновения, клиренс в боксе, кадр из салона).
+ */
 export function buildDetailedCar(
   model: ParkedModelKey,
   bodyColor: number,
@@ -382,14 +418,25 @@ export function buildDetailedCar(
     rearOverlayTex: THREE.CanvasTexture;
   }
 ): DetailedCarRig {
-  const dim = VEHICLE_DIMS[model];
+  // Машина игрока строится по своему паспорту парка, припаркованная — по прежним размерам модели
+  const playerSpec = isPlayer ? getPlayerCar(model) : null;
+  const dim = playerSpec
+    ? {
+        length: playerSpec.length,
+        width: playerSpec.width,
+        height: playerSpec.height,
+        wheelbase: playerSpec.wheelbase,
+      }
+    : VEHICLE_DIMS[model];
   const L = dim.length;
   const W = dim.width;
   const H = dim.height;
   const wb = dim.wheelbase;
-  const wr = isPlayer ? CAR.wheelRadius : model === "sorento" ? 0.35 : 0.3;
-  const ww = isPlayer ? CAR.wheelWidth : 0.205;
-  const centerShiftZ = isPlayer ? (CAR.frontOverhang - CAR.rearOverhang) / 2 : 0;
+  const wr = isPlayer && playerSpec ? playerSpec.wheelRadius : model === "sorento" ? 0.35 : 0.3;
+  const ww = isPlayer && playerSpec ? playerSpec.wheelWidth : 0.205;
+  const frontOverhang = playerSpec ? playerSpec.frontOverhang : CAR.frontOverhang;
+  const rearOverhang = playerSpec ? playerSpec.rearOverhang : CAR.rearOverhang;
+  const centerShiftZ = isPlayer ? (frontOverhang - rearOverhang) / 2 : 0;
 
   const root = new THREE.Group();
   const chassis = new THREE.Group();
@@ -549,6 +596,27 @@ export function buildDetailedCar(
     const trunk = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, lowerH * 0.98, trunkLen), paintMat);
     trunk.position.set(0, sillY + lowerH * 0.49, rearFaceZ + trunkLen / 2);
     trunk.castShadow = true;
+    // Для зеркала нужна верхняя поверхность кормы, а не передняя стенка грубого
+    // BoxGeometry (она скрыта салоном в обычном виде, но выглядит как висящий ящик
+    // при выборочном рендере). Отдельная поверхность — только для слоя отражения.
+    const rearReferenceGeometry = new THREE.BufferGeometry();
+    const refFrontZ = rearFaceZ + trunkLen * 0.78;
+    const refBackZ = rearFaceZ + 0.025;
+    const refY = sillY + lowerH * 0.98;
+    rearReferenceGeometry.setAttribute("position", new THREE.Float32BufferAttribute([
+      -W * 0.42, refY, refFrontZ,
+       W * 0.42, refY, refFrontZ,
+       W * 0.47, refY - 0.025, refBackZ,
+      -W * 0.42, refY, refFrontZ,
+       W * 0.47, refY - 0.025, refBackZ,
+      -W * 0.47, refY - 0.025, refBackZ,
+    ], 3));
+    rearReferenceGeometry.computeVertexNormals();
+    const rearReference = new THREE.Mesh(rearReferenceGeometry, paintMat);
+    rearReference.name = "rear-mirror-deck-reference";
+    rearReference.userData.rearMirrorOnly = true;
+    rearReference.receiveShadow = true;
+    chassis.add(rearReference);
     const diffuser = new THREE.Mesh(new THREE.BoxGeometry(W - 0.06, 0.12, 0.18), darkTrimMat);
     diffuser.position.set(0, sillY + 0.05, rearFaceZ + 0.08);
     const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.14, 10), chromeMat);
@@ -864,6 +932,10 @@ export function buildDetailedCar(
       addPick("headlight", W * 0.23 - 0.145, beltY + 0.018, dashZ - 0.19, 0.062, 0.062, 0.032),
       addPick("stalk-left", W * 0.23 + 0.112, 0.9, centerShiftZ + 0.55, 0.15, 0.07, 0.07),
       addPick("handbrake", -0.052, gateY + 0.055, centerShiftZ + 0.19, 0.07, 0.085, 0.24),
+      // Сигнал: накладка ступицы, зона заметно уже обода (0,062 м против радиуса 0,172 м) и смещена от консоли.
+      // Широкая зона перехватывала бы клики по кулисе АКПП и шайбам ШГУ, которые лежат ниже и правее (смоук K7c/K7d).
+      // Раскладка и зазоры — чистый модуль `sim/cockpitLayout.ts`, проверяются T41.
+      addPick(HORN_PICK.id as CockpitControlId, HORN_PICK.cx, HORN_PICK.cy, HORN_PICK.cz, HORN_PICK.sx, HORN_PICK.sy, HORN_PICK.sz),
     ];
     chassis.add(pickGroup);
 
@@ -1076,6 +1148,16 @@ export function buildDetailedCar(
       btnPad.position.set(sgn * 0.108, -0.01, -0.004);
       steerWheelMesh.add(btnPad);
     }
+    // Кнопка сигнала в центре ступицы: чёрная накладка с эмблемой-гудком, отличается от накладок спиц
+    const hornPad = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.046, 0.05, 0.014, 18),
+      new THREE.MeshStandardMaterial({ color: 0x0b1118, roughness: 0.6, metalness: 0.18 })
+    );
+    hornPad.rotation.x = Math.PI / 2;
+    hornPad.position.z = -0.026;
+    const hornGlyph = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.017, 14), chromeMat);
+    hornGlyph.position.z = -0.036;
+    hornGlyph.scale.set(1.3, 0.85, 1);
     const barV = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.135, 0.022), satinSilverMat);
     barV.position.y = -0.092;
     const marker = new THREE.Mesh(
@@ -1083,7 +1165,7 @@ export function buildDetailedCar(
       new THREE.MeshBasicMaterial({ color: 0xf5b942 })
     );
     marker.position.set(0, 0.172, 0);
-    steerWheelMesh.add(rim, hub, badgeRing, barH, barV, marker);
+    steerWheelMesh.add(rim, hub, badgeRing, barH, barV, marker, hornPad, hornGlyph);
 
     // Кожух рулевой колонки и подрулевые переключатели (левый — поворотники Q/E, правый — стеклоочистители)
     const colShroud = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.095, 0.16), darkTrimMat);

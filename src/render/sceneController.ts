@@ -41,6 +41,7 @@ import { SpatialChunkBatcher, type WorldChunkHandle } from "./staticBatcher";
 import {
   buildDetailedCar,
   buildDetailedPedestrian,
+  disposeSharedVehicleTextures,
   makeInstrumentClusterTexture,
   makeRussianLicensePlateTexture,
   SHIFTER_LAYOUT,
@@ -49,15 +50,19 @@ import {
   type DetailedPedestrianVisual,
   type ShifterHitId,
 } from "./vehiclesAndPeds";
+import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
+import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
 import type {
   CameraMode,
   ObstacleBox,
+  ParkedModelKey,
   ParkingBay,
   QualityPreset,
   SimState,
   WorldData,
 } from "../sim/types";
+import { getPlayerCar } from "../sim/playerCar";
 import {
   CAR,
   clamp,
@@ -70,6 +75,7 @@ import {
 // Слои относятся только к геометрии машины игрока. Мир и припаркованные авто — слой 0.
 const PLAYER_EXTERIOR_LAYER = 1;
 const OWN_MIRROR_HARDWARE_LAYER = 2;
+const REAR_MIRROR_REFERENCE_LAYER = 3;
 
 type CarRig = DetailedCarRig;
 
@@ -157,7 +163,9 @@ export class SceneController {
   private readonly bayVisuals: BayVisual[] = [];
   private readonly cockpitDisplays: CockpitDisplayController;
   private readonly envMapRT: THREE.WebGLRenderTarget | null = null;
-  private readonly playerRig: CarRig;
+  private playerRig: CarRig;
+  /** Машина, под которую собран риг игрока (для пересборки при смене в сценарии). */
+  private playerRigCarId: ParkedModelKey = "ceed";
   private isLargeWorld = false;
   private totalBuildings = 0;
   private shadowDirty = true;
@@ -203,11 +211,27 @@ export class SceneController {
   private frameCounter = 0;
   private qualityPreset: QualityPreset = "high";
 
-  // Управление орбитальной камерой и обзором головы в салоне
+  // Управление орбитальной камерой (внешние виды) и обзором головы водителя (салон)
   private orbitYaw = 0;
   private orbitPitch = 0.36;
   private orbitDist = 9.2;
   private cockpitFov = 68;
+  /** Кадрировка вида из салона для текущей машины (создаётся под учебный Ceed, меняется при смене машины). */
+  private cockpitFraming: CockpitFraming = cockpitFramingFor("ceed");
+  /**
+   * Взгляд водителя в салоне — независимое от орбиты состояние. `headYawTarget`/`headPitchTarget`
+   * задают, куда водитель поворачивает голову (детент зеркала/дороги или свободный обзор ПКМ),
+   * а `headYaw`/`headPitch` догоняют их с инерцией шеи. Отделение от `orbitYaw` — принципиальное:
+   * раньше голова и внешняя камера делили одну переменную, поэтому переключение вида
+   * (`1/2/3/4/C`) «сбивало» взгляд, а поворот головы уводил орбиту вокруг машины.
+   */
+  private headYaw = 0;
+  private headYawTarget = 0;
+  private headPitch = 0;
+  private headPitchTarget = 0;
+  /** Текущий детент внимания: 0 — дорога (+ салонное зеркало), +1 — левое зеркало, −1 — правое. */
+  private headDetent: -1 | 0 | 1 = 0;
+
   private lastCameraMode: CameraMode = "chase";
   private camLookTarget = new THREE.Vector3();
 
@@ -228,6 +252,8 @@ export class SceneController {
   private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
   private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
   private savedHeadBeforeShifter: { yaw: number; pitch: number; fov: number } | null = null;
+  /** Время предыдущего шага инерции шеи (мс) — для расчёта реального dt кадра. */
+  private lastHeadStepAt = 0;
 
   // Общие текстуры (освобождаются при dispose)
   private readonly sharedTextures: THREE.Texture[] = [];
@@ -323,31 +349,9 @@ export class SceneController {
 
     this.scene.add(this.worldGroup);
 
-    // Детализированный учебный Kia Ceed JD (лак clearcoat, ДХО, живой салон Supervision, 7" ШГУ + R-камера, 3D-зеркала)
-    this.playerRig = buildDetailedCar(
-      "ceed",
-      0xd97706,
-      true,
-      shadowTex,
-      learnerTex,
-      playerPlateTex,
-      this.cockpitDisplays.clusterTex,
-      OWN_MIRROR_HARDWARE_LAYER,
-      {
-        headUnitTex: this.cockpitDisplays.headUnitTex,
-        rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
-      }
-    );
-    this.playerRig.root.traverse((obj) => {
-      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
-        obj.layers.set(PLAYER_EXTERIOR_LAYER);
-      }
-    });
-    // Основной вид сохраняет всю машину, включая зеркала, водителя и светотехнику;
-    // raycaster 3D-рычага АКПП также слушает слой кузова/салона PLAYER_EXTERIOR_LAYER.
-    this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
-    this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
-    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
+    // Детализированный автомобиль игрока (лак clearcoat, ДХО, живой салон Supervision, 7" ШГУ + R-камера, 3D-зеркала).
+    // Модель по умолчанию — учебный Ceed JD; сценарий может пересобрать риг под другую машину парка.
+    this.playerRig = this.buildPlayerRigWith("ceed");
     this.scene.add(this.playerRig.root);
 
     // Линии прогнозной траектории Аккермана
@@ -361,7 +365,7 @@ export class SceneController {
     this.trajGroup.add(this.trajLineL, this.trajLineR);
     this.scene.add(this.trajGroup);
 
-    // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир без пересечения крыши/салона;
+    // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир и багажник без пересечения крыши/салона;
     // боковые дополнительно видят наружную кромку автомобиля, но не корпуса зеркал.
     this.rearRT = new THREE.WebGLRenderTarget(320, 96, { depthBuffer: true });
     this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 112);
@@ -369,7 +373,7 @@ export class SceneController {
     this.sideRT = new THREE.WebGLRenderTarget(320, 160, { depthBuffer: true });
     this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 105);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
-    this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
+    this.configurePlayerViewLayers();
 
     // Физические 3D-зеркала в салоне: повышенное разрешение, прямой GPU-рендер и единый ACES tone mapping со сценой
     this.cockpitRearRT = new THREE.WebGLRenderTarget(512, 160, { depthBuffer: true });
@@ -398,10 +402,87 @@ export class SceneController {
     this.renderer.setSize(width, height, false);
   }
 
+  /**
+   * Свободный обзор правой кнопкой мыши.
+   * В салоне двигает голову водителя (плавно, с инерцией, и НЕ возвращает её назад после отпускания —
+   * «как повернул, так и смотришь»; к детенту дороги возвращает только стрелка). Снаружи — орбиту.
+   */
   adjustOrbit(deltaX: number, deltaY: number): void {
+    if (this.lastCameraMode === "cockpit") {
+      // 0,0042 рад/пиксель ≈ 0,24°/пиксель: полный обзор ±95° за ~400 px, без «дёрганья»
+      this.headDetent = 0;
+      this.headYawTarget = clamp(this.headYawTarget - deltaX * 0.0042, -HEAD_TURN.maxRad, HEAD_TURN.maxRad);
+      this.headPitchTarget = clamp(this.headPitchTarget - deltaY * 0.0032, HEAD_TURN.minPitchRad, HEAD_TURN.maxPitchRad);
+      return;
+    }
     this.savedHeadBeforeShifter = null;
     this.orbitYaw -= deltaX * 0.0065;
     this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.42);
+  }
+
+  /** Индекс детента внимания: −1 правое зеркало, 0 дорога, +1 левое зеркало. */
+  /**
+   * Переключает кадрировку салона при смене машины игрока в сценарии: поза глаз, наклон и FOV
+   * пересчитываются по паспорту (T39), пользовательский зум колесом сохраняется как смещение.
+   */
+  setPlayerCarFraming(carId: string | null | undefined): void {
+    this.cockpitFraming = cockpitFramingFor(carId);
+    // Базовый FOV возвращаем к паспортному: кадр машины не должен наследовать зум предыдущей
+    this.cockpitFov = this.cockpitFraming.fovDeg;
+    this.camera.fov = this.cockpitFov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Текущая кадрировка салона (для отладки и смоук-тестов). */
+  getCockpitFraming(): CockpitFraming {
+    return this.cockpitFraming;
+  }
+
+  getHeadDetent(): -1 | 0 | 1 {
+    return this.headDetent;
+  }
+
+  /** Текущий угол головы в градусах (фактический, с учётом инерции). */
+  getHeadYawDeg(): number {
+    return (this.headYaw * 180) / Math.PI;
+  }
+
+  /**
+   * Переключение точки внимания стрелками ←/→: шаг по детентам «левое зеркало → дорога → правое зеркало».
+   * Возвращает новый детент. Довод идёт с инерцией в кадре, поэтому глаз «доезжает» за ~0,18 с.
+   */
+  stepHeadDetent(dir: -1 | 1): -1 | 0 | 1 {
+    const next = clamp(this.headDetent + dir, -1, 1) as -1 | 0 | 1;
+    this.setHeadDetent(next);
+    return next;
+  }
+
+  /** Прямая установка детента (клик по кнопке, клавиша ↓ — «дорога»). */
+  setHeadDetent(detent: -1 | 0 | 1): void {
+    this.headDetent = detent;
+    this.headYawTarget = detentYawRad(detent);
+    this.headPitchTarget = 0;
+    this.savedHeadBeforeShifter = null;
+  }
+
+  /** Мгновенно вернуть взгляд на дорогу (сброс попытки, переключение сценария, выход из салона). */
+  resetHeadLook(): void {
+    this.headDetent = 0;
+    this.headYaw = 0;
+    this.headYawTarget = 0;
+    this.headPitch = 0;
+    this.headPitchTarget = 0;
+  }
+
+  /**
+   * Инерция шеи: цель детента или свободного обзора догоняется экспоненциально (τ ≈ 0,055 с),
+   * поэтому даже мгновенный клик стрелкой выглядит как живой поворот головы, а не телепорт.
+   */
+  private stepHeadInertia(dt: number): void {
+    // Инерция шеи — по РЕАЛЬНОМУ времени кадра, а не по фиксированным 1/60: на медленной машине
+    // (или в headless без GPU) голова доводится за те же ~0,18 с, а не за 0,18 с × N кадров.
+    this.headYaw = dampedHeadStep(this.headYaw, this.headYawTarget, dt, HEAD_TURN.TAU_S);
+    this.headPitch = dampedHeadStep(this.headPitch, this.headPitchTarget, dt, HEAD_TURN.TAU_S);
   }
 
   adjustZoom(wheelDelta: number): void {
@@ -418,7 +499,9 @@ export class SceneController {
     this.orbitYaw = 0;
     this.orbitPitch = 0.36;
     this.orbitDist = 9.2;
-    this.cockpitFov = 68;
+    // Сброс возвращает паспортный FOV текущей машины, а не общий 68°
+    this.cockpitFov = this.cockpitFraming.fovDeg;
+    this.resetHeadLook();
   }
 
   /** Быстрый перевод взгляда водителя в салоне на 3D-рычаг 6АКПП Shiftronic и обратно на дорогу (клавиша G). */
@@ -426,21 +509,32 @@ export class SceneController {
     if (this.isCockpitShifterView()) {
       const prev = this.savedHeadBeforeShifter;
       this.savedHeadBeforeShifter = null;
-      this.orbitYaw = prev ? prev.yaw : 0;
-      this.orbitPitch = prev ? prev.pitch : 0.36;
+      // Возвращаемся туда, куда смотрел водитель до взгляда на рычаг (детент или свободный обзор)
+      this.headYawTarget = prev ? prev.yaw : detentYawRad(this.headDetent);
+      this.headPitchTarget = prev ? prev.pitch : 0;
       this.cockpitFov = prev ? prev.fov : 68;
       return false;
     }
-    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
-    this.orbitYaw = -0.82;
-    this.orbitPitch = 1.34;
+    this.savedHeadBeforeShifter = { yaw: this.headYawTarget, pitch: this.headPitchTarget, fov: this.cockpitFov };
+    // Взгляд вниз-вправо на консоль: цель головы, а не орбиты — после возврата взгляд восстанавливается
+    this.headYawTarget = -HEAD_TURN.SHIFTER_RAD;
+    this.headPitchTarget = -HEAD_TURN.SHIFTER_PITCH_RAD;
     this.cockpitFov = 62;
     return true;
   }
 
+  /**
+   * Досела ли шея водителя к цели (взгляд, детент). Смоук ждёт этого вместо фиксированных пауз:
+   * инерция шеи идёт по реальному времени, и на медленной машине точка органа ещё «плывёт» по экрану.
+   * FOV меняется мгновенно (это зум, а не шея), поэтому проверяются только углы.
+   */
+  isHeadSettled(epsRad = 0.004): boolean {
+    return Math.abs(this.headYaw - this.headYawTarget) < epsRad && Math.abs(this.headPitch - this.headPitchTarget) < epsRad;
+  }
+
   /** Смотрит ли сейчас камера салона вниз-вправо на консоль рычага АКПП. */
   isCockpitShifterView(): boolean {
-    return this.orbitPitch > 1.05 && this.orbitYaw < -0.45 && this.orbitYaw > -1.35;
+    return this.headPitchTarget < -0.5 && this.headYawTarget < -0.4;
   }
 
   /** Сохраняет состояние 7" ШГУ (режим, станция, клип, промо-слот) для 3D-экрана и подсветки. */
@@ -497,10 +591,11 @@ export class SceneController {
   /** Переводит взгляд водителя в салоне на центральную консоль с 7" ШГУ (клик по экрану в HUD). */
   lookAtHeadUnit(): boolean {
     if (this.lastCameraMode !== "cockpit") return false;
-    this.savedHeadBeforeShifter = { yaw: this.orbitYaw, pitch: this.orbitPitch, fov: this.cockpitFov };
-    // Центральная консоль с 7" ШГУ — ниже и правее глаз водителя: взгляд вниз-вправо, но выше кулисы АКПП
-    this.orbitYaw = -0.86;
-    this.orbitPitch = 0.86;
+    // Центральная консоль с 7" ШГУ — ниже и правее глаз водителя: взгляд вниз-вправо, но выше кулисы АКПП.
+    // Запоминаем детент/свободный обзор, чтобы после возврата взгляд встал обратно на дорогу или зеркало.
+    this.savedHeadBeforeShifter = { yaw: this.headYawTarget, pitch: this.headPitchTarget, fov: this.cockpitFov };
+    this.headYawTarget = -0.62;
+    this.headPitchTarget = -0.34;
     this.cockpitFov = 66;
     return true;
   }
@@ -557,6 +652,33 @@ export class SceneController {
       leverZ: piv ? piv.position.z : gateZ + SHIFTER_LAYOUT.offP,
       gateZ,
     };
+  }
+
+  /**
+   * Цель перетаскивания на высоте рукоятки, с сохранением смещения точки захвата.
+   * Центры pick-мешей пазов лежат на пластине ниже рукоятки: их экранные координаты
+   * нельзя использовать как drag-цели (перспектива меняет и X, и Z пересечения луча).
+   */
+  getShifterDragTargetScreenPoint(id: Exclude<ShifterHitId, "lever">, offsetX: number, offsetZ: number): { normX: number; normY: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const offsets = {
+      P: SHIFTER_LAYOUT.offP, R: SHIFTER_LAYOUT.offR, N: SHIFTER_LAYOUT.offN,
+      D: SHIFTER_LAYOUT.offD, M: SHIFTER_LAYOUT.offD,
+      "M+": SHIFTER_LAYOUT.offMPlus, "M-": SHIFTER_LAYOUT.offMMinus,
+    };
+    const manual = id === "M" || id === "M+" || id === "M-";
+    const { gateZ } = this.getShifterLocalAnchor();
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterProjTmp.set(
+      (manual ? SHIFTER_LAYOUT.manualRailX : SHIFTER_LAYOUT.mainRailX) + offsetX,
+      SHIFTER_LAYOUT.knobPlaneY,
+      gateZ + offsets[id] + offsetZ
+    ).applyMatrix4(this.playerRig.chassis.matrixWorld).project(this.camera);
+    const normX = (this.shifterProjTmp.x + 1) * 0.5;
+    const normY = (1 - this.shifterProjTmp.y) * 0.5;
+    if (Math.abs(this.shifterProjTmp.z) > 1 || normX < 0 || normX > 1 || normY < 0 || normY > 1) return null;
+    return { normX, normY };
   }
 
   /** Возвращает нормализованные экранные координаты `[0..1]` рукоятки или паза 3D-селектора в режиме `cockpit`. */
@@ -1300,12 +1422,21 @@ export class SceneController {
     const prevCameraMode = this.lastCameraMode;
     this.lastCameraMode = opts.cameraMode;
     if (prevCameraMode === "cockpit" && opts.cameraMode !== "cockpit" && this.savedHeadBeforeShifter) {
-      this.orbitYaw = this.savedHeadBeforeShifter.yaw;
-      this.orbitPitch = this.savedHeadBeforeShifter.pitch;
+      // Взгляд «сохранён» мышью/кнопкой G — возвращаем цель головы, а не орбиту:
+      // после возврата в салон (2) водитель смотрит туда же, куда смотрел до переключения вида.
+      this.headYawTarget = this.savedHeadBeforeShifter.yaw;
+      this.headPitchTarget = this.savedHeadBeforeShifter.pitch;
       this.cockpitFov = this.savedHeadBeforeShifter.fov;
       this.savedHeadBeforeShifter = null;
     }
     this.playerRig.chassis.updateWorldMatrix(true, false);
+    // Инерция шеи: голова плавно догоняет цель (детент зеркала/дороги или свободный обзор ПКМ).
+    // dt берём из реального времени кадра (ограничен 0,1 с, чтобы скачок после сворачивания вкладки
+    // не «телепортировал» голову), иначе на медленном рендере довод растягивается на секунды.
+    const headNow = performance.now();
+    const headDt = Math.min(0.1, Math.max(0, (headNow - this.lastHeadStepAt) / 1000));
+    this.lastHeadStepAt = headNow;
+    this.stepHeadInertia(headDt);
     this.updateCamera(state, opts.cameraMode);
 
     // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели.
@@ -1474,20 +1605,87 @@ export class SceneController {
     frame.ctx.putImageData(frame.image, 0, 0);
   }
 
+  /** Основной вид видит весь автомобиль; отражения исключают собственную зеркальную оптику. */
+  private configurePlayerViewLayers(): void {
+    // Mesh-слои не наследуются от root: buildPlayerRigWith явно переводит кузов/салон
+    // на слой 1, а зеркала — на 2. Основная камера обязана видеть оба, не только мир (0).
+    this.camera.layers.enable(PLAYER_EXTERIOR_LAYER);
+    this.camera.layers.enable(OWN_MIRROR_HARDWARE_LAYER);
+    this.rearCam.layers.enable(REAR_MIRROR_REFERENCE_LAYER);
+    this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
+    this.shifterRaycaster.layers.enable(PLAYER_EXTERIOR_LAYER);
+  }
+
+  /** Заднее зеркало видит только багажник, а не весь кузов вместе с крышей и креслами. */
+  private configurePlayerMeshLayers(root: THREE.Object3D): void {
+    root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
+        obj.layers.set(obj.userData.rearMirrorOnly === true ? REAR_MIRROR_REFERENCE_LAYER : PLAYER_EXTERIOR_LAYER);
+      }
+    });
+  }
+
+  /**
+   * Собирает риг машины игрока по паспорту парка и выдаёт слои так же, как при первой сборке:
+   * внешние меши на `PLAYER_EXTERIOR_LAYER`, зеркальная оптика — на `OWN_MIRROR_HARDWARE_LAYER`.
+   */
+  private buildPlayerRigWith(carId: ParkedModelKey): CarRig {
+    const spec = getPlayerCar(carId);
+    const rig = buildDetailedCar(
+      carId,
+      spec.color,
+      true,
+      this.sharedTextures[1] as THREE.CanvasTexture,
+      this.sharedTextures[2] as THREE.CanvasTexture,
+      this.sharedTextures[4] as THREE.CanvasTexture,
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      {
+        headUnitTex: this.cockpitDisplays.headUnitTex,
+        rearOverlayTex: this.cockpitDisplays.rearOverlayTex,
+      }
+    );
+    this.configurePlayerMeshLayers(rig.root);
+    this.playerRigCarId = carId;
+    return rig;
+  }
+
+  /**
+   * Пересаживает игрока в другую машину сценария: освобождает старый риг и собирает новый
+   * по паспорту (габариты, база, колея, цвет). Камера салона пересчитывается тем же вызовом.
+   */
+  setPlayerCarModel(carId: string | null | undefined): void {
+    const next = (carId ?? "ceed") as ParkedModelKey;
+    if (next === this.playerRigCarId) {
+      this.setPlayerCarFraming(next);
+      return;
+    }
+    const old = this.playerRig;
+    this.scene.remove(old.root);
+    this.disposeGroup(old.root);
+    this.playerRig = this.buildPlayerRigWith(next);
+    this.scene.add(this.playerRig.root);
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.shadowDirty = true;
+    this.setPlayerCarFraming(next);
+  }
+
   private updateCamera(s: SimState, mode: CameraMode): void {
     const fx = Math.sin(s.h);
     const fz = Math.cos(s.h);
 
     if (mode === "cockpit") {
-      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами)
+      // Водительское место слева (+X), жёстко связанное с кузовом (наклон/крен совпадают с салоном и 3D-зеркалами).
+      // Поза и наклон берутся из кадрировки конкретной машины (T39), FOV — из неё же, пока игрок не крутил колесо.
       const pose = this.playerRig.chassis.matrixWorld;
-      const localEyeX = CAR.width * 0.225;
-      const localEyeY = 1.195;
-      const localEyeZ = -0.06;
-      const headYaw = clamp(this.orbitYaw * 0.72, -1.55, 1.55);
-      // При базовом orbitPitch = 0.36 наклон равен -0.02 рад (вперёд на дорогу), а ПКМ вниз или G открывает обзор рычага АКПП
-      const pitchDelta = this.orbitPitch - 0.36;
-      const headPitch = clamp(-0.02 - pitchDelta * (pitchDelta > 0 ? 0.66 : 0.45), -0.74, 0.34);
+      const framing = this.cockpitFraming;
+      const localEyeX = framing.eyeX;
+      const localEyeY = framing.eyeY;
+      const localEyeZ = framing.eyeZ;
+      // Взгляд берётся из собственного состояния головы: детенты зеркал/дороги (стрелки) или
+      // свободный обзор ПКМ, который остаётся там, где его отпустили.
+      const headYaw = this.headYaw;
+      const headPitch = clamp(framing.pitchRad + this.headPitch, -0.74, 0.34);
       const cosP = Math.cos(headPitch);
       if (this.camera.fov !== this.cockpitFov) {
         this.camera.fov = this.cockpitFov;
@@ -1616,6 +1814,8 @@ export class SceneController {
     this.cockpitLeftRT.dispose();
     this.cockpitRightRT.dispose();
     this.sharedTextures.forEach((t) => t.dispose());
+    // Общие текстуры парка (кулиса, лучи фар) живут на уровне модуля — освобождаем отдельно
+    disposeSharedVehicleTextures();
     this.renderer.dispose();
   }
 }

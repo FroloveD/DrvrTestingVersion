@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 
 const ICONS: Record<string, string> = {
+  maximize: "M8 3H3v5|M16 3h5v5|M21 16v5h-5|M8 21H3v-5",
   car: "M5 17h14v-5l-2-5H7l-2 5z|M3 17h18|M7 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4|M17 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4|M6 12h12",
   play: "M6 4l14 8-14 8z",
   pause: "M7 5h3v14H7z|M14 5h3v14h-3z",

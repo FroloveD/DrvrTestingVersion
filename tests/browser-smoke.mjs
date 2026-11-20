@@ -28,7 +28,12 @@ const check = (name, ok, extra = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
+// Chromium: в CI — установленный Playwright; локально/в песочнице — бинарь из npm-пакета
+// (`CDT_CHROMIUM_PATH`), если CDN Playwright недоступен. Оба пути дают тот же headless-движок.
+const browser = await chromium.launch({
+  executablePath: process.env.CDT_CHROMIUM_PATH || undefined,
+  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
+});
 
 async function open(ctx, url) {
   const page = await ctx.newPage();
@@ -60,6 +65,7 @@ async function until(fn, timeout = 20000, step = 250) {
     await sleep(step);
   }
 }
+// Keep the locator/action that timed out, not just the tail of Playwright's retry log.
 const tab = (page, name) => page.getByRole("button", { name: new RegExp(name) }).first().click();
 const low = async (page) => (await page.evaluate(() => document.body.innerText)).toLowerCase();
 const panelArtifacts = (page) => page.evaluate(() => {
@@ -138,7 +144,124 @@ try {
   check("A2c раскладка по умолчанию: руль не закрывает спидометр и кнопки камеры", lay.found && !lay.wheelSpeed && !lay.wheelCamera, JSON.stringify(lay));
   const nav1440 = await navFits(page);
   check("A2d навигация: все 7 вкладок видны на экране 1440 px", nav1440.ok, `нужно ${nav1440.need}px, есть ${nav1440.have}px`);
+  await page.setViewportSize({ width: 1200, height: 900 });
+  const toolbarRow = await page.evaluate(() => {
+    const bar = document.querySelector('[data-testid="sim-toolbar"]');
+    const boxes = [...bar.querySelectorAll("button")].filter(b => b.getClientRects().length).map(b => b.getBoundingClientRect());
+    const centers = boxes.map(b => b.y + b.height / 2);
+    return { height: bar.getBoundingClientRect().height, spread: Math.max(...centers) - Math.min(...centers),
+      fits: bar.scrollWidth <= bar.clientWidth + 1,
+      renamed: bar.innerText.includes("Параллельная") && !bar.innerText.includes("(v2)") };
+  });
+  check("A2n scenario/actions toolbar fits in one compact row at 1200px", toolbarRow.height <= 40 && toolbarRow.spread < 3 && toolbarRow.fits && toolbarRow.renamed, JSON.stringify(toolbarRow));
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({ path: `${shotDir}/layout.png` });
+
+  // Fullscreen remains usable in embedded previews even when the browser denies the API.
+  await page.evaluate(() => {
+    const host = document.querySelector('[data-testid="sim-viewport"]');
+    Object.defineProperty(host, "requestFullscreen", { configurable: true,
+      value: () => Promise.reject(new Error("Fullscreen denied by iframe policy")) });
+  });
+  await page.getByTestId("sim-fullscreen-enter").click();
+  await until(() => page.evaluate(() => {
+    const host = document.querySelector('[data-testid="sim-viewport"]');
+    const r = host.getBoundingClientRect();
+    return host.dataset.immersive === "true" && Math.abs(r.width - innerWidth) < 2 && Math.abs(r.height - innerHeight) < 2;
+  }), 5000);
+  const full = await page.getByTestId("sim-viewport").boundingBox();
+  check("A2e fullscreen fallback fills viewport and hides HUD",
+    Math.abs(full.width - 1440) < 2 && Math.abs(full.height - 900) < 2 &&
+    await page.locator('[data-hud-panel="scorePanel"]').count() === 0);
+  await page.keyboard.press("Escape");
+  await until(() => page.evaluate(() => document.querySelector('[data-testid="sim-viewport"]')?.dataset.immersive === "false"), 5000);
+  check("A2f Esc exits fullscreen and restores HUD", await page.locator('[data-hud-panel="scorePanel"]').count() === 1);
+  await page.getByTestId("sim-fullscreen-enter").click();
+  await page.getByTestId("sim-fullscreen-exit").click();
+  check("A2g fullscreen exit button works without native API",
+    await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false");
+
+  // HUD hiding is independent of fullscreen and has an always reachable restore control.
+  await page.getByTestId("sim-hud-toggle").click();
+  check("A2h HUD can be hidden without entering fullscreen",
+    await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false" && await page.locator('[data-hud-panel="scorePanel"]').count() === 0);
+  await page.getByTestId("sim-hud-toggle").click();
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Назначить: Газ", exact: true }).click();
+  await page.keyboard.press("KeyS");
+  const conflictMessage = await page.getByTestId("keybindings-message").innerText();
+  const rejectedKeys = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.keybindings.v1") || "{}"));
+  check("A2o occupied brake key cannot also become throttle", conflictMessage.includes("уже назначена") && rejectedKeys.KeyW === "KeyW" && rejectedKeys.KeyS === "KeyS");
+  // Free Space, then assign it to fullscreen. Native HTML activation must NOT fire too.
+  await page.getByRole("button", { name: "Назначить: Ручник", exact: true }).click();
+  await page.keyboard.press("KeyT");
+  await page.getByRole("button", { name: "Назначить: Полный экран", exact: true }).click();
+  await page.keyboard.press("Space");
+  await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
+  await page.getByTestId("sim-hud-toggle").focus();
+  await page.keyboard.down("Space");
+  await page.keyboard.down("Space");
+  check("A2p remapped Space runs one action, not native button click or autorepeat",
+    await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "true" &&
+    await page.locator('[data-hud-panel="scorePanel"]').count() === 0);
+  await page.keyboard.up("Space");
+  await page.keyboard.press("Space");
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Сбросить назначения клавиш", exact: true }).click();
+  await page.getByRole("button", { name: "Назначить: Полный экран", exact: true }).click();
+  await page.keyboard.press("KeyY");
+  await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
+  await page.keyboard.press("KeyU");
+  check("A2i old fullscreen binding is disabled", await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "false");
+  await page.keyboard.press("KeyY");
+  check("A2j remapped fullscreen key works", await page.getByTestId("sim-viewport").getAttribute("data-immersive") === "true");
+  await page.keyboard.press("KeyY");
+  const savedKeys = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.keybindings.v1") || "{}"));
+  check("A2k bindings persisted", savedKeys.KeyU === "KeyY");
+  await page.getByRole("button", { name: "Управление", exact: true }).click();
+  await page.getByTestId("keybindings-editor").locator("summary").click();
+  await page.getByRole("button", { name: "Сбросить назначения клавиш", exact: true }).click();
+  await page.getByRole("button", { name: "Закрыть настройки управления", exact: true }).click();
+  const expandedViewport = await page.getByTestId("sim-viewport").boundingBox();
+  await page.getByTestId("sim-menus-toggle").click();
+  const compactViewport = await page.getByTestId("sim-viewport").boundingBox();
+  check("A2l one toggle hides both menus and returns their space to the scene",
+    !(await page.getByTestId("app-header").isVisible()) && !(await page.getByTestId("sim-toolbar").isVisible()) &&
+    compactViewport.y <= 10 && compactViewport.height > expandedViewport.height);
+  await page.getByTestId("sim-menus-toggle").click();
+  check("A2m menus can be restored from the scene",
+    await page.getByTestId("app-header").isVisible() && await page.getByTestId("sim-toolbar").isVisible());
+  await page.evaluate(() => { delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen; });
+  // Deterministic reproduction: fullscreen API resolves only after the user has exited.
+  await page.evaluate(() => {
+    const host = document.querySelector('[data-testid="sim-viewport"]');
+    window.__lateFullscreen = { exited: 0, originalExit: document.exitFullscreen,
+      originalElement: Object.getOwnPropertyDescriptor(document, "fullscreenElement") };
+    Object.defineProperty(host, "requestFullscreen", { configurable: true, value: () => new Promise(resolve => {
+      window.__lateFullscreen.resolve = () => {
+        Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => host });
+        document.exitFullscreen = () => { window.__lateFullscreen.exited++; return Promise.resolve(); };
+        resolve();
+      };
+    }) });
+  });
+  await page.getByTestId("sim-fullscreen-enter").click();
+  await page.getByTestId("sim-fullscreen-exit").click();
+  await page.evaluate(() => window.__lateFullscreen.resolve());
+  check("A2q запоздавший fullscreen-запрос отменяется после выхода", await until(() =>
+    page.evaluate(() => window.__lateFullscreen.exited === 1), 5000));
+  await page.evaluate(() => {
+    const saved = window.__lateFullscreen;
+    document.exitFullscreen = saved.originalExit;
+    if (saved.originalElement) Object.defineProperty(document, "fullscreenElement", saved.originalElement);
+    else delete document.fullscreenElement;
+    delete document.querySelector('[data-testid="sim-viewport"]').requestFullscreen;
+    delete window.__lateFullscreen;
+  });
+
+
 
   await page.getByRole("button", { name: "Быстрый старт" }).click();
   await sleep(400);
@@ -155,26 +278,46 @@ try {
   await page.keyboard.up("KeyS");
   check("A4  тормоз S останавливает машину", Boolean(stopped));
 
-  await page.keyboard.press("ShiftLeft");
-  await page.keyboard.press("ShiftLeft");
-  await page.keyboard.press("ShiftLeft");
-  await sleep(160);
-  const m2Shown = /\bM2\b/.test(await page.evaluate(() => document.body.innerText));
-  await page.keyboard.press("ShiftRight");
-  await sleep(160);
-  const m1Shown = /\bM1\b/.test(await page.evaluate(() => document.body.innerText));
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Shift+ArrowUp");
+  await page.keyboard.press("Shift+ArrowUp");
+  const m2Shown = await until(async () => /\bM2\b/.test(await page.evaluate(() => document.body.innerText)), 5000);
+  await page.keyboard.press("Shift+ArrowDown");
+  const m1Shown = await until(async () => /\bM1\b/.test(await page.evaluate(() => document.body.innerText)), 5000);
   await page.keyboard.press("KeyF");
-  await sleep(160);
-  const d1Shown = /\bD1\b/.test(await page.evaluate(() => document.body.innerText));
-  check("A4b клавиши Shift / Right Shift переключают КПП (R→N→M1→M2→M1), F возвращает D1", m2Shown && m1Shown && d1Shown, `M2=${m2Shown} M1=${m1Shown} D1=${d1Shown}`);
+  const d1Shown = await until(async () => /\bD1\b/.test(await page.evaluate(() => document.body.innerText)), 5000);
+  check("A4b стрелки и Shift+стрелки переключают КПП (R→N→M1→M2→M1), F возвращает D1", m2Shown && m1Shown && d1Shown, `M2=${m2Shown} M1=${m1Shown} D1=${d1Shown}`);
 
-  await page.keyboard.press("KeyH");
+  // A4c: Shift при нажатом тормозе — режим энергичного торможения, а не переключение передачи вверх
+  await page.keyboard.down("KeyS");
+  await sleep(140);
+  const gearBeforeShiftBrake = await page.evaluate(() => window.__cdtCockpit?.gear?.() ?? "");
+  await page.keyboard.press("ShiftLeft");
+  await sleep(200);
+  const brakePosBoost = await page.evaluate(() => window.__cdtCockpit?.state?.()?.brakePos ?? 0);
+  await page.keyboard.up("KeyS");
+  check("A4c Shift + тормоз усиливает давление в гидроприводе и не переключает передачу вверх",
+    brakePosBoost > 0.05 && gearBeforeShiftBrake === "D", JSON.stringify({ brakePosBoost, gearBeforeShiftBrake }));
+
+  // H — сигнал (клаксон), HUD прячет U: разделяем роли, чтобы одна клавиша не делала двух дел
+  await page.keyboard.press("KeyU");
   await sleep(500);
   text = await low(page);
-  check("A5  клавиша H: приборы скрыты, зеркала остались", !text.includes("км/ч") && text.includes("зеркало заднего вида"));
-  await page.keyboard.press("KeyH");
+  const uFullscreen = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="sim-viewport"]');
+    const r = el.getBoundingClientRect();
+    return el.dataset.immersive === "true" && Math.abs(r.width - innerWidth) < 2 && Math.abs(r.height - innerHeight) < 2;
+  });
+  check("A5 клавиша U включает полный экран, а не просто скрывает HUD",
+    uFullscreen && !text.includes("км/ч") && text.includes("зеркало заднего вида"));
+  await page.keyboard.press("KeyU");
+  const uRestored = await until(() => page.evaluate(() => document.querySelector('[data-testid="sim-viewport"]')?.dataset.immersive === "false"), 5000);
+  check("A5b повторное U выходит из fullscreen и восстанавливает интерфейс", uRestored && await page.locator('[data-hud-panel="scorePanel"]').count() === 1);
   await sleep(300);
 
+  // An async native request must not put the scene back in the top layer after exit.
+  const nativeExited = await until(() => page.evaluate(() => !document.fullscreenElement), 10000);
+  check("A5c выход из fullscreen убирает сцену из верхнего слоя браузера", nativeExited);
   await page.getByRole("button", { name: /Завершить/ }).click();
   await sleep(700);
   check("A6  «Завершить → Разбор» открывает протокол", (await low(page)).includes("разбор ошибок и реплей заезда"));
@@ -191,6 +334,15 @@ try {
   text = await low(page);
   check("A8  вердикт инструктора записан и сравнён с симулятором", text.includes("иванов и.и.") && (text.includes("расхождение с симулятором") || text.includes("совпало с симулятором")));
   await page.screenshot({ path: `${shotDir}/debrief.png`, fullPage: true });
+
+  await page.getByTestId("debrief-new-attempt").click();
+  const freshAttempt = await until(() => page.evaluate(() => {
+    const api = window.__cdtCockpit;
+    const st = api?.state?.();
+    return st && api.engineOn() === false && api.gear() === "P" && st.v === 0 && st.collisions === 0 &&
+      st.hasMoved === false && st.handbrake === true && !st.finished;
+  }), 5000);
+  check("A8b Новый заезд creates a cold-start attempt, not just a tab switch", freshAttempt);
 
   await tab(page, "Статистика");
   await sleep(500);
@@ -230,7 +382,7 @@ try {
   check("A15 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("A   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("A   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── B. Перенос журнала прежней версии ─────────
@@ -257,7 +409,7 @@ try {
   check("B4  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("B   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("B   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── C. Адаптер руля на подставном геймпаде ─────────
@@ -305,7 +457,7 @@ try {
   check("C7  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("C   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("C   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── D. Открытие файла напрямую (file://) ─────────
@@ -326,7 +478,7 @@ try {
   check("D2  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("D   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("D   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── F. Мастер калибровки руля с нестандартной раскладкой ─────────
@@ -375,7 +527,7 @@ try {
   check("F7  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("F   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("F   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── G. Реплей по своему сценарию и по импортированной карте ─────────
@@ -420,7 +572,7 @@ try {
   check("G5  ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("G   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("G   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── E. Небольшой экран ─────────
@@ -435,7 +587,7 @@ try {
   await page.screenshot({ path: `${shotDir}/small.png` });
   await ctx.close();
 } catch (e) {
-  check("E   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("E   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── H. Типичный школьный экран 1366×768 ─────────
@@ -450,7 +602,7 @@ try {
   await page.screenshot({ path: `${shotDir}/school.png` });
   await ctx.close();
 } catch (e) {
-  check("H   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("H   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── I. Заезд переживает переключение вкладок и закрытие страницы ─────────
@@ -460,22 +612,26 @@ try {
   await page.getByRole("button", { name: "Быстрый старт" }).click();
   await sleep(400);
   await page.keyboard.down("KeyW");
-  await sleep(900);
+  // Autosave intentionally ignores attempts that have not actually moved (>1.2 km/h).
+  // Wait for motion, not a wall-clock delay that can expire during a slow SwiftShader frame.
+  const rideStarted = await until(async () => (await speedOf(page)) >= 3, 20000);
   await page.keyboard.up("KeyW");
-  check("I0 заезд начался", !(await low(page)).includes("двигатель заглушен"));
+  check("I0 заезд действительно начался (скорость ≥3 км/ч)", rideStarted);
 
   await tab(page, "Статистика");
   await sleep(500);
   await tab(page, "3D-Тренажёр");
   await sleep(700);
-  check("I1 переключение вкладок не прерывает заезд", !(await low(page)).includes("двигатель заглушен"), "состояние сброшено");
+  check("I1 переключение вкладок не прерывает заезд", !(await low(page)).includes("двигатель заглушен"));
 
   await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-  await sleep(800);
+  const unfinishedSaved = await until(async () => (await readIdb(page)).metaCount === 1, 10000);
   await tab(page, "Разбор и Реплей");
-  await sleep(600);
-  const mid = await low(page);
-  check("I2 незавершённый заезд сохранён в журнале и помечен «в процессе»", mid.includes("в процессе") && mid.includes("из 300"));
+  const unfinishedVisible = await until(async () => {
+    const mid = await low(page);
+    return mid.includes("в процессе") && mid.includes("из 300");
+  }, 10000);
+  check("I2 незавершённый заезд сохранён в журнале и помечен «в процессе»", unfinishedSaved && unfinishedVisible);
 
   await tab(page, "3D-Тренажёр");
   await sleep(700);
@@ -501,7 +657,7 @@ try {
   check("I6 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("I   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("I   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── J. Политика данных, атрибуция, выгрузка и удаление ─────────
@@ -555,7 +711,7 @@ try {
   check("J5 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("J   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("J   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── K. Перенос панелей HUD долгим нажатием ─────────
@@ -574,17 +730,21 @@ try {
   const before = await statusBox();
   check("K1 панель статуса найдена и плавающая", Boolean(before), JSON.stringify(before));
 
-  // Длительное удержание 420 мс → панель переносится
+  // Длительное удержание 420 мс → панель переносится.
+  // Ждём фактического «взведения» (data-front=true), а не фиксированные 700 мс: под SwiftShader
+  // первый кадр после pointerdown может занять несколько сотен мс, и шаг мыши отменял нажатие (K2 падал).
+  const statusPanel = page.locator('[data-hud-panel="statusBar"]');
   await page.mouse.move(before.x + before.w / 2, before.y + before.h - 10);
   await page.mouse.down();
-  await sleep(700);
+  const statusArmed = await until(async () => (await statusPanel.getAttribute("data-front")) === "true", 5000);
   await page.mouse.move(before.x + before.w / 2 + 170, before.y + before.h / 2 - 95, { steps: 10 });
+  await sleep(120);
   await page.mouse.up();
   await sleep(400);
   const after = await statusBox();
   const moved = Boolean(after) && (Math.abs(after.x - before.x) > 60 || Math.abs(after.y - before.y) > 60);
-  check("K2 долгое нажатие переносит панель", moved,
-    `было ${before.x},${before.y} → стало ${after ? after.x + "," + after.y : "н/д"}`);
+  check("K2 долгое нажатие переносит панель", statusArmed === true && moved,
+    `взведена: ${statusArmed}, было ${before.x},${before.y} → стало ${after ? after.x + "," + after.y : "н/д"}`);
 
   // Длительное нажатие выводит панель на передний план/слой поверх всех остальных HUD-панелей (даже без переноса)
   const frontAfterDrag = await page.evaluate(() => {
@@ -600,8 +760,11 @@ try {
   // Раскладка и передний слой сохраняются после перезагрузки
   await page.reload();
   await page.waitForSelector("canvas");
-  await sleep(1300);
-  const restored = await statusBox();
+  // Панель обязана вернуться на сохранённое место: ждём совпадения, а не фиксированную паузу.
+  const restored = await until(async () => {
+    const box = await statusBox();
+    return box && after && Math.abs(box.x - after.x) < 4 && Math.abs(box.y - after.y) < 4 ? box : null;
+  }, 8000) ?? (await statusBox());
   const frontRestored = await page.evaluate(() => {
     const el = document.querySelector('[data-hud-panel="statusBar"]');
     return { z: Number(el?.style.zIndex || 0), front: el?.getAttribute("data-front") };
@@ -734,15 +897,35 @@ try {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await sleep(160);
   const cvBox = await canvasEl.boundingBox();
-  const knobPx = { x: cvBox.x + cvBox.width * 0.486, y: cvBox.y + cvBox.height * 0.486 };
-  const slotDPx = { x: cvBox.x + cvBox.width * 0.514, y: cvBox.y + cvBox.height * 0.546 };
+  // Точки органов берём из отладочного моста (реальный raycast/проекция), а не долями экрана:
+  // кадр салона меняется вместе с компоновкой (image-6.png), и фиксированные доли перестают попадать.
+  const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
+  const settleHead = () => until(() => page.evaluate(() => window.__cdtCockpit?.headSettled?.() ?? true), 6000, 120);
+  const shifterPx = async (id) => {
+    const p = await page.evaluate((sid) => window.__cdtCockpit?.shifterPoint?.(sid) ?? null, id);
+    return p ? toPx(p) : null;
+  };
+  const shifterSettled = await settleHead();
+  const knobPx = await shifterPx("lever");
+  if (!knobPx) throw new Error("Рукоятка КПП вне кадра");
+  const dragPx = async (id) => {
+    const p = await page.evaluate((sid) => window.__cdtCockpit?.shifterDragPoint?.(sid) ?? null, id);
+    if (!p) throw new Error(`Нет drag-цели ${id}: рычаг не захвачен или цель вне кадра`);
+    return toPx(p);
+  };
   const topTag = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName || "NONE", knobPx);
+  const knobPick = await page.evaluate(({ x, y }) => window.__cdtCockpit?.pickAt?.(x, y), {
+    x: (knobPx.x - cvBox.x) / cvBox.width, y: (knobPx.y - cvBox.y) / cvBox.height,
+  });
   await page.mouse.move(knobPx.x, knobPx.y);
   await sleep(140);
   const cabinHintText = (await page.locator('[data-testid="cockpit-shifter-hint"]').innerText().catch(() => "")).replace(/\s+/g, " ");
   const cabinHintOk = cabinHintText.includes("3D-РЫЧАГ") && cabinHintText.includes("M1–M6") && cabinHintText.includes("D1–D6");
   // BTSI: без нажатого тормоза селектор не выходит из P (блокировка brake-transmission shift interlock)
   await page.mouse.down();
+  // Клик — в pick-меш, перенос — на плоскости рукоятки с исходным offset захвата.
+  // Проекция паза на пластине ниже рукоятки даёт другую траекторию из-за перспективы.
+  const slotDPx = await dragPx("D");
   await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 6 });
   await sleep(80);
   const gearNoBrake = (await page.evaluate(() => window.__cdtCockpit?.gear?.() ?? "")).trim();
@@ -759,24 +942,17 @@ try {
   await page.keyboard.up("KeyS");
   await sleep(900);
   // Тянем рычаг влево (к водителю) в ручной паз M, затем качаем вверх к + (M2)
-  const slotMPx = { x: slotDPx.x - 28, y: slotDPx.y };
+  const slotMPx = await dragPx("M");
+  const plusPx = await dragPx("M+");
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 5 });
   await sleep(80);
   const afterDragM1 = (await hudDriveBtn.innerText()).trim();
-  await page.mouse.move(slotMPx.x, slotMPx.y - 26, { steps: 5 });
+  await page.mouse.move(plusPx.x, plusPx.y, { steps: 5 });
   await sleep(80);
   let afterDragM2 = (await hudDriveBtn.innerText()).trim();
-  if (afterDragM2 === "M1") {
-    // Под SwiftShader курсор мог не дойти до зоны качания «+» с первого раза: повторяем шаг
-    await page.mouse.move(slotMPx.x, slotMPx.y - 4, { steps: 3 });
-    await sleep(60);
-    await page.mouse.move(slotMPx.x, slotMPx.y - 34, { steps: 5 });
-    await sleep(90);
-    afterDragM2 = (await hudDriveBtn.innerText()).trim();
-  }
   // Возвращаем рычаг в центр M и толкаем вправо обратно в автомат D
   await page.mouse.move(slotMPx.x, slotMPx.y, { steps: 4 });
-  await page.mouse.move(slotDPx.x + 8, slotDPx.y, { steps: 5 });
+  await page.mouse.move(slotDPx.x, slotDPx.y, { steps: 5 });
   await page.mouse.up();
   await sleep(100);
   const afterBackD = (await hudDriveBtn.innerText()).trim();
@@ -786,7 +962,7 @@ try {
   check("K7c подсказки КПП, BTSI-блокировка P без тормоза и рычаг в салоне P→D1→M1→M2→D",
     hudHintOk && cabinHintOk && gearNoBrake === "P" && /тормоз/i.test(interlockNotice) &&
       afterDragD === "D1" && afterDragM1 === "M1" && afterDragM2 === "M2" && /^D[12]$/.test(afterBackD),
-    JSON.stringify({ topTag, hudHintOk, cabinHintOk, gearNoBrake, afterDragD, afterDragM1, afterDragM2, afterBackD }));
+    JSON.stringify({ shifterSettled, knobPick, topTag, hudHintOk, cabinHintOk, gearNoBrake, afterDragD, afterDragM1, afterDragM2, afterBackD }));
 
   // 3D-органы салона: 7" ШГУ, шайбы VOL/TUNE, аварийка, свет и ENGINE START/STOP доступны кликом
   // (координаты берём из отладочного моста __cdtCockpit — реальный raycast по 3D-мешам).
@@ -794,8 +970,8 @@ try {
   await page.keyboard.press("Digit2");
   await sleep(260);
   await page.getByTestId("cockpit-look-headunit").click();
-  await sleep(320);
-  const toPx = (p) => ({ x: cvBox.x + cvBox.width * p.normX, y: cvBox.y + cvBox.height * p.normY });
+  const headSettled = await settleHead();
+  await sleep(120);
   const controlPx = async (id) => {
     const p = await page.evaluate((cid) => window.__cdtCockpit?.controlPoint?.(cid) ?? null, id);
     return p ? toPx(p) : null;
@@ -816,7 +992,7 @@ try {
       (await hint.getAttribute("data-control")) === "headunit" &&
       /ШГУ/.test(await hint.innerText());
     await page.mouse.click(headPx.x, headPx.y);
-    await sleep(200);
+    await until(() => page.evaluate((previous) => window.__cdtCockpit?.headUnit?.().mode !== previous, headMode0), 5000, 120);
   }
   const headMode1 = await page.evaluate(() => window.__cdtCockpit?.headUnit?.().mode);
   if (tunePx) { await page.mouse.click(tunePx.x, tunePx.y); await sleep(180); }
@@ -904,12 +1080,50 @@ try {
     controlsFound && headHintOk && headMode0 === "assist" && headMode1 === "radio" &&
       radioState?.mode === "radio" && radioState?.radioPlaying === true && radioPaused &&
       hazardOn && lightsAfter !== lightsBefore && /"mode":"radio"/.test(huStored || ""),
-    JSON.stringify({ controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
+    JSON.stringify({ headSettled, controlsFound, headHintOk, headMode0, headMode1, radioState, radioPaused, hazardOn, lightsBefore, lightsAfter }));
+
+  // K9: взгляд водителя тремя детентами (левое зеркало → дорога → правое) и сигнал клаксона.
+  // Инерция шеи считается по реальному времени кадра, но headless-рендер медленный,
+  // поэтому довод ждём опросом, а не фиксированным sleep.
+  await page.keyboard.press("Digit2");
+  await sleep(260);
+  const lookNow = () => page.evaluate(() => window.__cdtCockpit?.look?.() ?? { detent: 99, yawDeg: 0 });
+  // Начинаем с явного «дорога»: предыдущие проверки могли оставить взгляд на ШГУ
+  await page.getByTestId("head-detent-road").click();
+  await until(async () => Math.abs((await lookNow()).yawDeg) < 6, 12000);
+  const roadState = await lookNow();
+  await page.getByTestId("head-detent-left").click();
+  await until(async () => (await lookNow()).yawDeg > 30, 12000);
+  const leftState = await lookNow();
+  await page.getByTestId("head-detent-right").click();
+  await until(async () => (await lookNow()).yawDeg < -30, 12000);
+  const rightState = await lookNow();
+  await page.getByTestId("head-detent-road").click();
+  await until(async () => Math.abs((await lookNow()).yawDeg) < 6, 12000);
+  const backState = await lookNow();
+  // Клавиша H — клаксон: в кадре состояния появляется horn, после отпускания снимается
+  await page.keyboard.down("h");
+  const hornOn = await until(
+    async () => (await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === true)) === true,
+    6000,
+    50
+  );
+  await page.keyboard.up("h");
+  const hornOff = await until(
+    async () => (await page.evaluate(() => window.__cdtCockpit?.state?.()?.horn === false)) === true,
+    6000,
+    50
+  );
+  check("K9 взгляд тремя детентами (левое зеркало → дорога → правое) и сигнал H на руле",
+    roadState.detent === 0 && Math.abs(roadState.yawDeg) < 6 && leftState.yawDeg > 30 &&
+      rightState.yawDeg < -30 && rightState.detent === -1 && Math.abs(backState.yawDeg) < 6 &&
+      hornOn === true && hornOff === true,
+    JSON.stringify({ roadState, leftState, rightState, backState, hornOn, hornOff }));
 
   check("K8 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("K   сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("K   сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── L. Настраиваемый выворот и раздельные отражения ─────────
@@ -947,9 +1161,9 @@ try {
   check("L3 отключение боковых зеркал не меняет задний кадр",await sideL.count()===0 && (await grab(rear)).hash===baseline.hash);
   await page.getByRole("button", { name: "Боковые", exact:true }).click();
   await page.getByRole("button", { name: "Заднее", exact:true }).click();
-  await page.keyboard.press("KeyH"); await sleep(200);
-  check("L4 H сохраняет выбор зеркал, не создавая пустые отражения",await rear.count()===0 && await sideL.count()===1 && await sideR.count()===1);
-  await page.keyboard.press("KeyH"); await sleep(200);
+  await page.keyboard.press("KeyU"); await sleep(200);
+  check("L4 U сохраняет выбор зеркал, не создавая пустые отражения",await rear.count()===0 && await sideL.count()===1 && await sideR.count()===1);
+  await page.keyboard.press("KeyU"); await sleep(200);
   await page.getByRole("button", { name: "Заднее", exact:true }).click();
 
   await page.getByRole("button", { name: "Быстрый старт" }).click();
@@ -988,7 +1202,7 @@ try {
   check("L12 ошибок в консоли нет", errors.length===0, errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch(e) {
-  check("L сценарий выполнен без исключений",false,String(e.message).slice(-460));
+  check("L сценарий выполнен без исключений",false,String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── M. Два пальца: газ удерживается независимо от перемещения тормоза ─────────
@@ -1027,7 +1241,7 @@ try {
   check("M5 ошибок в консоли нет",errors.length===0,errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("M сценарий выполнен без исключений",false,String(e.message).slice(-460));
+  check("M сценарий выполнен без исключений",false,String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── N. Передача контекста: документ в UI не расходится с HANDOFF.md ─────────
@@ -1065,7 +1279,7 @@ try {
   check("N6 ошибок в консоли нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("N сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("N сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── O. Редактор карт: импорт .osm XML, размещение и перенос знаков/объектов, открытие в 3D ─────────
@@ -1168,7 +1382,7 @@ try {
   check("O7 ошибок в консоли и WebGL нет", errors.length === 0, errors.slice(0, 3).join(" | "));
   await ctx.close();
 } catch (e) {
-  check("O сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("O сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 // ───────── P. Проверка маршрута OSM, неквадратные и произвольные границы, обрезка и фиксы редактора ─────────
@@ -1388,7 +1602,7 @@ try {
     `notes=${deconfNotes.slice(0, 110)} | ok=${deconfRouteOk} | owBlock=${revBlockedUnchecked} | err=${errors.slice(0, 2).join(" | ")}`);
   await ctx.close();
 } catch (e) {
-  check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
+  check("P сценарий выполнен без исключений", false, String(e.stack || e.message).slice(0, 5000));
 }
 
 await browser.close();

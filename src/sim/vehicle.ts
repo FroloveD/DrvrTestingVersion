@@ -33,6 +33,7 @@
  * - `predictTrajectoryArc` — прогнозная дуга габаритов (м) для подсказки в режиме инструктора.
  * - `getTrafficLightPhase` / `getPedestrianPose` — детерминированные функции `simTime` для светофоров и пешеходов.
  */
+import { getPlayerCar } from "./playerCar";
 import type {
   CrosswalkDef,
   Gear,
@@ -117,8 +118,16 @@ export const AUTO_SHIFT_DURATION_S = 0.24;
 export const MANUAL_SHIFT_DURATION_S = 0.18;
 
 /** Установившаяся скорость плавного самохода (creep) гидротрансформатора на D1/M1 на холостых оборотах (км/ч). */
-export const IDLE_CREEP_MAX_KMH = 6.5;
+export const IDLE_CREEP_MAX_KMH = 5;
 /** Максимальное установившееся замедление дисковых тормозов Kia Ceed JD на сухом асфальте с АБС (м/с²). */
+/**
+ * Постоянная времени нарастания давления в гидроприводе тормозов, с: педаль не даёт мгновенной
+ * полки — жидкость перетекает по магистрали, колодки выбирают зазор.
+ */
+export const BRAKE_BUILD_UP_TAU_S = 0.34;
+/** Постоянная времени отпускания тормоза (колодки отходят быстрее, чем нажимаются), с. */
+export const BRAKE_RELEASE_TAU_S = 0.13;
+
 export const SERVICE_BRAKE_MAX_DECEL = 8.4;
 
 export const FIXED_DT = 1 / 60;
@@ -147,17 +156,60 @@ export function clamp(v: number, min: number, max: number): number {
  * delta — центральный угол (рад): > 0 поворот влево, < 0 поворот вправо.
  * При повороте влево (delta > 0) левое колесо (+1) внутреннее => |угол| больше.
  */
-export function ackermannAngle(side: 1 | -1, delta: number): number {
+export function ackermannAngle(side: 1 | -1, delta: number, geo: CarGeometry = BASE_GEOMETRY): number {
   if (Math.abs(delta) < 1e-6) return 0;
   const turnSign = Math.sign(delta); // +1 влево, -1 вправо
   const cotCenter = 1 / Math.tan(Math.abs(delta));
-  const halfTrackOverBase = CAR.track / (2 * CAR.wheelbase);
+  const halfTrackOverBase = geo.track / (2 * geo.wheelbase);
   // Если side === turnSign, колесо внутреннее (cot меньше -> угол больше)
   const cotWheel = side === turnSign ? cotCenter - halfTrackOverBase : cotCenter + halfTrackOverBase;
   return turnSign * Math.atan(1 / Math.max(0.15, cotWheel));
 }
 
 export const WHEEL_LOCK = { min: 33, max: 42, defaultDeg: CAR.maxInnerDeg, step: 0.5 } as const;
+
+/**
+ * Габариты конкретной машины для столкновений и кинематики. По умолчанию берутся из учебного `CAR`,
+ * поэтому все прежние вызовы (старые реплеи, дебриф, самотесты) остаются побитно совместимыми.
+ */
+export type CarGeometry = {
+  length: number;
+  width: number;
+  wheelbase: number;
+  frontOverhang: number;
+  rearOverhang: number;
+  wheelRadius: number;
+  track: number;
+};
+
+/** Габариты по паспорту машины игрока (см. `sim/playerCar.ts`); `undefined` — учебный Ceed. */
+export function carGeometry(carId?: string | null): CarGeometry {
+  const c = getPlayerCar(carId);
+  return {
+    length: c.length,
+    width: c.width,
+    wheelbase: c.wheelbase,
+    frontOverhang: c.frontOverhang,
+    rearOverhang: c.rearOverhang,
+    wheelRadius: c.wheelRadius,
+    track: c.track,
+  };
+}
+
+const BASE_GEOMETRY: CarGeometry = {
+  length: CAR.length,
+  width: CAR.width,
+  wheelbase: CAR.wheelbase,
+  frontOverhang: CAR.frontOverhang,
+  rearOverhang: CAR.rearOverhang,
+  wheelRadius: CAR.wheelRadius,
+  track: CAR.track,
+};
+
+/** Габариты для кадра рендера/дебриифа: по машине заезда либо эталонный Ceed. */
+export function carGeometryFor(carId?: string | null): CarGeometry {
+  return carId ? carGeometry(carId) : BASE_GEOMETRY;
+}
 
 /** В том числе для старых записей и повреждённых настроек из хранилища. */
 export function normalizeWheelLock(value: unknown): number {
@@ -225,14 +277,26 @@ export function engineTorqueFactor(rpm: number): number {
  * Калибровано по паспорту Kia Ceed JD 1.6 MPI: 0–100 км/ч ≈ 10.8 с, Vmax = 180 км/ч,
  * реалистичный выбег в `N` до полной остановки и ступенчатое торможение двигателем в `D`/`M`/`R`.
  */
+/**
+ * Относительная сила компрессии (торможения двигателем) по передачам 1..6.
+ * Обратно пропорциональна передаточному числу: на 1-й ступени мотор тормозит в ~5 раз сильнее,
+ * чем на 6-й, — именно так машина «сама останавливается» на передаче, если отпустить газ.
+ */
+export const ENGINE_BRAKE_GEAR_RATIO = [0, 5.6, 3.1, 1.95, 1.4, 1.08, 0.86] as const;
+
 export function computeRoadDragDecel(
   absV: number,
   throttlePos = 0,
   activeForwardGear = 0,
   gear: Gear = "D",
-  engineOn = true
+  engineOn = true,
+  carAccelScale = 1
 ): number {
   const aeroAndRoll = 0.148 + 0.000331 * absV * absV + 0.0029 * absV;
+  // В N двигатель механически разомкнут с колёсами. Ни газ/обороты, ни прежняя
+  // ступень, ни компрессия двигателя не меняют выбег: только шины и воздух.
+  if (gear === "N") return aeroAndRoll;
+
   const coast = Math.pow(clamp(1 - throttlePos, 0, 1), 1.3);
   // Мягкое финальное докатывание шин/подшипников в последние ~2,5 км/ч при выбеге до полной остановки
   const lowSpeedRollSettle = 0.095 * (1 - clamp(absV / 0.72, 0, 1));
@@ -251,7 +315,10 @@ export function computeRoadDragDecel(
     // Вакуумное (насосное) торможение двигателем сильнее на пониженных передачах и высоких оборотах;
     // на 1-й ступени плавно сходит к нулю у порога холостого хода IDLE_CREEP_MAX_KMH (~6,5 км/ч),
     // где ЭБУ возобновляет подачу топлива и гидротрансформатор поддерживает плавный самоход D1.
-    const gearLoss = 0.14 + (MAX_FORWARD_GEAR + 1 - activeForwardGear) * 0.068;
+    // Компрессия по передаче: 0,16 базово + до 1,06 на 1-й. На 60 км/ч машина на M1 гасит
+    // скорость до самохода за ~11 с (в N — за минуту), как настоящий мотор на низшей ступени.
+    // Компрессия масштабируется моментом машины: у 1.2 MPI компрессия слабее, у 2.5 GDI — сильнее
+    const gearLoss = (0.16 + 0.19 * ENGINE_BRAKE_GEAR_RATIO[activeForwardGear]) * clamp(carAccelScale, 0.7, 1.35);
     const rpmFactor = 0.58 + 0.82 * clamp((wheelRpm - 1050) / 3600, 0, 1);
     const dfcoFade =
       activeForwardGear === 1
@@ -260,7 +327,7 @@ export function computeRoadDragDecel(
     const engineBrake = coast * gearLoss * rpmFactor * dfcoFade;
     return aeroAndRoll + engineBrake;
   }
-  // Нейтраль N / P: чистый свободный выбег шин и аэродинамики с плавной полной остановкой
+  // Остальные режимы без активной ступени (P удерживается парковочным стопором в stepSimulation)
   return aeroAndRoll + coast * (0.045 + lowSpeedRollSettle);
 }
 
@@ -270,14 +337,18 @@ export function computeRoadDragDecel(
  * Учитывает нелинейную модуляцию педали, лёгкое тепловое снижение на высоких скоростях и мягкий
  * довод колодок в последние ~2 км/ч для реалистичной плавной остановки без рывка.
  */
-export function computeServiceBrakeDecel(brakePos: number, absV: number): number {
+export function computeServiceBrakeDecel(brakePos: number, absV: number, shiftBoost = 0, brakeScale = 1): number {
   const b = clamp(brakePos, 0, 1);
   if (b <= 0.001) return 0;
   const kmh = absV * 3.6;
-  const pedalCurve = Math.pow(b, 1.15);
+  // Мягкая S-кривая педали: первые проценты хода лишь выбирают зазор колодок (символическое
+  // замедление), к 60 % выхода — уверенное торможение, к 100 % — полка АБС.
+  const pedalCurve = 0.06 + 0.94 * Math.pow(b, 1.9);
   const highSpeedFactor = 1 - 0.06 * clamp((kmh - 90) / 90, 0, 1);
   const finalStopSettle = 0.58 + 0.42 * clamp(absV / 0.6, 0, 1);
-  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle;
+  // Shift (энергичный ход педали) даёт до +18 % к замедлению
+  const boost = 1 + 0.18 * clamp(shiftBoost, 0, 1);
+  return SERVICE_BRAKE_MAX_DECEL * pedalCurve * highSpeedFactor * finalStopSettle * boost * clamp(brakeScale, 0.75, 1.4);
 }
 
 /**
@@ -293,7 +364,8 @@ export function computeIdleCreepAccel(
   throttlePos: number,
   brakePos: number,
   engineOn: boolean,
-  handbrake: boolean
+  handbrake: boolean,
+  creepKmh = IDLE_CREEP_MAX_KMH
 ): number {
   if (!engineOn || handbrake) return 0;
   const isFirstGear = (gear === "D" && autoSubGear === 1) || gear === "1";
@@ -303,10 +375,17 @@ export function computeIdleCreepAccel(
   const throttleHandoff = 1 - clamp(throttlePos * 2.6, 0, 1);
   if (throttleHandoff <= 0) return 0;
   const fwdKmh = Math.max(0, v * 3.6);
-  if (fwdKmh >= IDLE_CREEP_MAX_KMH) return 0;
-  const speedReserve = Math.pow(1 - fwdKmh / IDLE_CREEP_MAX_KMH, 1.12);
-  // 0.155 м/с² уравновешивает сопротивление качения на ~6,4 км/ч; +0.46 м/с² даёт мягкий старт с места
-  return brakeRelease * throttleHandoff * (0.155 + 0.46 * speedReserve);
+  const creepTarget = clamp(creepKmh, 3.5, 7);
+  if (fwdKmh >= creepTarget) return 0;
+  // Резерв тяги затухает плавно: к равновесной скорости подходим без обрыва, но неохотно
+  const speedReserve = Math.pow(1 - fwdKmh / creepTarget, 0.62);
+  // Самоход намеренно ленивый: тяга лишь на сотые м/с² превышает сопротивление качения,
+  // поэтому с места машина ползёт ~1,5 км/ч за первые 6 с и подходит к 5 км/ч за ~30 с:
+  // отпустил газ на ровном — машина почти не едет, как настоящий автомат на холостых.
+  // Базовая тяга задана для Ceed (5 км/ч); более крупным машинам нужен чуть больший момент,
+  // чтобы удержать свою равновесную скорость.
+  const base = 0.153 + (creepTarget - 5) * 0.022;
+  return brakeRelease * throttleHandoff * (base + 0.09 * speedReserve);
 }
 
 /** Экспоненциальный фильтр с ограничением скорости нарастания/спада (инерция маховика ДВС без скачков). */
@@ -343,7 +422,7 @@ export function stepEngineRpm(
     );
     const rising = freeTarget > prevRpm;
     return clamp(
-      smoothSlewRpm(prevRpm, freeTarget, rising ? 4.2 : 3.6, rising ? 5400 : 4600, dt),
+      smoothSlewRpm(prevRpm, freeTarget, rising ? 4.2 : 8.0, rising ? 5400 : 7000, dt),
       0,
       ENGINE_REDLINE_RPM
     );
@@ -425,16 +504,21 @@ export function computeEngineAccel(
 }
 
 /** Четыре угла кузова автомобиля в мировых координатах: [FL, FR, RR, RL]. */
-export function getCarCorners(x: number, z: number, h: number): [Vec2, Vec2, Vec2, Vec2] {
+export function getCarCorners(
+  x: number,
+  z: number,
+  h: number,
+  geo: CarGeometry = BASE_GEOMETRY
+): [Vec2, Vec2, Vec2, Vec2] {
   // x, z — середина колёсной базы. Смещение геометрического центра кузова вперёд:
-  const centerShiftZ = (CAR.frontOverhang - CAR.rearOverhang) / 2; // +0.05 м
+  const centerShiftZ = (geo.frontOverhang - geo.rearOverhang) / 2; // +0.05 м (Ceed)
   const fx = Math.sin(h);
   const fz = Math.cos(h);
   const lx = Math.cos(h);
   const lz = -Math.sin(h);
 
-  const halfL = CAR.length / 2;
-  const halfW = CAR.width / 2;
+  const halfL = geo.length / 2;
+  const halfW = geo.width / 2;
   const bodyX = x + fx * centerShiftZ;
   const bodyZ = z + fz * centerShiftZ;
 

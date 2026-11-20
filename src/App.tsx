@@ -103,6 +103,8 @@ function errorText(err: unknown): string {
 }
 
 export default function App() {
+  const [headerHidden, setHeaderHidden] = useState(false);
+  const [newAttemptRequest, setNewAttemptRequest] = useState(0);
   const [tab, setTab] = useState<TabId>("sim");
   const [scenarioId, setScenarioId] = useState<ScenarioId>("bay_90");
   const [ruleSet, setRuleSet] = useState<RuleSet>(loadStoredRules);
@@ -339,7 +341,8 @@ export default function App() {
       <div className="app-bg" />
 
       {/* Компактная верхняя шапка рабочей станции */}
-      <header className="sticky top-0 z-40 border-b hairline bg-[#080d12]/92 backdrop-blur-md">
+      {headerHidden && tab !== "sim" && <button type="button" data-testid="app-menu-show" className="fixed left-2 top-2 z-50 btn btn-mini" onClick={() => setHeaderHidden(false)}>☰ Показать верхнее меню</button>}
+      <header data-testid="app-header" style={headerHidden ? { display: "none" } : undefined} className="sticky top-0 z-40 border-b hairline bg-[#080d12]/92 backdrop-blur-md">
         <div className="mx-auto max-w-[1480px] px-4 sm:px-6 h-14 flex items-center gap-3">
           <button
             type="button"
@@ -393,6 +396,7 @@ export default function App() {
             })}
           </nav>
 
+          <button type="button" data-testid="app-menu-hide" className="btn btn-mini shrink-0" aria-label="Скрыть верхнее меню" title="Скрыть верхнее меню" onClick={() => setHeaderHidden(true)}>−</button>
           <a
             href="https://github.com/FroloveD/CytyDrivingTraining"
             target="_blank"
@@ -406,11 +410,14 @@ export default function App() {
       </header>
 
       {/* Основная рабочая область */}
-      <main className="relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-4 sm:px-6 py-4">
+      <main className={headerHidden && tab === "sim" ? "relative z-10 flex-1 w-full p-2" : "relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-3 sm:px-4 py-2"}>
         {/* Тренажёр остаётся примонтированным: переключение вкладок не прерывает заезд */}
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
             active={tab === "sim"}
+            newAttemptRequest={newAttemptRequest}
+            menusHidden={headerHidden}
+            onToggleMenus={() => setHeaderHidden((hidden) => !hidden)}
             scenarioId={scenarioId}
             onScenarioChange={setScenarioId}
             calibration={calibration}
@@ -476,6 +483,11 @@ export default function App() {
             onGenerateDemoAttempt={(att) => handleAttemptSaved({ ...att, student: DEMO_STUDENT }, true)}
             loadAllAttempts={loadAllAttempts}
             onClearJournal={clearJournal}
+            onNewAttempt={() => {
+              setNewAttemptRequest((request) => request + 1);
+              setTab("sim");
+              notify("Новый заезд: исходная позиция, двигатель заглушен, КПП P");
+            }}
             onBackToSim={() => setTab("sim")}
             onNotify={notify}
           />

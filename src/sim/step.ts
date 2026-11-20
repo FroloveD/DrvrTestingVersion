@@ -7,6 +7,7 @@
  */
 import { clampCarToWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import type { RuleSet } from "../scoring/rules";
+import { playerCarPhysics } from "./playerCar";
 import { findBayLineCross, findBayUnderCarCenter, findCompletedBay, SpatialGrid } from "./spatialGrid";
 import type {
   CalibrationConfig,
@@ -18,11 +19,14 @@ import type {
 } from "./types";
 import {
   ackermannAngle,
+  carGeometry,
   AUTO_DOWN,
   AUTO_DOWN_KICK,
   AUTO_SHIFT_DURATION_S,
   AUTO_UP,
   AUTO_UP_SPORT,
+  BRAKE_BUILD_UP_TAU_S,
+  BRAKE_RELEASE_TAU_S,
   CAR,
   clamp,
   computeEngineAccel,
@@ -177,6 +181,8 @@ export function stepSimulation(
 ): StepOutput {
   const s: SimState = {
     ...prev,
+    // Машина берётся из мира сценария; в старых записях поля нет — остаётся переданный carId (по умолчанию Ceed)
+    carId: world.playerCarId ?? prev.carId,
     redLightPassedIds: prev.redLightPassedIds,
     completedCheckpointIds: prev.completedCheckpointIds,
   };
@@ -217,6 +223,7 @@ export function stepSimulation(
   s.belt = input.belt;
   s.lights = input.lights;
   s.signal = input.signal;
+  s.horn = input.horn === true;
 
   // Парковочная блокировка P: удерживает автомобиль даже при нажатом газе
   if (s.gear === "P") {
@@ -228,8 +235,8 @@ export function stepSimulation(
   s.swDeg = clamp(input.steerWheelDeg, -540, 540);
   s.maxInnerWheelDeg = normalizeWheelLock(calibration.maxInnerWheelDeg);
   s.steer = wheelDegToSteerRad(s.swDeg, s.maxInnerWheelDeg);
-  s.steerLeft = ackermannAngle(1, s.steer);
-  s.steerRight = ackermannAngle(-1, s.steer);
+  s.steerLeft = ackermannAngle(1, s.steer, carGeometry(s.carId));
+  s.steerRight = ackermannAngle(-1, s.steer, carGeometry(s.carId));
 
   // Если экзамен прекращён мгновенно в строгом режиме — машина остановлена
   if (s.finished && s.finishedReason === "immediate_fail") {
@@ -267,17 +274,17 @@ export function stepSimulation(
   // Плавный гидропривод тормозов (ВУТ + АБС), электронная заслонка Kefico ETC (с Brake Override) и пауза КПП
   const brake = clamp(input.brake, 0, 1);
   const prevBrakePos = s.brakePos ?? 0;
-  const brRate = brake > prevBrakePos ? 9.5 : 15.0;
-  s.brakePos = clamp(
-    prevBrakePos + (brake - prevBrakePos) * Math.min(1, dt * brRate),
-    0,
-    1
-  );
+  // Мягкая кривая гидропривода: давление набирается с постоянной времени ВУТ, а не мгновенно.
+  // Shift (энергичное нажатие) ускоряет набор вдвое и добавляет 14 % хода педали.
+  const boost = input.shiftBoost ? 1 : 0;
+  const tau = brake > prevBrakePos ? BRAKE_BUILD_UP_TAU_S / (1 + boost) : BRAKE_RELEASE_TAU_S;
+  const targetBrake = clamp(brake * (1 + 0.14 * boost), 0, 1);
+  s.brakePos = clamp(prevBrakePos + (targetBrake - prevBrakePos) * Math.min(1, dt / tau), 0, 1);
   if (s.brakePos < 0.001 && brake === 0) s.brakePos = 0;
 
   // Brake Override System: нажатая педаль тормоза перекрывает подачу газа (как в реальном ЭБУ Kia Ceed JD)
   const throttleCmd = s.engineOn && brake <= 0.12 ? clamp(input.throttle, 0, 1) : 0;
-  const thRate = throttleCmd > s.throttlePos ? 10.5 : 8.5;
+  const thRate = throttleCmd > s.throttlePos ? 10.5 : 18; // быстрое закрытие после отпускания, без «зависшего» газа
   s.throttlePos = clamp(
     s.throttlePos + (throttleCmd - s.throttlePos) * Math.min(1, dt * thRate),
     0,
@@ -317,6 +324,9 @@ export function stepSimulation(
   }
 
   // Продольная динамика (инвариант №11: тормоз S гасит скорость до 0 и никогда не даёт задний ход)
+  const carPhysics = playerCarPhysics(s.carId);
+  // Габариты именно этой машины: клиренс в боксах, ширина коридора, свес до стоп-линии
+  const carGeo = carGeometry(s.carId);
   const isForwardGear = s.gear === "D" || isManualGear(s.gear);
   const activeForwardGear = isForwardGear ? s.autoSubGear : 0;
   const creepAccel = computeIdleCreepAccel(
@@ -326,7 +336,8 @@ export function stepSimulation(
     s.throttlePos,
     s.brakePos,
     s.engineOn,
-    s.handbrake
+    s.handbrake,
+    carPhysics.creepKmh
   );
   let accel =
     computeEngineAccel(
@@ -339,7 +350,14 @@ export function stepSimulation(
       s.shiftTimer
     ) + creepAccel;
 
-  const drag = computeRoadDragDecel(Math.abs(s.v), s.throttlePos, activeForwardGear, s.gear, s.engineOn);
+  const drag = computeRoadDragDecel(
+    Math.abs(s.v),
+    s.throttlePos,
+    activeForwardGear,
+    s.gear,
+    s.engineOn,
+    carPhysics.accelScale
+  );
   if (s.v !== 0) {
     accel -= Math.sign(s.v) * drag;
   } else if (accel !== 0) {
@@ -359,12 +377,13 @@ export function stepSimulation(
       s.v = 0;
     }
   }
-  // Жёсткий потолок скорости: ровно 180 км/ч (50.0 м/с) вперёд и 14 км/ч назад
-  s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, MAX_SPEED_MS);
+  // Жёсткий потолок скорости: электронный ограничитель машины (у Ceed — ровно 180 км/ч) и 14 км/ч назад
+  s.v = clamp(s.v, -MAX_REVERSE_KMH / 3.6, Math.min(MAX_SPEED_MS, carPhysics.vmaxKmh / 3.6));
 
   // Рабочий дисковый тормоз S (прогрессивный гидропривод + плавный довод к 0 км/ч без отката назад)
   if (s.brakePos > 0) {
-    const dv = computeServiceBrakeDecel(s.brakePos, Math.abs(s.v)) * dt;
+    const dv =
+      computeServiceBrakeDecel(s.brakePos, Math.abs(s.v), input.shiftBoost ? 1 : 0, carPhysics.brakeScale) * dt;
     if (Math.abs(s.v) <= dv) s.v = 0;
     else s.v -= Math.sign(s.v) * dv;
   }
@@ -407,14 +426,15 @@ export function stepSimulation(
 
     const nextX = clamp(s.x + Math.sin(s.h) * ds, world.bounds.minX, world.bounds.maxX);
     const nextZ = clamp(s.z + Math.cos(s.h) * ds, world.bounds.minZ, world.bounds.maxZ);
-    const nextH = s.h + (ds / CAR.wheelbase) * Math.tan(s.steer);
+    // База колёс из паспорта машины: длинный Sorento описывает тот же угол шире, чем Picanto
+    const nextH = s.h + (ds / carGeo.wheelbase) * Math.tan(s.steer);
     if (isValidBoundaryPolygon(world.boundaryPolygon)) {
       const polyPos = clampCarToWorldBoundary(
         nextX,
         nextZ,
         nextH,
-        CAR.width * 0.5,
-        CAR.length * 0.5,
+        carGeo.width * 0.5,
+        carGeo.length * 0.5,
         world.bounds,
         world.boundaryPolygon
       );
@@ -426,7 +446,7 @@ export function stepSimulation(
     }
     s.h = nextH;
 
-    const { hit, checked } = grid.queryCarHit(s.x, s.z, s.h);
+    const { hit, checked } = grid.queryCarHit(s.x, s.z, s.h, carGeo);
     gridChecks = Math.max(gridChecks, checked);
     if (hit) {
       hitThisStep = true;
@@ -452,7 +472,7 @@ export function stepSimulation(
   }
 
   // Колёса и крен/тангаж кузова
-  s.wheelSpin += (s.v * dt) / CAR.wheelRadius;
+  s.wheelSpin += (s.v * dt) / carGeo.wheelRadius;
   const aLong = dt > 0 ? clamp((s.v - s.prevV) / dt, -6, 6) : 0;
   s.prevV = s.v;
   if (aLong < -7.2 && s.brakePos > 0.85 && Math.abs(s.v) > 4.2 && s.speedingCooldown <= 0) {
@@ -499,7 +519,7 @@ export function stepSimulation(
   }
 
   // Детектор пересечения сплошной линии разметки парковочного бокса
-  const crossedBay = findBayLineCross(s.x, s.z, s.h, world.bays);
+  const crossedBay = findBayLineCross(s.x, s.z, s.h, world.bays, carGeo);
   if (crossedBay) {
     if (!s.inLineCross) {
       emit("line_cross", `Наезд габаритом на линию разметки (${crossedBay.label})`);
@@ -517,7 +537,7 @@ export function stepSimulation(
   }
 
   // Проверка светофоров и стоп-линий
-  const frontDist = CAR.wheelbase / 2 + CAR.frontOverhang;
+  const frontDist = carGeo.wheelbase / 2 + carGeo.frontOverhang;
   const noseX = s.x + Math.sin(s.h) * frontDist;
   const noseZ = s.z + Math.cos(s.h) * frontDist;
 
@@ -591,7 +611,7 @@ export function stepSimulation(
   }
 
   // Проверка парковочного бокса
-  const fullBay = findCompletedBay(s.x, s.z, s.h, world.bays);
+  const fullBay = findCompletedBay(s.x, s.z, s.h, world.bays, carGeo);
   const partialBay = fullBay ?? findBayUnderCarCenter(s.x, s.z, world.bays);
   s.activeBayId = partialBay ? partialBay.id : null;
 

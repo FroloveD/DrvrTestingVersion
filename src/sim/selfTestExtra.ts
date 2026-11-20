@@ -54,6 +54,7 @@ import {
   defaultCustomScenario,
   emptyCustomScenario,
   importEditorFileText,
+  normalizeCustomScenario,
   validateCustomScenario,
 } from "../scenarios/custom";
 import {
@@ -85,6 +86,8 @@ import {
 import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
 import {
+  advanceKeyboardThrottle,
+  stepKeyboardGear,
   applyShifterTarget,
   checkEngineToggle,
   checkGearChange,
@@ -96,13 +99,29 @@ import {
 } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
-import { SpatialGrid } from "./spatialGrid";
+import { isCarInsideBay, SpatialGrid } from "./spatialGrid";
+import { radioStationsFor } from "../audio/radioCatalog";
+import {
+  COCKPIT_PICK_ZONES,
+  HEAD_UNIT_PICK,
+  HORN_PICK,
+  pickBoxesOverlap,
+  SHIFTER_PICK,
+  WHEEL_PICK_CENTER,
+  WHEEL_RIM_RADIUS,
+} from "./cockpitLayout";
+import { cockpitFramingFor, cockpitWheelBand, projectCockpitPoint } from "../render/cockpitFraming";
+import { dampedHeadStep, HEAD_DETENTS, HEAD_TURN, detentLabel, detentYawRad } from "../render/headLook";
+import { DEFAULT_PLAYER_CAR_ID, PLAYER_CARS, getPlayerCar, playerCarPhysics } from "./playerCar";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { Gear, SimEvent } from "./types";
 import {
   ackermannAngle,
   CAR,
+  carGeometry,
+  getCarCorners,
   centralSteerLimit,
+  computeRoadDragDecel,
   clamp,
   ENGINE_IDLE_RPM,
   FIXED_DT,
@@ -446,7 +465,7 @@ export const extraCases: SelfTestCase[] = [
       // 1. Блокировки селектора АКПП и запуска двигателя (src/sim/controls.ts)
       assert(checkGearChange({ gear: "D", engineOn: true }, 1.2, "P") !== null, "P на ходу должен блокироваться");
       assert(checkGearChange({ gear: "R", engineOn: true }, -(PARK_LOCK_MAX_SPEED_MS + 0.05), "P") !== null, "P при откате назад должен блокироваться");
-      assert(checkGearChange({ gear: "D", engineOn: true }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
+      assert(checkGearChange({ gear: "D", engineOn: true, brake: 1 }, PARK_LOCK_MAX_SPEED_MS, "P") === null, "P на остановке должен разрешаться");
       assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "D") !== null, "Выход из P без ДВС должен блокироваться даже с тормозом");
       assert(checkGearChange({ gear: "P", engineOn: false, brake: 1 }, 0, "R") !== null, "Переход P → R без ДВС должен блокироваться");
       assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "D") !== null, "Выход из P без нажатого тормоза (BTSI) должен блокироваться");
@@ -454,6 +473,14 @@ export const extraCases: SelfTestCase[] = [
       assert(checkGearChange({ gear: "P", engineOn: true, brake: 0 }, 0, "N") !== null, "Переход P → N без тормоза должен блокироваться");
       assert(checkGearChange({ gear: "P", engineOn: true, brake: SHIFT_LOCK_MIN_BRAKE }, 0, "D") === null, "Выход из P с запущенным ДВС и нажатым тормозом разрешён");
       assert(checkGearChange({ gear: "P", engineOn: true, brake: 1 }, 0, "R") === null, "Переход P → R с нажатым тормозом разрешён");
+      for (const [from, to] of [["D", "N"], ["N", "D"], ["R", "N"], ["N", "R"]] as const) {
+        assert(checkGearChange({ gear: from, engineOn: true, brake: 0 }, 0, to) === null, `${from}→${to}: N без тормоза`);
+      }
+      for (const [from, to] of [["P", "N"], ["N", "P"], ["D", "P"], ["R", "P"], ["D", "R"], ["R", "D"]] as const) {
+        assert(checkGearChange({ gear: from, engineOn: true, brake: 0 }, 0, to) !== null, `${from}→${to}: нужен тормоз`);
+        assert(checkGearChange({ gear: from, engineOn: true, brake: 1 }, 0, to) === null, `${from}→${to}: с тормозом разрешено`);
+        assert(shiftLockState({ gear: from, engineOn: true, brake: 0 }, 0, to).locked, `${from}→${to}: индикация блокировки`);
+      }
       assert(checkEngineToggle({ gear: "D", engineOn: false }) !== null, "Запуск ДВС в D запрещён");
       assert(checkEngineToggle({ gear: "R", engineOn: false }) !== null, "Запуск ДВС в R запрещён");
       assert(checkEngineToggle({ gear: "P", engineOn: false }) === null && checkEngineToggle({ gear: "N", engineOn: false }) === null, "Запуск ДВС в P и N разрешён");
@@ -1368,6 +1395,50 @@ export const extraCases: SelfTestCase[] = [
       };
       const grid = new SpatialGrid([], 10);
 
+      // Клавиатура: стрелки не являются педалями; Shift сам по себе — только модификатор.
+      const kb = { engineOn: true, brake: 1 };
+      assert(stepKeyboardGear({ ...kb, gear: "P" }, 0, 1, 1, false).next === "R", "↑: P→R");
+      assert(stepKeyboardGear({ ...kb, gear: "R" }, 0, 1, 1, false).next === "N", "↑: R→N");
+      assert(stepKeyboardGear({ ...kb, gear: "N" }, 0, 1, 1, false).next === "D", "↑: N→D, не M");
+      assert(stepKeyboardGear({ ...kb, gear: "D" }, 0, 1, -1, false).next === "N", "↓: D→N");
+      assert(stepKeyboardGear({ ...kb, gear: "D" }, 0, 1, 1, true).next === "1", "Shift+↑: D→M1");
+      assert(stepKeyboardGear({ ...kb, gear: "2" }, 3, 2, -1, true).next === "1", "Shift+↓: M2→M1");
+      assert(stepKeyboardGear({ ...kb, gear: "P", brake: 0 }, 0, 1, 1, false).next === null, "↑ сохраняет BTSI");
+      let soft = 0, kick = 0;
+      for (let i = 0; i < 12; i++) {
+        soft = advanceKeyboardThrottle(soft, true, false, FIXED_DT);
+        kick = advanceKeyboardThrottle(kick, true, true, FIXED_DT);
+      }
+      assert(soft > 0.08 && soft < 0.10 && kick === 1, "Газ нарастает плавно; Shift+газ быстро до пола");
+      assert(advanceKeyboardThrottle(kick, false, true, FIXED_DT) === 0, "Отпускание сразу снимает команду газа");
+      for (const gear of ["P", "N", "R"] as const) {
+        assert(advanceKeyboardThrottle(0, true, true, FIXED_DT, gear) === advanceKeyboardThrottle(0, true, false, FIXED_DT, gear),
+          `Shift не ускоряет нажатие газа в P/N/R: ${gear}`);
+      }
+      for (const gear of ["1", "2", "3", "4", "5", "6"] as const) {
+        assert(advanceKeyboardThrottle(0, true, true, FIXED_DT, gear) === advanceKeyboardThrottle(0, true, true, FIXED_DT, "D"),
+          `M${gear}+Shift должен давать такой же быстрый ход педали, как D+Shift`);
+      }
+      let fine = 0;
+      for (let i = 0; i < 24; i++) fine = advanceKeyboardThrottle(fine, true, false, FIXED_DT / 2);
+      assert(Math.abs(fine - soft) < 1e-10, "Ход педали зависит от времени, не частоты вызова");
+
+      // Shift+газ в D вызывает существующий физический кикдаун, а не переводит селектор в M.
+      const runKick = (boosted: boolean) => {
+        let st = { ...createInitialState(track, true), gear: "D" as Gear, prevGear: "D" as Gear,
+          autoSubGear: 4, v: 60 / 3.6, throttlePos: 0 };
+        let pedal = 0;
+        for (let i = 0; i < 18; i++) {
+          pedal = advanceKeyboardThrottle(pedal, true, boosted, FIXED_DT);
+          st = stepSimulation(st, { ...createReadyInput("D"), throttle: pedal }, track, grid,
+            DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        }
+        return st;
+      };
+      const gentleDrive = runKick(false), kickDrive = runKick(true);
+      assert(kickDrive.gear === "D" && kickDrive.autoSubGear < gentleDrive.autoSubGear,
+        "Shift+газ должен понижать автоматическую ступень без перехода в M");
+
       // 1. Секвентальное переключение Shift (P ↔ R ↔ N ↔ M1..M6) и защитные блокировки (вкл. тормоз BTSI из P)
       assert(stepGearSequential({ gear: "P", engineOn: false, brake: 1 }, 0, 1, 1).next === null, "Shift из P без ДВС должен блокироваться");
       assert(stepGearSequential({ gear: "P", engineOn: true, brake: 0 }, 0, 1, 1).next === null, "Shift из P без тормоза должен блокироваться");
@@ -1388,7 +1459,7 @@ export const extraCases: SelfTestCase[] = [
       assert(stepGearSequential({ gear: "1", engineOn: true }, 6, 1, -1).next === null, "На ходу M1 не должна сбрасываться в N");
       // На месте полный спуск M6 → ... → P
       for (let i = 0; i < 8; i++) {
-        const res = stepGearSequential({ gear: cur, engineOn: true }, 0, 1, -1);
+        const res = stepGearSequential({ gear: cur, engineOn: true, brake: 1 }, 0, 1, -1);
         assert(res.next !== null, `Ожидалось понижение с ${cur}`);
         cur = res.next!;
       }
@@ -1444,7 +1515,33 @@ export const extraCases: SelfTestCase[] = [
           FIXED_DT
         ).state;
       }
+      let releaseState = { ...idleState, rpm: peakFreeRpm, throttlePos: 1 };
+      for (let i = 0; i < 60; i++) {
+        releaseState = stepSimulation(releaseState, { ...createReadyInput("P"), throttle: 0 }, track, grid,
+          DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+        if (i === 11) assert(releaseState.throttlePos < 0.02, "Заслонка закрывается за 0,2 с после отпускания");
+      }
+      assert(releaseState.rpm < ENGINE_IDLE_RPM + 300, `Обороты зависли через секунду без газа: ${releaseState.rpm}`);
       assert(idleState.rpm < ENGINE_IDLE_RPM + 80, `Обороты не вернулись к ХХ: ${idleState.rpm.toFixed(0)}`);
+
+      const keyboard100 = (boosted: boolean) => {
+        let st = createInitialState(track, true), pedal = 0;
+        for (let i = 0; i < 40 * 60; i++) {
+          pedal = advanceKeyboardThrottle(pedal, true, boosted, FIXED_DT, "D");
+          st = stepSimulation(st, { ...createReadyInput("D"), throttle: pedal }, track, grid,
+            DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+          if (st.v * 3.6 >= 100) return st.time;
+        }
+        return 40;
+      };
+      const normalKeyboard100 = keyboard100(false), fastKeyboard100 = keyboard100(true);
+      assert(normalKeyboard100 > 17 && normalKeyboard100 < 35 && normalKeyboard100 > fastKeyboard100 * 1.5,
+        `Обычный газ должен разгонять умеренно: ${normalKeyboard100.toFixed(2)} с; Shift ${fastKeyboard100.toFixed(2)} с`);
+      assert(fastKeyboard100 > 10 && fastKeyboard100 < 12, "Shift сохраняет паспортный полный разгон");
+      let heldPedal = 0;
+      for (let i = 0; i < 300; i++) heldPedal = advanceKeyboardThrottle(heldPedal, true, false, FIXED_DT);
+      assert(heldPedal === 0.6, "Удержание обычного газа не превращается в газ в пол");
+      assert(advanceKeyboardThrottle(1, true, false, 0.1) === 0.6, "Отпускание Shift возвращает умеренный газ");
 
       // 3. Разгон 0–100 км/ч и максимальная скорость 180 км/ч в режиме D (6АКПП)
       let autoS = createInitialState(track, true);
@@ -1514,7 +1611,7 @@ export const extraCases: SelfTestCase[] = [
         "Реплей заезда с переключениями Shift разошёлся с оригиналом"
       );
 
-      return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
+      return `0–100: D=${t100Auto!.toFixed(2)} с, Shift=${t100Man!.toFixed(2)} с · клавиатура: обычный=${normalKeyboard100.toFixed(2)} с, Shift=${fastKeyboard100.toFixed(2)} с · Vmax=${maxKmhAuto.toFixed(1)} км/ч (D6) · реплей 1:1`;
     },
   },
   {
@@ -1538,7 +1635,7 @@ export const extraCases: SelfTestCase[] = [
       };
       const grid = new SpatialGrid([], 10);
 
-      // 1. Самоход гидротрансформатора на D1 на минимальных оборотах (~800–880 об/мин, ~6,4 км/ч):
+      // 1. Самоход гидротрансформатора на D1 на минимальных оборотах (~800–880 об/мин, ровно 5 км/ч):
       // при нажатом тормозе S — 0 км/ч; при отпускании S — плавно трогается сам; на ручнике и в P/N/R — 0 км/ч
       let creepS = createInitialState(track, true);
       const rec = new AttemptRecorder(creepS, true);
@@ -1551,11 +1648,11 @@ export const extraCases: SelfTestCase[] = [
       // Удерживаем тормоз в D1 1,5 с — машина стоит неподвижно
       for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
       assert(creepS.v === 0, `В D1 с нажатым тормозом скорость обязана быть 0, получено ${creepS.v}`);
-      // Отпускаем тормоз и НЕ нажимаем газ — машина плавно разгоняется сама до ~6,2–6,5 км/ч на ХХ
-      for (let i = 0; i < 12 * 60; i++) runTick({ ...createReadyInput("D"), throttle: 0, brake: 0 });
+      // Отпускаем тормоз и НЕ нажимаем газ: машина лениво (не «прыгает») подходит к 5 км/ч за ~35 с
+      for (let i = 0; i < 45 * 60; i++) runTick({ ...createReadyInput("D"), throttle: 0, brake: 0 });
       const creepKmh = creepS.v * 3.6;
       assert(
-        creepKmh >= 5.6 && creepKmh <= IDLE_CREEP_MAX_KMH + 0.05 && creepS.autoSubGear === 1,
+        creepKmh >= IDLE_CREEP_MAX_KMH - 0.6 && creepKmh <= IDLE_CREEP_MAX_KMH + 0.05 && creepS.autoSubGear === 1,
         `Неверная скорость самохода D1: ${creepKmh.toFixed(2)} км/ч (передача D${creepS.autoSubGear})`
       );
       assert(
@@ -1565,7 +1662,8 @@ export const extraCases: SelfTestCase[] = [
       // Нажимаем тормоз S — плавная полная остановка в 0 без отката назад; отпускаем — снова едет сама
       for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 1 });
       assert(creepS.v === 0, `Тормоз S должен остановить самоход D1 в 0, получено ${creepS.v}`);
-      for (let i = 0; i < 90; i++) runTick({ ...createReadyInput("D"), brake: 0 });
+      // С 5 км/ч машина вновь «раскатывается» неохотно: за 12 с успевает вернуться к самоходу
+      for (let i = 0; i < 12 * 60; i++) runTick({ ...createReadyInput("D"), brake: 0 });
       assert(creepS.v * 3.6 > 1.5, "После отпускания тормоза самоход D1 должен плавно возобновиться");
       // В N, R и с ручником без газа самохода нет
       for (const idleInp of [
@@ -1580,29 +1678,60 @@ export const extraCases: SelfTestCase[] = [
         assert(st.v === 0, `Без газа в режиме ${idleInp.gear} (hb=${idleInp.handbrake}) машина должна стоять`);
       }
 
-      // 2. Реалистичное экстренное торможение 100–0 км/ч (паспорт Kia Ceed JD: ~38–44 м) + клевок кузова
-      let brakeS = { ...createInitialState(track, true), v: 100 / 3.6, prevV: 100 / 3.6, autoSubGear: 4, rpm: 4160 };
-      const z0 = brakeS.z;
-      let maxDivePitch = 0;
-      for (let i = 0; i < 6 * 60; i++) {
-        brakeS = stepSimulation(
-          brakeS,
-          { ...createReadyInput("D"), brake: 1 },
-          track,
-          grid,
-          DEFAULT_CALIBRATION,
-          DEFAULT_RULESET,
-          FIXED_DT
-        ).state;
-        maxDivePitch = Math.max(maxDivePitch, brakeS.pitch);
-        assert(brakeS.v >= 0, "Тормоз S никогда не должен давать откат назад");
-      }
-      const stopDist100 = brakeS.z - z0;
+      // 2. Реалистичное экстренное торможение 100–0 км/ч (паспорт Kia Ceed JD: ~38–44 м) + клевок кузова.
+      // Мягкое нажатие без Shift идёт по гидравлической кривой и чуть длиннее; с Shift (энергичное
+      // нажатие) гидропривод набирает давление вдвое быстрее — путь короче.
+      const brakeFrom100 = (shift: boolean) => {
+        let st = { ...createInitialState(track, true), v: 100 / 3.6, prevV: 100 / 3.6, autoSubGear: 4, rpm: 4160 };
+        const z0 = st.z;
+        let dive = 0;
+        for (let i = 0; i < 9 * 60; i++) {
+          st = stepSimulation(
+            st,
+            { ...createReadyInput("D"), brake: 1, shiftBoost: shift },
+            track,
+            grid,
+            DEFAULT_CALIBRATION,
+            DEFAULT_RULESET,
+            FIXED_DT
+          ).state;
+          dive = Math.max(dive, st.pitch);
+          assert(st.v >= 0, "Тормоз S никогда не должен давать откат назад");
+        }
+        return { st, dist: st.z - z0, dive };
+      };
+      const soft100 = brakeFrom100(false);
+      const hard100 = brakeFrom100(true);
+      const brakeS = hard100.st;
+      const maxDivePitch = hard100.dive;
+      const stopDist100 = hard100.dist;
       assert(
-        brakeS.v === 0 && stopDist100 >= 38 && stopDist100 <= 52,
-        `Тормозной путь 100–0 км/ч вне реалистичного диапазона (38–52 м): ${stopDist100.toFixed(1)} м`
+        brakeS.v === 0 && stopDist100 >= 38 && stopDist100 <= 54,
+        `Тормозной путь 100–0 км/ч с Shift вне диапазона (38–54 м): ${stopDist100.toFixed(1)} м`
+      );
+      assert(
+        hard100.dist < soft100.dist - 1.5,
+        `Shift обязан усиливать торможение: с Shift ${hard100.dist.toFixed(1)} м против ${soft100.dist.toFixed(1)} м`
+      );
+      // Мягкая кривая педали: за 1/3 с гидропривод не успевает выйти на полку
+      let softPedal = { ...createInitialState(track, true), v: 60 / 3.6, prevV: 60 / 3.6, autoSubGear: 3 };
+      for (let i = 0; i < 20; i++) {
+        softPedal = stepSimulation(softPedal, { ...createReadyInput("D"), brake: 1 }, track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+      }
+      assert(
+        softPedal.brakePos > 0.2 && softPedal.brakePos < 0.78,
+        `Гидропривод обязан набирать давление плавно: за 1/3 с получено ${softPedal.brakePos.toFixed(2)}`
       );
       assert(maxDivePitch > 0.02 && Math.abs(brakeS.pitch) < 0.004, "Кузов должен клюнуть при торможении и выровняться в 0");
+
+      // В N сопротивление не зависит от газа, состояния мотора и оставшейся ступени.
+      for (const speed of [0.3, 5, 60 / 3.6, 100 / 3.6]) {
+        const naturalDrag = 0.148 + 0.000331 * speed * speed + 0.0029 * speed;
+        for (const throttle of [0, 0.5, 1]) for (const sub of [0, 1, 6]) for (const running of [false, true]) {
+          assert(Math.abs(computeRoadDragDecel(speed, throttle, sub, "N", running, 1.35) - naturalDrag) < 1e-12,
+            "В N только аэродинамика и качение — без торможения коробкой/двигателем");
+        }
+      }
 
       // 3. Остановка выбегом без газа: в N — до 0 км/ч; в M2 торможение двигателем сильнее N; в D — до самохода D1
       let coastN = { ...createInitialState(track, true), gear: "N" as Gear, prevGear: "N" as Gear, v: 25 / 3.6, prevV: 25 / 3.6 };
@@ -1621,6 +1750,26 @@ export const extraCases: SelfTestCase[] = [
         ebM2.v + 1.2 < ebN.v,
         `Торможение двигателем на M2 (${(ebM2.v * 3.6).toFixed(1)} км/ч) должно быть заметно сильнее выбега в N (${(ebN.v * 3.6).toFixed(1)} км/ч)`
       );
+
+      // «Как настоящая»: на передаче машина тормозит мотором, а не катится как в нейтрали.
+      // 60 км/ч без газа до порога самохода: M1 ≈ 12 с, M2 ≈ 19 с, N ≈ 62 с.
+      const coastToCreep = (gear: Gear, sub: number) => {
+        let st = { ...createInitialState(track, true), gear, prevGear: gear, autoSubGear: sub, v: 60 / 3.6, prevV: 60 / 3.6 };
+        let sec = 0;
+        while (st.v * 3.6 > 5.2 && sec < 80) {
+          st = stepSimulation(st, createReadyInput(gear), track, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT).state;
+          sec += FIXED_DT;
+        }
+        return sec;
+      };
+      const tN = coastToCreep("N", 0);
+      const tM1 = coastToCreep("1", 1);
+      const tM2 = coastToCreep("2", 2);
+      assert(
+        tM1 < 16 && tM2 < tM1 + 8 && tN > tM1 * 3,
+        `Торможение двигателем должно быть сильным: 60→5 км/ч M1=${tM1.toFixed(1)} с, M2=${tM2.toFixed(1)} с, N=${tN.toFixed(1)} с`
+      );
+      assert(tM2 > tM1, `На низшей передаче торможение двигателем сильнее: M1=${tM1.toFixed(1)} с, M2=${tM2.toFixed(1)} с`);
 
       let coastD = { ...createInitialState(track, true), v: 50 / 3.6, prevV: 50 / 3.6, autoSubGear: 3 };
       for (let i = 0; i < 45 * 60; i++) {
@@ -1646,7 +1795,7 @@ export const extraCases: SelfTestCase[] = [
         "Реплей самохода D1 и прогрессивного тормоза разошёлся"
       );
 
-      return `D1 creep=${creepKmh.toFixed(1)} км/ч @ ${Math.round(creepS.rpm)} об/мин · 100–0=${stopDist100.toFixed(1)} м · M2<N · BTSI P OK`;
+      return `D1 creep=${creepKmh.toFixed(1)} км/ч · 100–0=${stopDist100.toFixed(1)} м (мягко ${soft100.dist.toFixed(1)} м) · M2<N · BTSI P OK`;
     },
   },
   {
@@ -1706,6 +1855,450 @@ export const extraCases: SelfTestCase[] = [
       assert(!driving.locked, "В движении в D селектор не заперт");
 
       return `станций=${INTERNET_RADIO_STATIONS.length} · WAV ${(wav.length / 1024).toFixed(0)} КБ/2 с · пик ${peak} · Shift Lock OK`;
+    },
+  },
+  {
+    id: "T37",
+    suite: "vehicle",
+    name: "Взгляд водителя: три точки внимания (зеркала/дорога), инерция шеи и свободный обзор ПКМ без возврата",
+    fn: () => {
+      // 1. Три детента внимания: дорога в центре, зеркала по краям, углы симметричны
+      assert(HEAD_DETENTS.length === 3, "Точек внимания должно быть ровно три: левое зеркало, дорога, правое зеркало");
+      assert(
+        HEAD_DETENTS.map((d) => d.id).join(",") === "left,road,right",
+        "Порядок точек внимания: левое зеркало → дорога → правое зеркало"
+      );
+      assert(HEAD_DETENTS.filter((d) => d.mirror).length === 2, "Две точки внимания обязаны быть зеркалами");
+      assert(detentYawRad(0) === 0, "Дорога — нулевой азимут головы");
+      assert(Math.abs(detentYawRad(1) + detentYawRad(-1)) < 1e-12, "Зеркала симметричны относительно дороги");
+      const mirrorDeg = (Math.abs(detentYawRad(1)) * 180) / Math.PI;
+      assert(
+        mirrorDeg > 30 && mirrorDeg < 50,
+        `Угол на боковое зеркало должен быть 30–50°, получено ${mirrorDeg.toFixed(1)}°`
+      );
+      assert(
+        Math.abs(mirrorDeg - HEAD_TURN.MIRROR_DEG) < 0.001,
+        "Детент зеркала обязан совпадать с геометрическим углом HEAD_TURN.MIRROR_DEG"
+      );
+      // Наклон на дорогу оставляет салонное зеркало в верхней трети кадра (взгляд чуть вниз)
+      assert(HEAD_TURN.PITCH_RAD < 0 && HEAD_TURN.PITCH_RAD > -0.12, "Взгляд на дорогу — лёгкий наклон вниз");
+      assert(
+        detentLabel(0).length > 0 && detentLabel(1).length > 0 && detentLabel(-1).length > 0 &&
+          detentLabel(1) !== detentLabel(-1),
+        "У каждой точки внимания должна быть своя подпись для HUD"
+      );
+
+      // 2. Инерция шеи: цель достигается за ~0,18 с (3τ), за один кадр — только часть пути
+      const dt = FIXED_DT;
+      const tau = HEAD_TURN.TAU_S;
+      const targetYaw = detentYawRad(1);
+      let yaw = 0;
+      let frames = 0;
+      while (Math.abs(targetYaw - yaw) > Math.abs(targetYaw) * 0.02 && frames < 300) {
+        yaw += (targetYaw - yaw) * Math.min(1, dt / tau);
+        frames++;
+      }
+      const travelSec = frames * dt;
+      assert(
+        travelSec > 0.05 && travelSec < 0.32,
+        `Довод головы до зеркала должен занимать 0,05–0,32 с, получено ${travelSec.toFixed(3)} с`
+      );
+      const afterOneFrame = targetYaw * Math.min(1, dt / tau);
+      assert(
+        Math.abs(afterOneFrame) < Math.abs(targetYaw) * 0.5,
+        "За один кадр голова не должна телепортироваться в зеркало — только часть пути"
+      );
+
+      // 2b. Довод не должен зависеть от ЧИСЛА КАДРОВ, только от времени: медленный headless-рендер
+      // (из-за него падал смоук K9: голова шагала по фиксированным 1/60 и за 0,4 с почти не двигалась)
+      const target = detentYawRad(1);
+      const settle = (frameDt: number) => {
+        let yaw = 0;
+        let steps = 0;
+        while (Math.abs(target - yaw) > Math.abs(target) * 0.02 && steps < 5000) {
+          yaw = dampedHeadStep(yaw, target, frameDt, HEAD_TURN.TAU_S);
+          steps++;
+        }
+        return { sec: steps * frameDt, steps };
+      };
+      const fast = settle(1 / 60); // 60 FPS
+      const slow = settle(1 / 12); // 12 FPS — тяжёлый рендер или headless без GPU
+      // Разница допустима в пределах дискретизации кадра: на 12 FPS шаг 83 мс, то есть довод
+      // засчитывается не позже чем на один тяжёлый кадр — но НЕ в N раз дольше, как было до фикса.
+      assert(
+        Math.abs(fast.sec - slow.sec) <= 1 / 12 + 0.01,
+        `Довод головы обязан зависеть только от времени: 60 FPS ${fast.sec.toFixed(3)} с vs 12 FPS ${slow.sec.toFixed(3)} с`
+      );
+      assert(
+        slow.sec > 0.05 && slow.sec < 0.32,
+        `На 12 FPS довод тоже 0,05–0,32 с, получено ${slow.sec.toFixed(3)} с`
+      );
+      // За ОДИН стандартный кадр 60 FPS голова не телепортируется: проходит лишь малую часть пути.
+      // (На 12 FPS довод физически укладывается в 1–2 кадра — это и есть смысл зависимости от времени.)
+      const oneFrame = dampedHeadStep(0, target, 1 / 60, HEAD_TURN.TAU_S);
+      assert(
+        Math.abs(oneFrame) < Math.abs(target) * 0.5,
+        "За один кадр 60 FPS голова не должна телепортироваться в зеркало"
+      );
+      // «Взгляд на ШГУ» не должен считаться дорогой: тест K9 мерил −35,5° вместо ~0°
+      const shifterYaw = -HEAD_TURN.SHIFTER_RAD;
+      assert(
+        Math.abs((shifterYaw * 180) / Math.PI) > 30,
+        "Взгляд на консоль ШГУ заведомо дальше порога «дорога» (6°) — смоук обязан сначала выбрать детент"
+      );
+
+      // 3. Свободный обзор: пределы ±100° и наклон −52…+26°, цель НЕ сбрасывается сама
+      const freeYaw = HEAD_TURN.maxRad;
+      assert(Math.abs((freeYaw * 180) / Math.PI - 100) < 0.001, "Свободный обзор ограничен ±100°");
+      assert(HEAD_TURN.minPitchRad < 0 && HEAD_TURN.maxPitchRad > 0, "Свободный обзор работает вверх и вниз");
+      let free = 0;
+      const dragStep = -0.0042 * 40; // 40 px вправо за кадр
+      for (let i = 0; i < 30; i++) {
+        free = Math.max(-HEAD_TURN.maxRad, Math.min(HEAD_TURN.maxRad, free + dragStep));
+        free += (free - free) * Math.min(1, dt / tau); // «цель» = накопленное смещение, возврата нет
+      }
+      assert(free !== 0, "Свободный обзор ПКМ не должен сам возвращаться на дорогу");
+      assert(
+        Math.abs(free) > HEAD_TURN.MIRROR_RAD * 0.5,
+        `Смещение ПКМ должно реально поворачивать голову (получено ${((free * 180) / Math.PI).toFixed(1)}°)`
+      );
+
+      // 4. Взгляд на консоль ШГУ/рычаг — тоже цель головы: возврат идёт туда же, где были
+      assert(HEAD_TURN.SHIFTER_RAD > 0.4 && HEAD_TURN.SHIFTER_PITCH_RAD > 0.3, "Взгляд на консоль: вниз-вправо");
+
+      return `3 точки (${mirrorDeg.toFixed(0)}° зеркала) · довод ${travelSec.toFixed(2)} с · свободный обзор ±${HEAD_TURN.maxDeg}° без возврата`;
+    },
+  },
+  {
+    id: "T38",
+    suite: "vehicle",
+    name: "Парк автомобилей игрока: реальные пропорции, ограничитель скорости, тормоза и самоход по паспорту",
+    fn: () => {
+      assert(PLAYER_CARS.length === 5, "В парке должно быть ровно пять машин: Picanto, Rio, Ceed, XCeed, Sorento");
+      assert(
+        PLAYER_CARS.map((c) => c.id).join(",") === "picanto,rio,ceed,xceed,sorento",
+        "Порядок машин в парке: от городского хэтчбека к SUV"
+      );
+      assert(getPlayerCar("ceed").id === "ceed", "Машина по умолчанию — учебный Ceed JD");
+      assert(getPlayerCar(undefined).id === "ceed" && getPlayerCar("unknown").id === "ceed", "Неизвестный id → Ceed");
+      assert(DEFAULT_PLAYER_CAR_ID === "ceed", "Идентификатор по умолчанию — ceed");
+
+      for (const c of PLAYER_CARS) {
+        // Пропорции: база + свесы = длина, колея меньше ширины, база в разумных пределах
+        assert(
+          Math.abs(c.frontOverhang + c.wheelbase + c.rearOverhang - c.length) < 0.02,
+          `${c.name}: база и свесы не сходятся с длиной кузова`
+        );
+        assert(c.track < c.width && c.track > c.width - 0.35, `${c.name}: колея должна быть чуть уже кузова`);
+        assert(c.wheelbase > 2.3 && c.wheelbase < 2.9, `${c.name}: база вне реального диапазона`);
+        assert(c.wheelRadius > 0.25 && c.wheelRadius < 0.37, `${c.name}: радиус колеса вне реального диапазона`);
+        assert(c.maxInnerDeg >= 30 && c.maxInnerDeg <= 42, `${c.name}: предел внутреннего колеса вне 30–42°`);
+        // Скоростные режимы и динамика монотонно растут с классом
+        assert(c.vmaxKmh >= 150 && c.vmaxKmh <= 215, `${c.name}: максимальная скорость вне 150–215 км/ч`);
+        assert(c.peakAccel > 2.5 && c.peakAccel < 5.2, `${c.name}: тяговое ускорение вне реального диапазона`);
+        assert(c.creepKmh >= 4 && c.creepKmh <= 6, `${c.name}: самоход D1 вне 4–6 км/ч`);
+        assert(c.accel0to100 > 4 && c.accel0to100 < 18, `${c.name}: 0–100 вне реального диапазона`);
+      }
+      // Иерархия парка: Picanto медленнее и компактнее, Sorento — самый большой и быстрый по Vmax
+      const pic = getPlayerCar("picanto");
+      const ceed = getPlayerCar("ceed");
+      const sor = getPlayerCar("sorento");
+      assert(pic.length < ceed.length && ceed.length < sor.length, "Длина кузова должна расти от Picanto к Sorento");
+      assert(pic.vmaxKmh < ceed.vmaxKmh && ceed.vmaxKmh < sor.vmaxKmh, "Максимальная скорость растёт с классом");
+      assert(pic.accel0to100 > ceed.accel0to100, "Picanto 1.2 медленнее Ceed 1.6 в разгоне до 100");
+      assert(sor.brakeScale > ceed.brakeScale, "Sorento тормозит сильнее Ceed (масса учтена в тормозах)");
+
+      // Физика Ceed обязана остаться побитно прежней: коэффициенты ровно 1
+      const base = playerCarPhysics("ceed");
+      assert(
+        base.accelScale === 1 && base.brakeScale === 1 && base.vmaxKmh === 180 && base.creepKmh === 5,
+        "Ceed — эталон: коэффициенты физики обязаны быть ровно 1 (совместимость с T01–T37)"
+      );
+      // И маленькая машина на ровном газу реально упирается в свой ограничитель, а не в общий 180
+      // Прямой участок 400 м без препятствий: разгон в пол до ограничителя занимает < 60 с
+      const world = {
+        ...buildScenarioWorld("bay_90", DEFAULT_CALIBRATION),
+        start: { x: 0, z: 0, h: 0 },
+        bays: [],
+        obstacles: [],
+        bounds: { minX: -20, maxX: 1200, minZ: -40, maxZ: 40 },
+        playerCarId: "picanto" as const,
+      };
+      const grid = new SpatialGrid([], 10);
+      let st = createInitialState(world, true);
+      const inp = createReadyInput();
+      inp.gear = "D";
+      inp.throttle = 1;
+      for (let i = 0; i < 60 * 55; i++) st = stepSimulation(st, inp, world, grid, DEFAULT_CALIBRATION, DEFAULT_RULESET).state;
+      const kmh = st.v * 3.6;
+      assert(
+        kmh > 150 && kmh <= 161,
+        `Picanto обязан упираться в свой ограничитель ~160 км/ч, получено ${kmh.toFixed(1)} км/ч`
+      );
+      assert(st.carId === "picanto", "Состояние должно запомнить машину заезда");
+
+      const p = playerCarPhysics("sorento");
+
+      // 5. Сценарий хранит машину и список станций; старый файл без полей ведёт себя как раньше
+      const legacy = normalizeCustomScenario({ title: "Старый файл" });
+      assert(legacy.playerCarId === undefined, "Старый файл сценария не должен получать машину по умолчанию в файле");
+      assert(legacy.radioStationIds === undefined, "Старый файл сценария не должен получать список станций");
+      assert(buildCustomWorld(legacy).playerCarId === undefined, "Мир старого сценария остаётся на учебном Ceed");
+      const tuned = normalizeCustomScenario({
+        title: "Свой заезд",
+        playerCarId: "xceed",
+        radioStationIds: ["record", "unknown-station", "europa-plus"],
+      });
+      assert(tuned.playerCarId === "xceed", "Сценарий должен запомнить выбранную машину");
+      assert(
+        Array.isArray(tuned.radioStationIds) && tuned.radioStationIds.join(",") === "record,europa-plus",
+        "Список станций сценария обязан отбросить неизвестный id и сохранить порядок"
+      );
+      const tunedWorld = buildCustomWorld(tuned);
+      assert(tunedWorld.playerCarId === "xceed", "Мир сценария должен нести машину игрока");
+      assert(
+        Array.isArray(tunedWorld.radioStationIds) && tunedWorld.radioStationIds.length === 2,
+        "Мир сценария должен нести список станций тюнера"
+      );
+      assert(
+        normalizeCustomScenario({ radioStationIds: [] }).radioStationIds === undefined &&
+          normalizeCustomScenario({ playerCarId: "tractor" as never }).playerCarId === undefined,
+        "Пустой список и неизвестная машина не должны попадать в сценарий"
+      );
+      assert(radioStationsFor(["record"]).map((st) => st.id).join(",") === "record", "Сценарий сужает тюнер до своих станций");
+      assert(
+        radioStationsFor(undefined).length === INTERNET_RADIO_STATIONS.length,
+        "Без списка тюнер показывает весь каталог станций"
+      );
+
+      return `5 машин · Ceed эталон 1:1 · Picanto ${kmh.toFixed(0)} км/ч · Sorento ${p.length.toFixed(2)} м / тормоза ×${p.brakeScale} · сценарий: машина + ${tunedWorld.radioStationIds?.length ?? 0} станции`;
+    },
+  },
+  {
+    id: "T39",
+    suite: "vehicle",
+    name: "Кадрировка вида из салона: руль в нижней трети, дорога и салонное зеркало в верхней, поза по паспорту машины",
+    fn: () => {
+      const framing = cockpitFramingFor("ceed");
+      // Эталонный кадр референса: глаз на уровне 1,19 м, чуть впереди центра базы, наклон вниз на ~3°
+      assert(
+        Math.abs(framing.eyeY - 1.195) < 0.01 && Math.abs(framing.eyeZ + 0.06) < 0.02,
+        "Ceed: глаз водителя должен стоять в выверенной точке референса (1,195 м; −0,06 м)"
+      );
+      assert(
+        framing.eyeAboveWheelM > 0.25 && framing.eyeAboveWheelM < 0.35,
+        "Глаз обязан быть выше ступицы руля на 0,25–0,35 м, иначе обод закроет дорогу"
+      );
+      assert(framing.pitchRad < 0 && framing.pitchRad > -0.09, "Взгляд на дорогу — лёгкий наклон вниз");
+      assert(framing.fovDeg >= 62 && framing.fovDeg <= 72, "FOV базового ракурса — 62–72° (как на референсе)");
+
+      // Колесо руля (доли от НИЗА кадра, как на референсе: верх обода ≈ 42 %, ступица ≈ 21 %)
+      const band = cockpitWheelBand(framing);
+      assert(
+        band.topV > 0.34 && band.topV < 0.52,
+        `Верх обода руля должен быть на 34–52 % высоты от низа, получено ${band.topV.toFixed(3)}`
+      );
+      assert(band.bottomV < 0.06, `Нижняя часть обода почти уходит за кадр, получено ${band.bottomV.toFixed(3)}`);
+      assert(band.hubV > 0.12 && band.hubV < 0.30, "Ступица руля в нижней трети кадра");
+      assert(Math.abs(band.hubU - 0.5) < 0.18, `Руль стоит по центру кадра (u=${band.hubU.toFixed(3)})`);
+
+      // Дорога: точка в 40 м впереди машины попадает в среднюю полосу кадра (не в небо и не за капот)
+      const road = projectCockpitPoint(framing, { x: 0, y: 0, z: 40 });
+      assert(road.v > 0.42 && road.v < 0.64, `Дорога в 40 м должна быть в средней полосе кадра (v=${road.v.toFixed(3)})`);
+      // Ближняя дорога в 12 м — выше руля, но ниже горизонта
+      const near = projectCockpitPoint(framing, { x: 0, y: 0, z: 12 });
+      assert(near.v > band.topV + 0.02, "Ближняя дорога обязана быть видна над ободом руля");
+      const far = projectCockpitPoint(framing, { x: 0, y: 0, z: 320 });
+      assert(far.v > near.v && far.v < 0.72, "Дальняя дорога уходит к горизонту, но не в верх кадра");
+
+      // Салонное зеркало — реальная геометрия рига: центр (0; 1,326; centerShiftZ + 0,644), высота полотна 0,078 м
+      const mirrorCenterZ = (CAR.frontOverhang - CAR.rearOverhang) / 2 + 0.644;
+      const mirror = projectCockpitPoint(framing, { x: 0, y: 1.326, z: mirrorCenterZ });
+      const mirrorTop = projectCockpitPoint(framing, { x: 0, y: 1.365, z: mirrorCenterZ });
+      const mirrorBottom = projectCockpitPoint(framing, { x: 0, y: 1.287, z: mirrorCenterZ });
+      assert(
+        mirror.u > 0.55 && mirror.u < 0.9 && mirror.v > 0.6 && mirror.v < 0.85,
+        `Салонное зеркало обязано быть справа вверху кадра (u=${mirror.u.toFixed(2)}, v=${mirror.v.toFixed(2)})`
+      );
+      assert(mirrorTop.v < 0.99 && mirrorBottom.v > 0.5, "Салонное зеркало видно целиком, не обрезано кромкой кадра");
+      // Дорога и зеркало в одном кадре: зеркало над дорогой, дорога над рулём
+      assert(mirrorBottom.v > road.v && road.v > band.topV, "Композиция: руль → дорога → салонное зеркало снизу вверх");
+
+      // Поза масштабируется по паспорту: Picanto ниже и ближе, Sorento выше и дальше — но кадр тот же по композиции.
+      // Высота считается по пропорции кузова: Picanto ниже Ceed-класса по посадке, Sorento заметно выше.
+      const pic = cockpitFramingFor("picanto");
+      const sor = cockpitFramingFor("sorento");
+      assert(sor.eyeY > framing.eyeY + 0.05, "У Sorento водитель сидит заметно выше, чем в Ceed");
+      assert(
+        pic.eyeZ > framing.eyeZ && sor.eyeZ < framing.eyeZ,
+        "Более длинная база отодвигает сиденье от руля, короткая — придвигает"
+      );
+      assert(pic.eyeX < sor.eyeX, "Чем шире кузов, тем дальше глаз от оси — меняется только поперечная поза");
+      for (const [id, f] of [
+        ["picanto", pic],
+        ["sorento", sor],
+      ] as const) {
+        const b = cockpitWheelBand(f);
+        const r = projectCockpitPoint(f, { x: 0, y: 0, z: 40 });
+        assert(b.topV > 0.3 && b.topV < 0.55, `${id}: обод руля вне рабочей полосы кадра`);
+        assert(r.v > 0.4 && r.v < 0.68, `${id}: дорога должна оставаться в средней полосе кадра`);
+        assert(r.v > b.topV, `${id}: дорога должна быть видна над ободом руля`);
+      }
+
+      return `Ceed: обод ${(band.topV * 100).toFixed(0)}–${(band.bottomV * 100).toFixed(0)} % · ступица ${(band.hubV * 100).toFixed(0)} % · салонное зеркало ${(mirror.v * 100).toFixed(0)} % · FOV ${framing.fovDeg.toFixed(0)}°`;
+    },
+  },
+  {
+    id: "T40",
+    suite: "vehicle",
+    name: "Габариты машины в физике: клиренс в боксе, радиус разворота и углы Аккермана по паспорту",
+    fn: () => {
+      const ceed = carGeometry("ceed");
+      const pic = carGeometry("picanto");
+      const sor = carGeometry("sorento");
+      // Эталон: без carId геометрия побитно равна прежним константам Ceed
+      const base = carGeometry(undefined);
+      assert(
+        base.length === CAR.length && base.width === CAR.width && base.wheelbase === CAR.wheelbase,
+        "Без машины геометрия обязана совпадать с константами CAR (совместимость старых реплеев)"
+      );
+      assert(
+        Math.abs(ceed.length - CAR.length) < 1e-9 && Math.abs(ceed.width - CAR.width) < 1e-9,
+        "Ceed из парка обязан совпадать с CAR по габаритам"
+      );
+      assert(
+        pic.length < ceed.length && ceed.length < sor.length && pic.width < sor.width,
+        "Габариты растут от Picanto к Sorento"
+      );
+
+      // Углы кузова реально масштабируются: Sorento заметно крупнее Picanto по площади
+      const area = (g: ReturnType<typeof carGeometry>) => {
+        const c = getCarCorners(0, 0, 0, g);
+        let s = 0;
+        for (let i = 0; i < 4; i++) {
+          const a = c[i];
+          const b = c[(i + 1) % 4];
+          s += a.x * b.z - b.x * a.z;
+        }
+        return Math.abs(s) / 2;
+      };
+      assert(
+        Math.abs(area(ceed) - CAR.length * CAR.width) < 0.02,
+        "Площадь кузова Ceed из углов обязана равняться length × width"
+      );
+      // Паспортные площади: Ceed 4,31×1,80 = 7,76 м², Sorento 4,81×1,90 = 9,14 м² (+18 %)
+      assert(area(sor) > area(ceed) * 1.15, "Sorento обязан быть заметно крупнее Ceed по площади");
+
+      // Бокс 2,5×5,3 м: Picanto влезает, Sorento — нет (это и есть смысл реальных пропорций)
+      const bay = {
+        id: 1040,
+        label: "Тестовый бокс",
+        cx: 0,
+        cz: 0,
+        h: 0,
+        width: 2.5,
+        length: 5.3,
+        kind: "perpendicular" as const,
+        openSide: "front" as const,
+        occupied: false,
+      };
+      assert(isCarInsideBay(0, 0, 0, bay, 0.04, pic), "Picanto обязан влезать в стандартный бокс 2,5×5,3 м");
+      assert(isCarInsideBay(0, 0, 0, bay, 0.04, ceed), "Ceed обязан влезать в стандартный бокс 2,5×5,3 м");
+      assert(isCarInsideBay(0, 0, 0, bay, 0.04, sor), "Sorento обязан влезать в стандартный бокс 2,5×5,3 м");
+      // Узкий компактный карман 1,75×3,9 м: Picanto встаёт, Ceed и Sorento — нет (реальные пропорции работают)
+      const tightBay = { ...bay, id: 1041, width: 1.75, length: 3.9 };
+      assert(
+        isCarInsideBay(0, 0, 0, tightBay, 0.04, pic),
+        "Picanto 1,595×3,595 м обязан влезать в узкий карман 1,75×3,9 м"
+      );
+      assert(
+        !isCarInsideBay(0, 0, 0, tightBay, 0.04, ceed),
+        "Ceed шириной 1,80 м не должен влезать в узкий карман 1,75 м — это проверяет габариты, а не константы"
+      );
+      assert(
+        !isCarInsideBay(0, 0, 0, tightBay, 0.04, sor),
+        "Sorento не должен влезать в узкий карман — габариты обязаны влиять на зачёт упражнения"
+      );
+
+      // Аккерман: у Picanto (малая колея при короткой базе) внутреннее колесо повёрнуто сильнее, чем у Sorento
+      const delta = 0.35;
+      const picInner = Math.abs(ackermannAngle(1, delta, pic));
+      const sorInner = Math.abs(ackermannAngle(1, delta, sor));
+      assert(picInner > sorInner, "Узкая короткая машина требует большего угла внутреннего колеса");
+      // Без геометрии — ровно прежнее значение (нулевой регресс)
+      assert(
+        Math.abs(ackermannAngle(1, delta) - ackermannAngle(1, delta, carGeometry("ceed"))) < 1e-12,
+        "Аккерман для Ceed не должен измениться ни на йоту"
+      );
+
+      // Радиус разворота по базе: короткий Picanto разворачивается круче
+      const radius = (g: ReturnType<typeof carGeometry>) => g.wheelbase / Math.tan(delta) + g.width / 2;
+      // При 20° поворота: Picanto ≈ 7,4 м против Sorento ≈ 8,7 м — разница ровно из баз и колеи
+      assert(radius(pic) < radius(sor) * 0.9, "Picanto обязан разворачиваться заметно круче Sorento");
+
+      // Попытка обязана запомнить машину: дебриф и реплей строят контур кузова по ней, а не по Ceed
+      const rideWith = (carId: "xceed" | undefined, ticks: number) => {
+        const w = carId
+          ? { ...buildScenarioWorld("bay_90", DEFAULT_CALIBRATION), playerCarId: carId }
+          : buildScenarioWorld("bay_90", DEFAULT_CALIBRATION);
+        const g = new SpatialGrid(w.obstacles, 10);
+        let st = createInitialState(w, true);
+        const rec = new AttemptRecorder(st, true);
+        const inp = createReadyInput();
+        for (let i = 0; i < ticks; i++) {
+          const out = stepSimulation(st, inp, w, g, DEFAULT_CALIBRATION, DEFAULT_RULESET, FIXED_DT);
+          st = out.state;
+          rec.recordTick(inp, st, out.newEvents);
+        }
+        return { state: st, attempt: rec.snapshot(st, w, DEFAULT_CALIBRATION, DEFAULT_RULESET) };
+      };
+      const xceedRide = rideWith("xceed", 90);
+      const attempt = xceedRide.attempt;
+      assert(xceedRide.state.carId === "xceed", "Состояние заезда должно нести машину мира");
+      assert(attempt.playerCarId === "xceed", "Попытка обязана сохранить машину заезда для дебриифа и реплея");
+      assert(
+        rideWith(undefined, 30).attempt.playerCarId === undefined,
+        "Заезд на Ceed не добавляет поле машины — старые записи совместимы"
+      );
+
+      return `Ceed ${ceed.length.toFixed(2)}×${ceed.width.toFixed(2)} м · Picanto влезает в карман 1,75 м, Ceed/Sorento нет · Аккерман ${(picInner * 57.3).toFixed(1)}° против ${(sorInner * 57.3).toFixed(1)}° · попытка запомнила ${attempt.playerCarId}`;
+    },
+  },
+  {
+    id: "T41",
+    suite: "vehicle",
+    name: "Зоны клика в салоне: сигнал на ступице руля не перехватывает кулису АКПП и шайбы ШГУ",
+    fn: () => {
+      // Регрессия, которую поймал смоук K7c/K7d: зона 23×23 см вокруг руля накрывала кулису и консоль,
+      // и клик по рычагу/шайбе TUNE уходил в клаксон. Проверяем зазоры в чистом ядре, без браузера.
+      assert(
+        HORN_PICK.sx < WHEEL_RIM_RADIUS && HORN_PICK.sy < WHEEL_RIM_RADIUS,
+        "Зона сигнала обязана быть меньше обода руля — это накладка ступицы, а не весь руль"
+      );
+      for (const zone of COCKPIT_PICK_ZONES) {
+        if (zone.id === HORN_PICK.id) continue;
+        assert(
+          !pickBoxesOverlap(HORN_PICK, zone),
+          `Зона сигнала не должна пересекаться с «${zone.id}»: иначе клик по органу уходит в клаксон`
+        );
+        assert(
+          !pickBoxesOverlap(HORN_PICK, zone, 0.01),
+          `Между сигналом и «${zone.id}» обязателен зазор ≥ 1 см, чтобы промах не бибикал`
+        );
+      }
+      // Смещение в сторону водителя (X влево) сохраняется: ступица стоит на оси руля, а не по центру кузова
+      assert(
+        HORN_PICK.cx > 0.35 && Math.abs(HORN_PICK.cx - WHEEL_PICK_CENTER.x) < 1e-9,
+        "Зона сигнала должна стоять ровно на оси руля водителя"
+      );
+      // Зона ШГУ и кулиса сами по себе не пересекаются — иначе непонятно, какой орган «побеждает»
+      assert(
+        !pickBoxesOverlap(HEAD_UNIT_PICK, SHIFTER_PICK),
+        "7\" ШГУ и кулиса АКПП обязаны быть раздельными зонами клика"
+      );
+      const gapShifter = Math.abs(HORN_PICK.cy - SHIFTER_PICK.cy) - (HORN_PICK.sy + SHIFTER_PICK.sy) / 2;
+      const gapUnit = Math.abs(HORN_PICK.cz - HEAD_UNIT_PICK.cz) - (HORN_PICK.sz + HEAD_UNIT_PICK.sz) / 2;
+      return `ступица ${(HORN_PICK.sx * 100).toFixed(0)} см · зазор до кулисы ${(Math.max(0, gapShifter) * 100).toFixed(0)} см по Y · до ШГУ ${(Math.max(0, gapUnit) * 100).toFixed(0)} см по Z`;
     },
   },
 ];

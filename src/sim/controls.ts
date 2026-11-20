@@ -92,15 +92,23 @@ export function shiftLockState(
       hint: "Включить P можно только после полной остановки (тормоз S)",
     };
   }
-  if (inp.gear === "P" && target !== "P" && (inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
+  if (requiresSelectorBrake(inp.gear, target) && (inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
     return {
       locked: true,
       reason: "brake",
       brakeRequired: true,
-      hint: "SHIFT LOCK: нажмите педаль тормоза (S), чтобы выйти из P",
+      hint: "SHIFT LOCK: нажмите педаль тормоза (S) для переключения селектора",
     };
   }
   return { locked: false, reason: null, brakeRequired: false, hint: "" };
+}
+
+/** P имеет приоритет над исключением N; ручные ступени не требуют нажатия тормоза. */
+function requiresSelectorBrake(current: Gear, next: Gear): boolean {
+  if (current === next) return false;
+  if (current === "P" || next === "P") return true;
+  if (current === "N" || next === "N") return false;
+  return (current === "R") !== (next === "R");
 }
 
 /**
@@ -110,6 +118,7 @@ export function shiftLockState(
  * - Включить `P` можно только практически на полной остановке (`|speedMs| <= 0.35` м/с).
  * - Вывести селектор из `P` в `R`, `N`, `D` или `1`..`6` можно только при запущенном двигателе (`engineOn === true`)
  *   и нажатой педали рабочего тормоза (`brake >= SHIFT_LOCK_MIN_BRAKE`, блокировка BTSI).
+ * - Вход в P и прямой переход R ↔ D/M требуют тормоза; N ↔ D/R — без тормоза.
  * - Понижение в ручную ступень `1`..`5` блокируется, если текущая скорость превышает безопасный предел оборотов ступени.
  *
  * @param inp Текущее состояние передачи, двигателя и педали тормоза.
@@ -125,6 +134,12 @@ export function checkGearChange(
   if (next === "P" && Math.abs(speedMs) > PARK_LOCK_MAX_SPEED_MS) {
     return "Парковку P можно включить только после полной остановки (тормоз S)";
   }
+  if (next === "R" && speedMs > DIRECTION_SWITCH_MAX_SPEED_MS) {
+    return "Остановитесь тормозом S перед включением заднего хода R";
+  }
+  if ((next === "D" || isManualGear(next)) && speedMs < -DIRECTION_SWITCH_MAX_SPEED_MS) {
+    return "Остановитесь тормозом S перед включением передней передачи";
+  }
   if (inp.gear === "P" && next !== "P") {
     if (!inp.engineOn) {
       return "Сначала запустите двигатель (I), затем удерживайте тормоз (S) и выберите передачу";
@@ -132,6 +147,9 @@ export function checkGearChange(
     if ((inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
       return "Удерживайте педаль тормоза (S или ТОРМОЗ), чтобы переключить КПП из P (Parking)";
     }
+  }
+  if (requiresSelectorBrake(inp.gear, next) && (inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
+    return "Удерживайте педаль тормоза (S или ТОРМОЗ) для переключения селектора; без тормоза доступны N ↔ D/R";
   }
   if (isManualGear(next)) {
     const targetNum = Number(next);
@@ -340,4 +358,20 @@ export function checkEngineToggle(inp: Pick<InputState, "gear" | "engineOn">): s
     return "Запуск двигателя возможен только в P (Parking) или N";
   }
   return null;
+}
+
+/** Клавиатура: ↑/↓ — селектор P/R/N/D; Shift+↑/↓ — ручные ступени. */
+export function stepKeyboardGear(inp: GearCheckInput, speedMs: number, autoSubGear: number, dir: 1 | -1, manual: boolean) {
+  if (manual) return stepGearSequential(inp, speedMs, autoSubGear, dir);
+  return stepShifterGate(isManualGear(inp.gear) ? { ...inp, gear: "D" } : inp, speedMs, autoSubGear, dir);
+}
+
+/** Цифровая педаль: обычный газ до 60 %; D/M+Shift — быстрый полный ход ≈0,08 с. */
+export function advanceKeyboardThrottle(current: number, pressed: boolean, kickdown: boolean, dt: number, gear: Gear = "D"): number {
+  // Отпущенная педаль не должна оставаться виртуально нажатой: инерцию заслонки считает ядро.
+  if (!pressed) return 0;
+  const fast = kickdown && (gear === "D" || isManualGear(gear));
+  const target = fast ? 1 : 0.6;
+  const rate = current > target ? 8 : fast ? 12 : 0.45;
+  return clamp(current + clamp(target - current, -rate * Math.max(0, dt), rate * Math.max(0, dt)), 0, 1);
 }

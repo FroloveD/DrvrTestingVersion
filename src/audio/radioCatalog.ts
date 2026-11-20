@@ -20,7 +20,33 @@ export type RadioStation = {
   notes: readonly number[];
   /** Базовая частота басовой линии. */
   bass: number;
+  /** Включена ли станция в список тюнера сценария (редактор списка подключаемых станций). */
+  enabled?: boolean;
 };
+
+/**
+ * Станции, включённые в сценарий (редактор списка): порядок каталога сохраняется,
+ * пустой/неизвестный список даёт весь каталог — старые сценарии не меняют поведения.
+ */
+export function enabledRadioStations(all: readonly RadioStation[] = INTERNET_RADIO_STATIONS): RadioStation[] {
+  const on = all.filter((st) => st.enabled !== false);
+  return on.length > 0 ? on : [...all];
+}
+
+/**
+ * Список станций для конкретного сценария: берём `radioStationIds` из сценария,
+ * неизвестные id отбрасываем, пустой результат — все станции каталога.
+ */
+export function radioStationsFor(
+  ids: readonly string[] | undefined,
+  all: readonly RadioStation[] = INTERNET_RADIO_STATIONS
+): RadioStation[] {
+  const active = enabledRadioStations(all);
+  if (!ids || ids.length === 0) return active;
+  const wanted = new Set(ids);
+  const picked = active.filter((st) => wanted.has(st.id));
+  return picked.length > 0 ? picked : active;
+}
 
 export const INTERNET_RADIO_STATIONS: readonly RadioStation[] = [
   {

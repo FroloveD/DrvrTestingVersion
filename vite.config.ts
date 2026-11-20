@@ -11,6 +11,13 @@ const __dirname = path.dirname(__filename);
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss(), viteSingleFile()],
+  // Превью внутри песочницы открывается с прокси-хоста *.e2b.app: без этого Vite отклоняет запрос 403
+  preview: {
+    allowedHosts: [".e2b.app", "localhost"],
+  },
+  server: {
+    allowedHosts: [".e2b.app", "localhost"],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

@@ -27,7 +27,7 @@ const STATUS_META: Record<PhaseStatus, { label: string; tone: "mint" | "amber" |
 
 export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) {
   const [phaseId, setPhaseId] = useState("ph4");
-  const [done, setDone] = useState<string[]>(loadStrategyProgress);
+  const [done, setDone] = useState<string[]>(() => loadStrategyProgress().filter((id) => NEXT_ACTIONS.some((action) => action.id === id)));
   const [showMarkdown, setShowMarkdown] = useState(false);
 
   const phase = STRATEGY_PHASES.find((p) => p.id === phaseId) ?? STRATEGY_PHASES[0];
@@ -49,14 +49,14 @@ export function StrategyView({ onNotify }: { onNotify: (msg: string) => void }) 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2 mb-1.5">
-            <Chip tone="amber">Ревизия стратегии</Chip>
+            <Chip tone="amber">План · 18.11.2026</Chip>
             <Chip tone="mint">{donePhases} из {STRATEGY_PHASES.length} фаз завершено</Chip>
             <Chip tone="neutral">прогресс действий: {done.length}/{NEXT_ACTIONS.length}</Chip>
           </div>
           <h2 className="text-2xl font-extrabold tracking-tight">Стратегия CityDrivingTraining</h2>
           <p className="text-[13px] text-[#9bafbc] mt-1 max-w-3xl">
-            Улучшенная стратегия по итогам этапов 0–3: что уже доказано кодом, что осталось и в каком порядке.
-            Главный сдвиг — от «строить симулятор» к «доказать доверие и выйти в школы».
+            Обновлено по текущей версии: управление и переназначения, fullscreen и компактные меню уже реализованы.
+            Сейчас — регрессии CI и визуальная проверка; затем калибровка оценки с инструкторами и пилот.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

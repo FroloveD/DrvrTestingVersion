@@ -32,6 +32,10 @@ export type InputState = {
   belt: boolean;
   lights: boolean;
   signal: TurnSignal;
+  /** Shift удерживается вместе с тормозом: педаль нажимается резче (быстрый набор давления). */
+  shiftBoost?: boolean;
+  /** Нажат сигнал (клаксон) — звуковой эффект, на физику не влияет. */
+  horn?: boolean;
 };
 
 export type Vec2 = { x: number; z: number };
@@ -61,6 +65,10 @@ export type SimState = {
   belt: boolean;
   lights: boolean;
   signal: TurnSignal;
+  /** Нажат клаксон (сигнал руля) — аудио-эффект, на физику не влияет. */
+  horn?: boolean;
+  /** Автомобиль игрока, на котором идёт заезд (`sim/playerCar.ts`); отсутствует — Ceed JD. */
+  carId?: PlayerCarId;
   wheelSpin: number; // рад
   pitch: number; // рад, тангаж кузова
   roll: number; // рад, крен кузова
@@ -243,6 +251,9 @@ export type RoadSegment = {
 
 export type ScenarioId = "bay_90" | "parallel_v2" | "city_osm" | "custom";
 
+/** Автомобиль игрока (парк в `sim/playerCar.ts`); по умолчанию — учебный Kia Ceed JD. */
+export type PlayerCarId = "picanto" | "rio" | "ceed" | "xceed" | "sorento";
+
 export type CalibrationConfig = {
   /** Предел внутреннего переднего колеса, градусы. Старые записи без поля используют 35°. */
   maxInnerWheelDeg?: number;
@@ -333,6 +344,13 @@ export type WorldData = {
    * карта OSM) — его снимок сохраняется в попытке, иначе реплей шёл бы по другому миру.
    */
   embedInAttempt?: boolean;
+  /**
+   * Автомобиль игрока для этого мира (`sim/playerCar.ts`). Отсутствие поля — учебный Ceed JD,
+   * поэтому старые сценарии, снимки попыток и реплеи остаются побитно совместимыми.
+   */
+  playerCarId?: PlayerCarId;
+  /** Список станций тюнера ШГУ для этого мира (id из `audio/radioCatalog.ts`); отсутствует — весь каталог. */
+  radioStationIds?: string[];
   /** Охватывающий прямоугольник мира (вычисляется по реальным пропорциям участка или `boundaryPolygon`). */
   bounds: WorldBounds;
   /**

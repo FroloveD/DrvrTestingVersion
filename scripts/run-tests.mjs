@@ -106,6 +106,13 @@ try {
   }
   console.log(`GATE 2/4 · Автотесты ядра: ${results.length}/${results.length} OK`);
 
+  // Renderer geometry regression: actual projection/ray methods, no browser or WebGL context.
+  const shifterBundle = join(tmpDir, "shifter-projection.mjs");
+  execFileSync(esbuildBin,
+    ["tests/shifter-projection.ts", "--bundle", "--platform=node", "--format=esm", `--outfile=${shifterBundle}`, "--log-level=error"],
+    { stdio: "inherit" });
+  await import(pathToFileURL(shifterBundle).href);
+
   // ───────── GATE 3: Документация как код ─────────
   for (const doc of REQUIRED_DOCS) {
     if (!existsSync(resolve(root, doc))) {
