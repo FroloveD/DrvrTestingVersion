@@ -20,6 +20,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
 import { EngineSound } from "../audio/engineSound";
+import { clampVolume, nextStationIndex, renderTrackWav, trackCacheKey } from "../audio/radioCatalog";
+import * as trackStore from "../audio/trackStore";
+import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_CLIPS, HEAD_UNIT_MODES, RADIO_STATIONS, type HeadUnitState } from "../render/cockpitDisplays";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
@@ -225,6 +228,15 @@ export function SimulatorView({
   const bindingsRef = useRef(bindings);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
   const [soundVolume, setSoundVolume] = useState(0.5);
+  const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
+    try { const saved = JSON.parse(localStorage.getItem("cdt.headunit.v1") || "null") as Partial<HeadUnitState> | null; return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, streamStatus: "idle", savedCount: 0 } : DEFAULT_HEAD_UNIT_STATE; }
+    catch { return DEFAULT_HEAD_UNIT_STATE; }
+  });
+  const headUnitRef = useRef(headUnit);
+  const radioAudioRef = useRef<HTMLAudioElement | null>(null);
+  const savedAudioUrlRef = useRef<string | null>(null);
+  const [savedTracks, setSavedTracks] = useState<Array<Omit<trackStore.SavedTrack, "blob">>>([]);
+  const [radioMessage, setRadioMessage] = useState("");
   const engineSoundRef = useRef<EngineSound | null>(null);
   const hornPressedRef = useRef(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -283,6 +295,21 @@ export function SimulatorView({
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
+  useEffect(() => {
+    headUnitRef.current = headUnit;
+    sceneCtrlRef.current?.setHeadUnitState(headUnit);
+    try { localStorage.setItem("cdt.headunit.v1", JSON.stringify({ ...headUnit, streamStatus: "idle", savedCount: 0 })); } catch { /* storage blocked */ }
+  }, [headUnit]);
+  useEffect(() => {
+    void trackStore.listTracks().then((items) => {
+      setSavedTracks(items);
+      setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
+    });
+    return () => {
+      radioAudioRef.current?.pause();
+      if (savedAudioUrlRef.current) URL.revokeObjectURL(savedAudioUrlRef.current);
+    };
+  }, []);
   const worldRef = useRef<WorldData>(world);
   const gridRef = useRef<SpatialGrid>(new SpatialGrid(world.obstacles, 10));
   const calRef = useRef<CalibrationConfig>(calibration);
@@ -585,6 +612,7 @@ export function SimulatorView({
     let ctrl: SceneController | null = null;
     try {
       ctrl = new SceneController(canvas);
+      ctrl.setHeadUnitState(headUnitRef.current);
       ctrl.applyQuality(optsRef.current.quality);
       ctrl.loadWorld(worldRef.current);
       ctrl.resize(box.clientWidth, box.clientHeight);
@@ -1688,6 +1716,47 @@ export function SimulatorView({
             </div>
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <KeyBindingsEditor value={bindings} onChange={setBindings} />
+            <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3" data-testid="head-unit-settings">
+              <div className="mono text-[10px] text-[#f5b942] mb-2">7″ ШГУ · МУЛЬТИМЕДИА</div>
+              <div className="grid grid-cols-4 gap-1 mb-2">
+                {HEAD_UNIT_MODES.map((mode) => <button key={mode.id} type="button" className={`btn btn-mini ${headUnit.mode === mode.id ? "btn-primary" : ""}`} onClick={() => setHeadUnit((prev) => ({ ...prev, mode: mode.id, radioPlaying: mode.id === "radio" ? prev.radioPlaying : false }))}>{mode.short}</button>)}
+              </div>
+              {headUnit.mode === "radio" && <>
+                <div className="flex items-center justify-between gap-2 text-[11px] mb-2">
+                  <button type="button" className="btn btn-mini" aria-label="Предыдущая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, -1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>◀ TUNE</button>
+                  <span className="text-center min-w-0"><b>{RADIO_STATIONS[headUnit.stationIndex]?.name}</b><br/><span className="text-[#8fa2ae]">{RADIO_STATIONS[headUnit.stationIndex]?.freq} FM</span></span>
+                  <button type="button" className="btn btn-mini" aria-label="Следующая радиостанция" onClick={() => { const next = nextStationIndex(headUnit.stationIndex, 1); radioAudioRef.current?.pause(); setHeadUnit((prev) => ({ ...prev, stationIndex: next, radioPlaying: false, source: "stream", streamStatus: "idle" })); }}>TUNE ▶</button>
+                </div>
+                <audio ref={radioAudioRef} preload="none" className="hidden" onPlaying={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "live" }))} onWaiting={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "connecting" }))} onError={() => setHeadUnit((prev) => ({ ...prev, streamStatus: "error", radioPlaying: false }))} />
+                <div className="flex items-center gap-2 mb-2">
+                  <button type="button" className="btn btn-mini" onClick={() => {
+                    const audio = radioAudioRef.current; if (!audio) return;
+                    if (headUnit.radioPlaying) { audio.pause(); setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "idle" })); }
+                    else { const station = RADIO_STATIONS[headUnit.stationIndex]; audio.src = station.streamUrl; audio.volume = headUnit.volume; engineSoundRef.current?.ensureStarted(); void audio.play().then(() => setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "stream", streamStatus: "live" }))).catch(() => setHeadUnit((prev) => ({ ...prev, radioPlaying: false, streamStatus: "error" }))); }
+                  }}>{headUnit.radioPlaying ? "Пауза" : "▶ Эфир"}</button>
+                  <span className="text-[10px] text-[#8fa2ae]">{headUnit.streamStatus === "live" ? "ЖИВОЙ ЭФИР" : headUnit.streamStatus === "connecting" ? "ПОДКЛЮЧЕНИЕ…" : headUnit.streamStatus === "error" ? "ЭФИР НЕДОСТУПЕН" : "ГОТОВ"}</span>
+                </div>
+                <label className="block text-[10px] text-[#9bafbc]">VOL · {Math.round(headUnit.volume * 100)}%
+                  <input type="range" min={0} max={1} step={0.05} value={headUnit.volume} onChange={(e) => { const volume = clampVolume(Number(e.target.value)); setHeadUnit((prev) => ({ ...prev, volume })); if (radioAudioRef.current) radioAudioRef.current.volume = volume; }} className="w-full" />
+                </label>
+                <button type="button" className="btn btn-mini mt-2 w-full" onClick={async () => {
+                  const station = RADIO_STATIONS[headUnit.stationIndex]; const seconds = 32; const key = trackCacheKey(station.id, seconds);
+                  const wav = renderTrackWav(station, seconds);
+                  const persistent = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, blob: new Blob([wav], { type: "audio/wav" }) });
+                  const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
+                  setRadioMessage(persistent ? "Трек сохранён офлайн" : "Сохранено в памяти текущей вкладки");
+                }}>⤓ Сохранить 32-секундный трек офлайн</button>
+                {savedTracks.length > 0 && <div className="mt-2 space-y-1"><div className="text-[10px] text-[#8fa2ae]">СОХРАНЁННЫЕ ТРЕКИ</div>{savedTracks.map((track) => <div key={track.key} className="flex items-center gap-1 text-[10px]"><button type="button" className="text-left text-[#52d6bd] flex-1 truncate" onClick={async () => {
+                  const saved = await trackStore.loadTrack(track.key); const audio = radioAudioRef.current; if (!saved || !audio) return;
+                  if (savedAudioUrlRef.current) URL.revokeObjectURL(savedAudioUrlRef.current);
+                  const url = URL.createObjectURL(saved.blob); savedAudioUrlRef.current = url; audio.src = url; audio.volume = headUnit.volume;
+                  try { await audio.play(); setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "saved", savedTrackKey: track.key, streamStatus: "live" })); } catch { setRadioMessage("Не удалось воспроизвести сохранённый трек"); }
+                }}>▶ {track.freq} · {track.stationName}</button><button type="button" className="text-[#ff8585] px-1" aria-label={`Удалить ${track.stationName}`} onClick={async () => { await trackStore.deleteTrack(track.key); const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length })); }}>×</button></div>)}</div>}
+                {radioMessage && <p className="text-[10px] text-[#f5b942] mt-1" role="status">{radioMessage}</p>}
+              </>}
+              {headUnit.mode === "clip" && <button type="button" className="btn btn-mini w-full" onClick={() => setHeadUnit((prev) => ({ ...prev, clipIndex: (prev.clipIndex + 1) % HEAD_UNIT_CLIPS.length }))}>Следующий клип: {HEAD_UNIT_CLIPS[headUnit.clipIndex]?.title}</button>}
+              <p className="text-[10px] text-[#7c909d] mt-2">Состояние экрана отображается на 3D-панели в салоне. Радиопоток требует интернета; сохранённый WAV доступен офлайн.</p>
+            </div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7]">
                 <span>Процедурный звук автомобиля</span>
