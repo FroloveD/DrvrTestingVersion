@@ -189,10 +189,10 @@ void AUEDevPawn::ToggleRearMirror() { MirrorEnabled[0]=!MirrorEnabled[0]; Mirror
 void AUEDevPawn::ToggleLeftMirror() { MirrorEnabled[1]=!MirrorEnabled[1]; MirrorElapsed=1; }
 void AUEDevPawn::ToggleRightMirror() { MirrorEnabled[2]=!MirrorEnabled[2]; MirrorElapsed=1; }
 void AUEDevPawn::UpdateCabin(float DeltaSeconds) {
-    // Удержание стрелок меняет только взгляд; отпускание сохраняет угол, 2 центрирует.
+    // Стрелки поворачивают взгляд при удержании, отпускание возвращает к дороге.
     if (CabinView) {
         FRotator R = CabinCamera->GetRelativeRotation();
-        R.Yaw = uedev::HeadYaw(R.Yaw,Down(EKeys::Left),Down(EKeys::Right),DeltaSeconds);
+        R.Yaw = HeadControl.Step(R.Yaw,Down(EKeys::Left),Down(EKeys::Right),DeltaSeconds);
         CabinCamera->SetRelativeRotation(R);
     }
     const FString GearLabel = Model.Selector==uedev::Gear::D ? FString::Printf(TEXT("D%d"),Model.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(Model.Selector)));
@@ -207,6 +207,7 @@ void AUEDevPawn::UpdateCabin(float DeltaSeconds) {
     }
 }
 void AUEDevPawn::ApplyCameraView() {
+    HeadControl = uedev::HeadLook{};
     Camera->SetActive(!CabinView);
     CabinCamera->SetActive(CabinView);
     DashboardDisplay->SetVisibility(CabinView);
@@ -261,6 +262,7 @@ void AUEDevPawn::GearDown() {
 void AUEDevPawn::MouseX(float Value) {
     if (Down(EKeys::RightMouseButton)) {
         if (CabinView) {
+            if (Value!=0) HeadControl = uedev::HeadLook{};
             FRotator R = CabinCamera->GetRelativeRotation();
             R.Yaw = FMath::Clamp(R.Yaw + Value*0.25f,-110.f,110.f);
             CabinCamera->SetRelativeRotation(R);
@@ -271,6 +273,7 @@ void AUEDevPawn::MouseX(float Value) {
 void AUEDevPawn::MouseY(float Value) {
     if (!Down(EKeys::RightMouseButton)) return;
     if (CabinView) {
+        if (Value!=0) HeadControl = uedev::HeadLook{};
         FRotator R = CabinCamera->GetRelativeRotation();
         R.Pitch = FMath::Clamp(R.Pitch + Value*0.25f,-40.f,30.f);
         CabinCamera->SetRelativeRotation(R);

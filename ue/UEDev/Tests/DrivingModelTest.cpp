@@ -117,6 +117,29 @@ int main() {
     Check(HeadYaw(20,true,true,0.1)==20 && HeadYaw(20,false,false,0.1)==20,"head simultaneous arrows cancel and release holds");
     Check(HeadYaw(109,false,true,0.1)==110 && HeadYaw(-109,true,false,0.1)==-110,"head limits");
     Check(HeadYaw(0,false,true,10)==8.5 && HeadYaw(0,false,true,-1)==0,"head frame dt limits");
+    for (const double side : {-1.0,1.0}) {
+        HeadLook look;
+        double yaw=0;
+        for (int i=0;i<10;++i) yaw=look.Step(yaw,side<0,side>0,0.1);
+        Check(yaw*side>80,"head turns while arrow held");
+        double previous=std::abs(yaw);
+        for (int i=0;i<30;++i) {
+            yaw=look.Step(yaw,false,false,0.1);
+            Check(yaw*side>=0 && std::abs(yaw)<=previous,"head returns without overshoot on release");
+            previous=std::abs(yaw);
+        }
+        Check(yaw==0 && !look.Returning,"head release reaches road and stops");
+        Check(look.Step(0,false,false,0.1)==0,"released head stays centered");
+    }
+    HeadLook mouseLook;
+    Check(mouseLook.Step(30,false,false,0.1)==30,"mouse-only look remains free");
+    double head=mouseLook.Step(0,false,true,0.1);
+    Check(mouseLook.Step(head,true,true,0.1)==head,"simultaneous arrows cancel");
+    Check(mouseLook.Step(head,false,false,-1)==head,"negative dt does not return head");
+    HeadLook reversed;
+    head=40;
+    for (int i=0;i<10;++i) head=reversed.Step(head,true,false,0.1);
+    Check(head<0,"opposite arrow is not center-latched");
     State hudState;
     Check(NextHint(hudState,false)==HudHint::StartEngine,"HUD cold start hint");
     hudState.Selector=Gear::D;

@@ -29,6 +29,22 @@ inline double CheckpointDistance(const State& s, const TestRoute& route, const R
 inline double HeadYaw(double yaw, bool left, bool right, double dt) {
     return std::clamp(yaw+((right ? 1.0 : 0.0)-(left ? 1.0 : 0.0))*85*std::clamp(dt,0.0,0.1),-110.0,110.0);
 }
+// Стрелки действуют при удержании; после отпускания возвращаемся к дороге.
+// Свободный осмотр мышью сам по себе не запускает автовозврат.
+struct HeadLook {
+    bool Returning=false;
+    double Step(double yaw, bool left, bool right, double dt) {
+        if (left || right) {
+            Returning=true;
+            return HeadYaw(yaw,left,right,dt);
+        }
+        if (!Returning) return yaw;
+        const double amount=170*std::clamp(dt,0.0,0.1);
+        const double next=yaw+std::clamp(-yaw,-amount,amount);
+        if (next==0) Returning=false;
+        return next;
+    }
+};
 inline double HudScale(double width, double height) {
     return std::clamp(std::min(width/1280.0,height/720.0),0.01,1.5);
 }

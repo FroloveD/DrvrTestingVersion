@@ -51,3 +51,12 @@ assert(hud.includes('IsMirrorEnabled(Index)'));
 assert(body('UpdateCabin').includes('MirrorEnabled[Index]'));
 assert(body('ToggleHud').includes('TogglePanels()'),'H must not disable entire AHUD render path');
 assert(!body('ToggleHud').includes('ShowHUD()'));
+
+// Log-4: checked-format UE 5.7 не принимает условный const TCHAR* вместо литерала.
+for (const source of [pawn,controller,hud]) {
+  const total=[...source.matchAll(/FString::Printf\s*\(/g)].length;
+  const literal=[...source.matchAll(/FString::Printf\s*\(\s*TEXT\s*\(\s*"/g)].length;
+  assert.equal(total,literal,'FString::Printf must receive a direct TEXT literal');
+}
+assert(body('UpdateCabin').includes('HeadControl.Step('));
+console.log('PASS UEDev checked-format literal guards (Log-4 regression, not UE compile)');

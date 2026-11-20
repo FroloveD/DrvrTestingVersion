@@ -11,6 +11,7 @@
 #include "InputCoreTypes.h"
 #include "DrivingModel.h"
 #include "RouteRun.h"
+#include "HudModel.h"
 #include "UEDevPawn.generated.h"
 class USceneCaptureComponent2D;
 class UTextureRenderTarget2D;
@@ -59,6 +60,7 @@ private:
     void ToggleRightMirror();
     void UpdateCabin(float DeltaSeconds);
     bool CabinView = false;
+    uedev::HeadLook HeadControl;
     void ToggleCamera();
     void ExteriorView();
     void InteriorView();

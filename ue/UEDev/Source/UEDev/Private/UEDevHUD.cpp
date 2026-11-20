@@ -62,8 +62,9 @@ void AUEDevHUD::DrawHUD() {
     const bool Done = Run.Done(Route);
     Panel(16,16,720,100);
     Text(Route.Id==1 ? TEXT("МАРШРУТ / ТЕСТОВАЯ ПРЯМАЯ 1 КМ") : TEXT("МАРШРУТ / ПЛОЩАДКА"),32,28,Muted,0.9f,680);
-    const FString Objective = Done ? TEXT("Все контрольные точки пройдены") : FString::Printf(
-        Route.Points[Run.Next].Stop ? TEXT("КТ %d из %d · остановитесь в жёлтой зоне") : TEXT("КТ %d из %d · проедьте зелёную зону"),Run.Next+1,Route.Count);
+    FString Objective = TEXT("Все контрольные точки пройдены");
+    if (!Done) Objective = FString::Printf(TEXT("КТ %d из %d · %s"),Run.Next+1,Route.Count,
+        Route.Points[Run.Next].Stop ? TEXT("остановитесь в жёлтой зоне") : TEXT("проедьте зелёную зону"));
     Text(Objective,32,51,Done ? Green : White,1.22f,680);
     Text(Done ? TEXT("Esc → Завершить заезд и открыть итог") : FString::Printf(TEXT("До зоны: %.0f м по прямой · Пройдено КТ: %d/%d"),
         uedev::CheckpointDistance(S,Route,Run),Run.Next,Route.Count),32,83,Done ? Green : Muted,0.92f,680);
@@ -80,7 +81,9 @@ void AUEDevHUD::DrawHUD() {
     const FLinearColor RpmColor = S.Rpm>=5500 ? Red : S.Rpm>=4400 ? Amber : Green;
     Rect(32,Bottom+119,298,6,FLinearColor(0.12f,0.18f,0.22f));
     Rect(32,Bottom+119,298*static_cast<float>(FMath::Clamp(S.Rpm/6500.0,0.0,1.0)),6,RpmColor);
-    Text(S.Engine ? FString::Printf(uedev::Manual(S.Selector) && S.Selector!=uedev::Gear::M6 && S.Rpm>=5500 ? TEXT("%.0f об/мин · Shift+↑") : TEXT("%.0f об/мин"),S.Rpm) : TEXT("ДВИГАТЕЛЬ ЗАГЛУШЕН"),32,Bottom+138,S.Engine ? RpmColor : Red,0.95f,290);
+    FString RpmLabel = S.Engine ? FString::Printf(TEXT("%.0f об/мин"),S.Rpm) : FString(TEXT("ДВИГАТЕЛЬ ЗАГЛУШЕН"));
+    if (S.Engine && uedev::Manual(S.Selector) && S.Selector!=uedev::Gear::M6 && S.Rpm>=5500) RpmLabel += TEXT(" · Shift+↑");
+    Text(RpmLabel,32,Bottom+138,S.Engine ? RpmColor : Red,0.95f,290);
 
     Panel(358,Bottom,458,168);
     Text(TEXT("КОРОБКА ПЕРЕДАЧ"),374,Bottom+12,Muted,0.86f);
