@@ -27,6 +27,7 @@ import {
   buildGostRoadSign,
   buildGostSpeedSign,
   buildGostStreetProp,
+  buildOsmStreetLightInstances,
   buildGostTrafficSignal,
   buildWorldRoadsAndSidewalks,
   createRoadMaterialPack,
@@ -643,6 +644,16 @@ export class SceneController {
       }
     }
 
+    // Высокие мачты освещения в крупных OSM-районах рисуются через InstancedMesh по ячейкам.
+    if (this.isLargeOsmWorld) {
+      buildOsmStreetLightInstances(
+        this.worldGroup,
+        world.obstacles.filter((obs) => obs.kind === "pole" && obs.height >= 2.2),
+        world,
+        roadMats
+      );
+    }
+
     // Препятствия: автопарк, здания РФ/СНГ (панельные/кирпичные/адм.), многоярусные деревья и инфраструктура ГОСТ
     for (const obs of world.obstacles) {
       this.addObstacleMesh(obs, world, roadMats, cityEnv, shadowTex, learnerTex, civilPlateTex, clusterTex);
@@ -758,6 +769,9 @@ export class SceneController {
       this.worldGroup.add(rig.root);
       return;
     }
+
+    // Высокие OSM-мачты уже собраны в InstancedMesh выше; остальные пропы строятся штатно.
+    if (this.isLargeOsmWorld && obs.kind === "pole" && obs.height >= 2.2) return;
 
     // Дорожная инфраструктура ГОСТ РФ/СНГ (конусы КС-2.2, мачты ОГК / столбики, ограждения ПО-2, островки, бордюры БР 100.30.15)
     if (buildGostStreetProp(this.worldGroup, obs, world, roadMats)) {
