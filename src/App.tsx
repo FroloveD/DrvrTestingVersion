@@ -101,6 +101,8 @@ function errorText(err: unknown): string {
 
 export default function App() {
   const [tab, setTab] = useState<TabId>("sim");
+  const [immersiveMode, setImmersiveMode] = useState(false);
+  const appRootRef = useRef<HTMLDivElement | null>(null);
   const [scenarioSection, setScenarioSection] = useState<"editor" | "routes">(() =>
     readText(SCENARIO_SECTION_STORAGE) === "routes" ? "routes" : "editor"
   );
@@ -134,6 +136,38 @@ export default function App() {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(""), ms);
   }, []);
+
+  const toggleImmersiveMode = useCallback(() => {
+    if (immersiveMode) {
+      setImmersiveMode(false);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    setImmersiveMode(true);
+    const root = appRootRef.current;
+    if (root?.requestFullscreen) {
+      void root.requestFullscreen().catch(() => {
+        // CSS-полноэкранный режим остаётся доступен, даже если браузер запретил Fullscreen API.
+      });
+    }
+  }, [immersiveMode]);
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      if (!document.fullscreenElement) setImmersiveMode(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && immersiveMode && !document.fullscreenElement) {
+        setImmersiveMode(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreen);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [immersiveMode]);
 
   const applyJournal = useCallback((list: AttemptMeta[]) => {
     journalRef.current = list;
@@ -333,11 +367,11 @@ export default function App() {
   ];
 
   return (
-    <div className="relative min-h-screen flex flex-col">
+    <div ref={appRootRef} className={immersiveMode ? "fixed inset-0 z-[100] flex flex-col overflow-hidden bg-[#0d1720]" : "relative min-h-screen flex flex-col"}>
       <div className="app-bg" />
 
       {/* Компактная верхняя шапка рабочей станции */}
-      <header className="sticky top-0 z-40 border-b hairline bg-[#080d12]/92 backdrop-blur-md">
+      <header className={immersiveMode ? "hidden" : "sticky top-0 z-40 border-b hairline bg-[#080d12]/92 backdrop-blur-md"}>
         <div className="mx-auto max-w-[1480px] px-4 sm:px-6 h-14 flex items-center gap-3">
           <button
             type="button"
@@ -417,11 +451,13 @@ export default function App() {
       </header>
 
       {/* Основная рабочая область */}
-      <main className="relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-4 sm:px-6 py-4">
+      <main className={immersiveMode ? "relative z-10 flex-1 w-full min-h-0 max-w-none p-0 m-0 overflow-hidden" : "relative z-10 flex-1 mx-auto w-full max-w-[1480px] px-4 sm:px-6 py-4"}>
         {/* Тренажёр остаётся примонтированным: переключение вкладок не прерывает заезд */}
         <div style={{ display: tab === "sim" ? "block" : "none" }}>
           <SimulatorView
             active={tab === "sim"}
+            immersive={immersiveMode}
+            onToggleImmersive={toggleImmersiveMode}
             scenarioId={scenarioId}
             onScenarioChange={setScenarioId}
             calibration={calibration}
@@ -558,7 +594,7 @@ export default function App() {
         )}
 
         {/* Дисклеймер и атрибуция видны на каждой вкладке */}
-        <footer className="border-t hairline mt-6 pt-4 pb-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-[11px] text-[#6e8492]">
+        <footer className={immersiveMode ? "hidden" : "border-t hairline mt-6 pt-4 pb-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-[11px] text-[#6e8492]"}>
           <span className="max-w-[70ch] leading-relaxed">
             Учебная симуляция: не является официальным экзаменом ГИБДД и не заменяет обучение с инструктором.
             Попытки, оценки и настройки хранятся только в этом браузере.
@@ -567,7 +603,7 @@ export default function App() {
         </footer>
       </main>
 
-      {toast && (
+      {toast && !immersiveMode && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 panel px-4 py-2.5 text-[12px] font-bold text-[#52d6bd] shadow-2xl fade-in max-w-[92vw] pointer-events-none">
           {toast}
         </div>
