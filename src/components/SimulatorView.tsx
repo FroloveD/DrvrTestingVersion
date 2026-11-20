@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { EngineSound } from "../audio/engineSound";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
@@ -222,6 +223,10 @@ export function SimulatorView({
   const [uiHidden, setUiHidden] = useState(false);
   const [bindings, setBindings] = useState<KeyBindings>(loadKeyBindings);
   const bindingsRef = useRef(bindings);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
+  const [soundVolume, setSoundVolume] = useState(0.5);
+  const engineSoundRef = useRef<EngineSound | null>(null);
+  const hornPressedRef = useRef(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
   const [quickStartUsed, setQuickStartUsed] = useState(false);
@@ -338,6 +343,16 @@ export function SimulatorView({
 
   const keysRef = useRef<Record<string, boolean>>({});
   useEffect(() => {
+    const sound = new EngineSound();
+    engineSoundRef.current = sound;
+    return () => { sound.dispose(); engineSoundRef.current = null; };
+  }, []);
+  useEffect(() => {
+    engineSoundRef.current?.setEnabled(soundEnabled);
+    engineSoundRef.current?.setVolume(soundVolume);
+    try { localStorage.setItem("cdt.sound.v1", soundEnabled ? "1" : "0"); } catch { /* storage blocked */ }
+  }, [soundEnabled, soundVolume]);
+  useEffect(() => {
     bindingsRef.current = bindings;
     keysRef.current = {};
     inputRef.current.throttle = 0;
@@ -416,6 +431,7 @@ export function SimulatorView({
   // === [SEC:sim-actions] Команды поворотников, АКПП, стартера и сброса попытки ===
   const setTurnSignal = useCallback((signal: InputState["signal"]) => {
     inputRef.current.signal = signal;
+    if (signal) engineSoundRef.current?.clickIndicator();
     // Reflect a signal button/key press immediately instead of waiting for the next HUD tick.
     setHud((current) => ({ ...current, state: { ...current.state, signal } }));
   }, []);
@@ -746,6 +762,7 @@ export function SimulatorView({
       if (nowMs - lastHudUpdate > 82) {
         lastHudUpdate = nowMs;
         const s = stateRef.current;
+        engineSoundRef.current?.update({ engineOn: s.engineOn, rpm: s.rpm, throttle: inputRef.current.throttle, speedKmh: Math.abs(s.v) * 3.6, horn: hornPressedRef.current });
         const w = worldRef.current;
         const evalRes = evaluateAttempt(recorderRef.current.getEvents(), s.collisions, ruleRef.current);
 
@@ -812,6 +829,7 @@ export function SimulatorView({
       if (isEditable(e.target) && !drivingFromSlider) return;
       const code = logicalKey(bindingsRef.current, e.code);
       if (code === "unbound") return;
+      engineSoundRef.current?.ensureStarted();
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
         e.preventDefault();
       }
@@ -856,6 +874,9 @@ export function SimulatorView({
           break;
         case "KeyF":
           setGear("D");
+          break;
+        case "KeyJ":
+          hornPressedRef.current = true;
           break;
         case "KeyH":
           setShowHelp(false);
@@ -908,10 +929,12 @@ export function SimulatorView({
     const onKeyUp = (e: KeyboardEvent) => {
       const logical = logicalKey(bindingsRef.current, e.code);
       if (logical !== "unbound") keysRef.current[logical] = false;
+      if (logical === "KeyJ") hornPressedRef.current = false;
     };
 
     const onBlur = () => {
       keysRef.current = {};
+      hornPressedRef.current = false;
       releasePedals();
     };
 
@@ -1665,6 +1688,17 @@ export function SimulatorView({
             </div>
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <KeyBindingsEditor value={bindings} onChange={setBindings} />
+            <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
+              <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7]">
+                <span>Процедурный звук автомобиля</span>
+                <input type="checkbox" checked={soundEnabled} onChange={(e) => setSoundEnabled(e.target.checked)} className="accent-[#f5b942]" />
+              </label>
+              <label className="block text-[11px] text-[#d3e0e7] mt-2">
+                <span className="flex justify-between mb-1"><span>Громкость</span><b className="mono text-[#f5b942]">{Math.round(soundVolume * 100)}%</b></span>
+                <input type="range" min={0} max={1} step={0.05} value={soundVolume} onChange={(e) => setSoundVolume(Number(e.target.value))} className="w-full" />
+              </label>
+              <p className="text-[10px] text-[#7c909d] mt-1">Звук запускается после первого нажатия клавиши. J — сигнал, H — показать/скрыть интерфейс.</p>
+            </div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
               <label className="flex items-center justify-between gap-3 text-[11px] text-[#d3e0e7] mb-2">
