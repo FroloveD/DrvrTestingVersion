@@ -1022,7 +1022,7 @@ export class SceneController {
       if (changed) {
         writeTrajectoryArcPositions(
           state.x, state.z, state.h, state.steer, isRev,
-          this.trajPositionsL, this.trajPositionsR, 6.2, 18, 0.06
+          this.trajPositionsL, this.trajPositionsR, 6.2, 18, 0.06, carGeometry(state.carId)
         );
         this.trajAttributeL.needsUpdate = true;
         this.trajAttributeR.needsUpdate = true;
