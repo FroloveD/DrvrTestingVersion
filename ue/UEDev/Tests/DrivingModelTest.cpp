@@ -1,6 +1,7 @@
 #include "DrivingModel.h"
 #include "SessionFlow.h"
 #include "RouteRun.h"
+#include "HudModel.h"
 #include <limits>
 #include <cstdlib>
 #include <iostream>
@@ -112,6 +113,31 @@ int main() {
     State hydraulic; hydraulic.Engine=true; hydraulic.Selector=Gear::D;
     Step(hydraulic,{true,true,false,0});
     Check(hydraulic.BrakePressure>0 && hydraulic.BrakePressure<0.1 && hydraulic.Throttle==0,"hydraulic buildup and brake override");
+    State hudState;
+    Check(NextHint(hudState,false)==HudHint::StartEngine,"HUD cold start hint");
+    hudState.Selector=Gear::D;
+    Check(NextHint(hudState,false)==HudHint::ParkOrNeutral,"HUD engine cannot start in D");
+    hudState.Engine=true;
+    Check(NextHint(hudState,false)==HudHint::Belt,"HUD belt warning priority");
+    hudState.Belt=true;
+    Check(NextHint(hudState,false)==HudHint::Handbrake,"HUD handbrake warning");
+    hudState.Handbrake=false; hudState.Selector=Gear::P;
+    Check(NextHint(hudState,false)==HudHint::LeavePark,"HUD P brake instruction");
+    hudState.Selector=Gear::N;
+    Check(NextHint(hudState,false)==HudHint::LeaveNeutral,"HUD neutral hint");
+    hudState.Selector=Gear::D;
+    Check(NextHint(hudState,false)==HudHint::FollowRoute,"HUD driving hint");
+    Check(NextHint(State{},true)==HudHint::Finished,"HUD finished takes priority");
+    RouteRun hudRun; const auto yard=Route(0);
+    Check(CheckpointDistance(State{},yard,hudRun)==11,"HUD distance to zone edge");
+    hudState.X=0; hudState.Z=15;
+    Check(CheckpointDistance(hudState,yard,hudRun)==0,"HUD inside zone zero");
+    hudRun.Next=yard.Count;
+    Check(CheckpointDistance(hudState,yard,hudRun)==0,"HUD completed avoids out of bounds");
+    for (const auto size : {std::array<double,2>{1280,720},{1920,1080},{1024,768},{2560,1080},{720,1280}}) {
+        const double scale=HudScale(size[0],size[1]);
+        Check(size[0]/scale>=1280 && size[1]/scale>=720,"HUD panels fit logical viewport");
+    }
     State prepared; prepared.X=12; prepared.Z=45; prepared.Heading=0.7; prepared.WheelDeg=90;
     Check(!PrepareDrive(prepared,false) && !prepared.Engine && prepared.Selector==Gear::P && prepared.Handbrake && !prepared.Belt,"P preparation requires brake atomically");
     Check(PrepareDrive(prepared,true) && prepared.Engine && prepared.Selector==Gear::D && !prepared.Handbrake && prepared.Belt,"prepare with brake");

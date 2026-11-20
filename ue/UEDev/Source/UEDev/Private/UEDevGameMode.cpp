@@ -106,28 +106,3 @@ void AUEDevGameMode::BuildRoute(int Id) {
         Box(Center+FVector(0,Point.Radius*100,95),FVector(0.3,0.3,2));
     }
 }
-void AUEDevHUD::DrawHUD() {
-    Super::DrawHUD();
-    const auto* PC = GetOwningPlayerController();
-    const auto* Session = Cast<AUEDevPlayerController>(PC);
-    if (!Session || !Session->IsDriving()) return;
-    const auto* Pawn = PC ? Cast<AUEDevPawn>(PC->GetPawn()) : nullptr;
-    if (!Pawn) return;
-    const auto& S = Pawn->GetDrivingState();
-    const FString GearText = S.Selector == uedev::Gear::D
-        ? FString::Printf(TEXT("D%d"), S.AutoGear) : FString(UTF8_TO_TCHAR(uedev::Label(S.Selector)));
-    DrawText(TEXT("UEDev — прототип, физика не откалибрована"), FLinearColor::Yellow, 24, 24);
-    DrawText(FString::Printf(TEXT("%.1f км/ч | %s | %.0f об/мин | ДВС %s | Ручник %s | Ремень %s | Газ %.0f%% | Тормоз %.0f%%"),
-        FMath::Abs(S.Speed) * 3.6, *GearText, S.Rpm,
-        S.Engine ? TEXT("ВКЛ") : TEXT("ВЫКЛ"), S.Handbrake ? TEXT("ВКЛ") : TEXT("ВЫКЛ"),
-        S.Belt ? TEXT("ДА") : TEXT("НЕТ"), S.Throttle * 100, S.BrakePressure * 100), FLinearColor::White, 24, 50);
-    DrawText(FString::Printf(TEXT("Обычный газ: %.0f%% · Ctrl+колесо: 10–60%% · Shift+W в D/M: полный газ"),
-        Pawn->GetOrdinaryGas() * 100), FLinearColor::White, 24, 76);
-    DrawText(TEXT("Esc — пауза | S+Enter — подготовка без сброса | L — фары | Backspace — холодный сброс"), FLinearColor::White, 24, 102);
-    const auto& Run=Pawn->GetRouteRun();
-    const auto& Route=Pawn->GetRoute();
-    DrawText(FString::Printf(TEXT("КТ %d/%d | %.1f с | %.0f м | %s"),Run.Next,Route.Count,Run.Seconds,Run.Distance,
-        Run.Done(Route) ? TEXT("Маршрут пройден. Esc → завершить") :
-        Route.Points[Run.Next].Stop ? TEXT("Остановитесь в жёлтом круге") : TEXT("Пройдите следующую зелёную КТ")),FLinearColor::Yellow,24,128);
-    DrawText(TEXT("Учебная симуляция. Не официальный экзамен. © OpenStreetMap contributors (веб-версия)."), FLinearColor::White, 24, 154);
-}

@@ -31,6 +31,7 @@ public:
     const uedev::RouteRun& GetRouteRun() const { return Run; }
     void SetOrdinaryGas(double Value) { OrdinaryGas = uedev::OrdinaryGasLimit(Value); }
     double GetOrdinaryGas() const { return OrdinaryGas; }
+    bool AreHeadlightsOn() const { return HeadlightsOn; }
     const uedev::State& GetDrivingState() const { return Model; }
 private:
     UPROPERTY() TObjectPtr<UBoxComponent> Body;
@@ -42,6 +43,7 @@ private:
     UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> RearLampMaterial;
     void UpdateLights();
     void ToggleHeadlights();
+    void ToggleHud();
     bool HeadlightsOn = false;
     uedev::State Model;
     uedev::TestRoute ActiveRoute = uedev::Route(0);

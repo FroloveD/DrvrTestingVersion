@@ -7,6 +7,7 @@
 #include "Components/SpotLightComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/HUD.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputCoreTypes.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -106,6 +107,10 @@ void AUEDevPawn::UpdateLights() {
     if (RearLampMaterial) RearLampMaterial->SetVectorParameterValue(TEXT("Color"),
         Light.Stop ? FLinearColor(1.f,0.025f,0.01f) : FLinearColor(0.25f,0.008f,0.005f));
 }
+void AUEDevPawn::ToggleHud() {
+    if (auto* PC = Cast<APlayerController>(GetController()))
+        if (auto* Hud = PC->GetHUD()) Hud->ShowHUD();
+}
 void AUEDevPawn::ToggleHeadlights() { HeadlightsOn = !HeadlightsOn; UpdateLights(); }
 void AUEDevPawn::ResetRide() { Reset(); }
 void AUEDevPawn::Reset() {
@@ -156,6 +161,7 @@ void AUEDevPawn::Zoom(float Value) {
 }
 void AUEDevPawn::SetupPlayerInputComponent(UInputComponent* Input) {
     Super::SetupPlayerInputComponent(Input);
+    Input->BindKey(EKeys::H, IE_Pressed, this, &AUEDevPawn::ToggleHud);
     Input->BindKey(EKeys::L, IE_Pressed, this, &AUEDevPawn::ToggleHeadlights);
     Input->BindKey(EKeys::I, IE_Pressed, this, &AUEDevPawn::StartEngine);
     Input->BindKey(EKeys::Enter, IE_Pressed, this, &AUEDevPawn::Ready);
