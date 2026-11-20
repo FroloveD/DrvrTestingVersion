@@ -48,6 +48,11 @@ import {
   type DetailedCarRig,
   type DetailedPedestrianVisual,
 } from "./vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type ShifterHitId } from "./vehiclesAndPeds";
+import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
+import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
+import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
+import { CAR } from "../sim/vehicle";
 import type {
   CameraMode,
   ObstacleBox,
@@ -215,6 +220,25 @@ export class SceneController {
   private orbitYaw = 0;
   private orbitPitch = 0.36;
   private orbitDist = 9.2;
+  private cockpitFraming: CockpitFraming = cockpitFramingFor("ceed");
+  private headYaw = 0;
+  private headYawTarget = 0;
+  private headPitch = 0;
+  private headPitchTarget = 0;
+  private headDetent: -1 | 0 | 1 = 0;
+  private savedHeadBeforeShifter: { yaw: number; pitch: number; fov: number } | null = null;
+  private lastHeadStepAt = performance.now();
+  private readonly cockpitEyeWorld = new THREE.Vector3();
+  private readonly cockpitLookWorld = new THREE.Vector3();
+  private readonly shifterRaycaster = new THREE.Raycaster();
+  private readonly shifterNdc = new THREE.Vector2();
+  private readonly shifterInvChassis = new THREE.Matrix4();
+  private readonly shifterLocalRay = new THREE.Ray();
+  private readonly shifterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -SHIFTER_LAYOUT.knobPlaneY);
+  private readonly shifterLocalHit = new THREE.Vector3();
+  private shifterHover: ShifterHitId | null = null;
+  private shifterDragging = false;
+  private shifterManualPulse: -1 | 0 | 1 = 0;
   private readonly cameraDesiredPos = new THREE.Vector3();
   private readonly cameraDesiredLook = new THREE.Vector3();
   private camLookTarget = new THREE.Vector3();
@@ -363,8 +387,117 @@ export class SceneController {
   }
 
   adjustOrbit(deltaX: number, deltaY: number): void {
+    if (this.lastCameraMode === "cockpit") {
+      this.headDetent = 0;
+      this.headYawTarget = clamp(this.headYawTarget - deltaX * 0.0042, -HEAD_TURN.maxRad, HEAD_TURN.maxRad);
+      this.headPitchTarget = clamp(this.headPitchTarget - deltaY * 0.0032, HEAD_TURN.minPitchRad, HEAD_TURN.maxPitchRad);
+      return;
+    }
+    this.savedHeadBeforeShifter = null;
     this.orbitYaw -= deltaX * 0.0065;
-    this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.38);
+    this.orbitPitch = clamp(this.orbitPitch + deltaY * 0.005, 0.12, 1.42);
+  }
+
+  setPlayerCarFraming(carId: string | null | undefined): void {
+    this.cockpitFraming = cockpitFramingFor(carId);
+    this.cockpitFov = this.cockpitFraming.fovDeg;
+    this.camera.fov = this.cockpitFov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  getHeadDetent(): -1 | 0 | 1 { return this.headDetent; }
+  getHeadYawDeg(): number { return (this.headYaw * 180) / Math.PI; }
+
+  stepHeadDetent(dir: -1 | 1): -1 | 0 | 1 {
+    const next = clamp(this.headDetent + dir, -1, 1) as -1 | 0 | 1;
+    this.setHeadDetent(next);
+    return next;
+  }
+
+  setHeadDetent(detent: -1 | 0 | 1): void {
+    this.headDetent = detent;
+    this.headYawTarget = detentYawRad(detent);
+    this.headPitchTarget = 0;
+    this.savedHeadBeforeShifter = null;
+  }
+
+  resetHeadLook(): void {
+    this.headDetent = 0;
+    this.headYaw = 0;
+    this.headYawTarget = 0;
+    this.headPitch = 0;
+    this.headPitchTarget = 0;
+    this.savedHeadBeforeShifter = null;
+  }
+
+  private stepHeadInertia(dt: number): void {
+    this.headYaw = dampedHeadStep(this.headYaw, this.headYawTarget, dt, HEAD_TURN.TAU_S);
+    this.headPitch = dampedHeadStep(this.headPitch, this.headPitchTarget, dt, HEAD_TURN.TAU_S);
+  }
+
+  toggleCockpitShifterView(): boolean {
+    if (this.isCockpitShifterView()) {
+      const prev = this.savedHeadBeforeShifter;
+      this.savedHeadBeforeShifter = null;
+      this.headYawTarget = prev ? prev.yaw : detentYawRad(this.headDetent);
+      this.headPitchTarget = prev ? prev.pitch : 0;
+      this.cockpitFov = prev ? prev.fov : this.cockpitFraming.fovDeg;
+      return false;
+    }
+    this.savedHeadBeforeShifter = { yaw: this.headYawTarget, pitch: this.headPitchTarget, fov: this.cockpitFov };
+    this.headYawTarget = -HEAD_TURN.SHIFTER_RAD;
+    this.headPitchTarget = -HEAD_TURN.SHIFTER_PITCH_RAD;
+    this.cockpitFov = 62;
+    return true;
+  }
+
+  isHeadSettled(epsRad = 0.004): boolean {
+    return Math.abs(this.headYaw - this.headYawTarget) < epsRad && Math.abs(this.headPitch - this.headPitchTarget) < epsRad;
+  }
+
+  isCockpitShifterView(): boolean {
+    return this.headPitchTarget < -0.5 && this.headYawTarget < -0.4;
+  }
+
+  setShifterInteraction(hovered: ShifterHitId | null, dragging: boolean, manualPulse: -1 | 0 | 1 = 0): void {
+    this.shifterHover = hovered;
+    this.shifterDragging = dragging;
+    this.shifterManualPulse = manualPulse;
+  }
+
+  pickCockpitShifter(normX: number, normY: number): ShifterHitId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.shifterPickTargets;
+    if (!targets?.length) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    if (this.shifterRaycaster.intersectObject(targets[0], false).length) return "lever";
+    const hits = this.shifterRaycaster.intersectObjects(targets.slice(1), false);
+    return hits.length ? (hits[0].object.userData.shifterHit as ShifterHitId | undefined) ?? null : null;
+  }
+
+  projectToShifterLocal(normX: number, normY: number): { x: number; z: number } | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    this.shifterInvChassis.copy(this.playerRig.chassis.matrixWorld).invert();
+    this.shifterLocalRay.copy(this.shifterRaycaster.ray).applyMatrix4(this.shifterInvChassis);
+    const hit = this.shifterLocalRay.intersectPlane(this.shifterPlane, this.shifterLocalHit);
+    return hit ? { x: hit.x, z: hit.z } : null;
+  }
+
+  getShifterLocalAnchor(): { leverX: number; leverZ: number; gateZ: number } {
+    const gateZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
+    const piv = this.playerRig.gearLeverPivot;
+    return {
+      leverX: piv ? piv.position.x : SHIFTER_LAYOUT.mainRailX,
+      leverZ: piv ? piv.position.z : gateZ + SHIFTER_LAYOUT.offP,
+      gateZ,
+    };
   }
 
   adjustZoom(wheelDelta: number): void {
@@ -426,6 +559,7 @@ export class SceneController {
     });
     this.scene.add(this.playerRig.root);
     this.playerCarId = carId;
+    this.setPlayerCarFraming(carId);
   }
 
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
@@ -906,6 +1040,39 @@ export class SceneController {
     for (const wm of rig.wheelMeshes) wm.rotation.x = state.wheelSpin;
     rig.steerWheelMesh.rotation.z = -(state.swDeg * Math.PI) / 180;
 
+    if (rig.gearLeverPivot) {
+      const gateBaseZ = (CAR.frontOverhang - CAR.rearOverhang) * 0.5 + SHIFTER_LAYOUT.gateOffsetZ;
+      const inManualGate = /^[1-6]$/.test(state.gear);
+      const dragPulse = inManualGate ? this.shifterManualPulse * 0.022 : 0;
+      const shiftPulse = inManualGate && dragPulse === 0 && state.shiftTimer > 0 ? 0.015 : dragPulse;
+      const gOff = state.gear === "P" ? SHIFTER_LAYOUT.offP : state.gear === "R" ? SHIFTER_LAYOUT.offR :
+        state.gear === "N" ? SHIFTER_LAYOUT.offN : SHIFTER_LAYOUT.offD + shiftPulse;
+      rig.gearLeverPivot.position.x = inManualGate ? SHIFTER_LAYOUT.manualRailX : SHIFTER_LAYOUT.mainRailX;
+      rig.gearLeverPivot.position.z = gateBaseZ + gOff;
+      rig.gearLeverPivot.rotation.x = clamp((gOff + 0.004) * 1.45, -0.14, 0.14);
+      rig.gearLeverPivot.rotation.z = inManualGate ? -0.09 : 0;
+      if (rig.gearGateDot) {
+        rig.gearGateDot.position.x = inManualGate ? SHIFTER_LAYOUT.manualDotX : SHIFTER_LAYOUT.mainDotX;
+        rig.gearGateDot.position.z = gateBaseZ + gOff;
+      }
+      if (rig.gearGateDotMat) rig.gearGateDotMat.color.setHex(state.gear === "R" ? 0xff5a5a :
+        state.gear === "D" ? 0x52d6bd : inManualGate ? 0xf5b942 : 0xe2e8f0);
+      const activeGlow = opts.cameraMode === "cockpit" && (this.shifterDragging || this.shifterHover !== null);
+      if (rig.gearKnobCapMat) {
+        rig.gearKnobCapMat.emissive.setHex(this.shifterDragging ? 0xf5b942 : activeGlow ? 0x52d6bd : 0x000000);
+        rig.gearKnobCapMat.emissiveIntensity = this.shifterDragging ? 0.55 : activeGlow ? 0.34 : 0;
+      }
+      if (rig.gearGateRimMat) {
+        rig.gearGateRimMat.emissive.setHex(this.shifterDragging ? 0xf5b942 : activeGlow ? 0x52d6bd : 0x000000);
+        rig.gearGateRimMat.emissiveIntensity = this.shifterDragging ? 0.32 : activeGlow ? 0.2 : 0;
+      }
+      if (!activeGlow && rig.gearGateRimMat) {
+        const locked = !state.engineOn || (state.gear === "P" && (state.brakePos ?? 0) < SHIFT_LOCK_MIN_BRAKE);
+        rig.gearGateRimMat.emissive.setHex(locked ? 0xf5b942 : 0x000000);
+        rig.gearGateRimMat.emissiveIntensity = locked ? 0.22 : 0;
+      }
+    }
+
     if (rig.learnerSign) rig.learnerSign.visible = opts.showLearnerSign;
     if (rig.driverGroup) rig.driverGroup.visible = opts.cameraMode !== "cockpit";
 
@@ -1041,6 +1208,10 @@ export class SceneController {
     // 6. Камера (обновляем матрицу кузова заранее, чтобы салон и физические зеркала не дрожали относительно головы)
     this.lastCameraMode = opts.cameraMode;
     this.playerRig.chassis.updateWorldMatrix(true, false);
+    const headNow = performance.now();
+    const headDt = Math.min(0.1, Math.max(0, (headNow - this.lastHeadStepAt) / 1000));
+    this.lastHeadStepAt = headNow;
+    this.stepHeadInertia(headDt);
     this.updateCamera(state, opts.cameraMode);
 
     // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели
@@ -1214,27 +1385,23 @@ export class SceneController {
     const fz = Math.cos(s.h);
 
     if (mode === "cockpit") {
-      // Камера рассчитывается в мировой системе координат автомобиля.
-      // Это исключает влияние локальной ориентации/смещения 3D-модели кузова.
-      const lx = Math.cos(s.h);
-      const lz = -Math.sin(s.h);
-      const eyeX = s.x + lx * (carGeometry(s.carId).width * 0.23) - fx * 0.02;
-      const eyeY = 1.19;
-      const eyeZ = s.z + lz * (carGeometry(s.carId).width * 0.23) - fz * 0.02;
-      const lookYaw = s.h + this.orbitYaw * 0.65;
-      const lookPitch = clamp(-0.12 - (this.orbitPitch - 0.36) * 6, -0.8, 0.55);
-
+      const pose = this.playerRig.chassis.matrixWorld;
+      const framing = this.cockpitFraming;
+      const headPitch = clamp(framing.pitchRad + this.headPitch, -0.74, 0.34);
+      const cosP = Math.cos(headPitch);
       if (this.camera.fov !== this.cockpitFov) {
         this.camera.fov = this.cockpitFov;
         this.camera.updateProjectionMatrix();
       }
-      this.camera.position.set(eyeX, eyeY, eyeZ);
-      this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(
-        eyeX + Math.sin(lookYaw) * 18,
-        eyeY + lookPitch,
-        eyeZ + Math.cos(lookYaw) * 18
-      );
+      this.cockpitEyeWorld.set(framing.eyeX, framing.eyeY, framing.eyeZ).applyMatrix4(pose);
+      this.cockpitLookWorld.set(
+        framing.eyeX + Math.sin(this.headYaw) * cosP * 18,
+        framing.eyeY + Math.sin(headPitch) * 18,
+        framing.eyeZ + Math.cos(this.headYaw) * cosP * 18
+      ).applyMatrix4(pose);
+      this.camera.position.copy(this.cockpitEyeWorld);
+      this.camera.up.set(0, 1, 0).transformDirection(pose);
+      this.camera.lookAt(this.cockpitLookWorld);
       return;
     }
 
