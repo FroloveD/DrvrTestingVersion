@@ -4,6 +4,7 @@
  * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
+import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, renderTrackWav, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
 import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
@@ -1064,6 +1065,36 @@ export const extraCases: SelfTestCase[] = [
       assert(unsafeReverse.next === null && Boolean(unsafeReverse.blockedReason),
         "Селектор не должен включать R на скорости вперёд");
       return "5 моделей · габариты, 6 ступеней, Shiftronic и engine braking OK";
+    },
+  },,
+
+  {
+    id: "T36",
+    suite: "audio",
+    name: "FM-каталог, циклическое переключение, громкость и офлайн WAV",
+    fn: () => {
+      assert(INTERNET_RADIO_STATIONS.length >= 4, "В каталоге должно быть не менее четырёх станций");
+      const ids = new Set(INTERNET_RADIO_STATIONS.map((station) => station.id));
+      assert(ids.size === INTERNET_RADIO_STATIONS.length, "ID радиостанций должны быть уникальны");
+      for (const station of INTERNET_RADIO_STATIONS) {
+        assert(station.streamUrl.startsWith("https://"), "Потоки должны использовать HTTPS");
+        assert(describeStation(station).includes(station.freq), "Описание станции содержит FM-частоту");
+      }
+      assert(nextStationIndex(0, -1) === INTERNET_RADIO_STATIONS.length - 1, "Переключение назад зацикливается");
+      assert(nextStationIndex(INTERNET_RADIO_STATIONS.length - 1, 1) === 0, "Переключение вперёд зацикливается");
+      assert(clampVolume(1.4) === 1 && clampVolume(-0.3) === 0, "Громкость ограничивается диапазоном 0..1");
+      assert(trackCacheKey("record", 32) === "radio:record:32s", "Формат ключа кэша");
+      assert(formatTrackDuration(125) === "02:05", "Формат длительности мм:сс");
+      const wav = renderTrackWav(INTERNET_RADIO_STATIONS[0], 2);
+      const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+      const ascii = (offset: number, length: number) => String.fromCharCode(...wav.slice(offset, offset + length));
+      assert(ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE" && ascii(36, 4) === "data", "WAV имеет заголовок RIFF/WAVE");
+      assert(view.getUint16(20, true) === 1 && view.getUint16(22, true) === 1, "WAV: PCM mono");
+      assert(view.getUint32(24, true) === TRACK_SAMPLE_RATE && view.getUint16(34, true) === 16, "WAV: 22 050 Гц, 16 бит");
+      let peak = 0;
+      for (let offset = 44; offset < wav.length; offset += 2) peak = Math.max(peak, Math.abs(view.getInt16(offset, true)));
+      assert(peak > 3000, "Офлайн-рендер не должен быть тишиной");
+      return `Станций: ${ids.size} · WAV: ${wav.length} байт · пик: ${peak}`;
     },
   },
 ];
