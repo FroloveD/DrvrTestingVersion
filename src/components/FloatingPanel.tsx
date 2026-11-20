@@ -50,6 +50,8 @@ type Props = {
   closed?: boolean;
   onToggleCollapse?: (id: string) => void;
   onClose?: (id: string) => void;
+  onBringToFront?: (id: string) => void;
+  isFront?: boolean;
   icon?: string;
   layout: PanelLayout | undefined;
   defaults: (containerW: number, containerH: number) => PanelLayout;
@@ -80,6 +82,8 @@ export function FloatingPanel({
   closed = false,
   onToggleCollapse,
   onClose,
+  onBringToFront,
+  isFront = false,
   icon = "grid",
   layout,
   defaults,
@@ -156,6 +160,7 @@ export function FloatingPanel({
     if (e.button !== 0 || dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
+    onBringToFront?.(id);
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { mode: kind, pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, ox: current.x, oy: current.y, ow: current.w };
     setArmed(true);
@@ -290,7 +295,7 @@ export function FloatingPanel({
     <div
       ref={panelRef}
       data-hud-panel={id}
-      style={{ left: current.x, top: current.y, width: current.w, zIndex }}
+      style={{ left: current.x, top: current.y, width: current.w, zIndex: isFront ? 250 : zIndex }}
       className={`absolute rounded-xl border-2 bg-[#0b1218]/94 shadow-xl overflow-hidden select-none transition-shadow ${
         armed
           ? "border-[#f5b942] shadow-[0_0_24px_rgba(245,185,66,.25)]"
@@ -298,7 +303,7 @@ export function FloatingPanel({
             ? "border-[#1f2c38] hover:border-[#2d414f]"
             : "border-[#1f2c38]"
       }`}
-      onPointerDown={bodyDown}
+      onPointerDown={(e) => { onBringToFront?.(id); bodyDown(e); }}
       onPointerMove={bodyMove}
       onPointerUp={bodyUp}
       onPointerCancel={bodyUp}
