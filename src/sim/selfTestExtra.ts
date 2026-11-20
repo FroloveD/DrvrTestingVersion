@@ -55,7 +55,7 @@ import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt
 import { SpatialGrid } from "./spatialGrid";
 import { createInitialState, createReadyInput, getActiveSpeedLimit, stepSimulation } from "./step";
 import type { RoadSegment, SimEvent } from "./types";
-import { ackermannAngle, CAR, carGeometry, centralSteerLimit, clamp, computeEngineAccel, FIXED_DT, getCarCorners, normalizeWheelLock, outerTurningRadius, predictTrajectoryArc, STEER_WHEEL, wheelDegToSteerRad, writeTrajectoryArcPositions } from "./vehicle";
+import { ackermannAngle, CAR, carGeometry, centralSteerLimit, clamp, computeEngineAccel, computeRoadDragDecel, FIXED_DT, getCarCorners, normalizeWheelLock, outerTurningRadius, predictTrajectoryArc, STEER_WHEEL, wheelDegToSteerRad, writeTrajectoryArcPositions } from "./vehicle";
 import { PLAYER_CARS, playerCarPhysics } from "./playerCar";
 
 export type SelfTestCase = { id: string; suite: string; name: string; fn: () => string };
@@ -1050,7 +1050,11 @@ export const extraCases: SelfTestCase[] = [
       }
       assert(playerCarPhysics("picanto").vmaxKmh < playerCarPhysics("sorento").vmaxKmh,
         "Ограничитель скорости должен различаться между моделями");
-      return "5 моделей · габариты и коэффициенты динамики соответствуют паспортам";
+      assert(computeEngineAccel(1, "D", 1, 0, true, false) > computeEngineAccel(1, "D", 6, 0, true, false),
+        "Первая передача должна иметь большую тягу, чем шестая");
+      assert(computeRoadDragDecel(10, 0, 1, "D", true, 1) > computeRoadDragDecel(10, 0, 0, "N", true, 1),
+        "Включённая передача должна создавать engine braking сильнее нейтрали");
+      return "5 моделей · габариты, 6 ступеней и engine braking соответствуют модели";
     },
   },
 ];
