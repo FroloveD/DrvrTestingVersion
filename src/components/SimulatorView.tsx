@@ -229,6 +229,10 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
+  const [soundLayers, setSoundLayers] = useState<{ engine: boolean; horn: boolean; indicator: boolean }>(() => {
+    try { const saved = JSON.parse(localStorage.getItem("cdt.soundLayers.v1") || "null") as Partial<{ engine: boolean; horn: boolean; indicator: boolean }> | null; return { engine: saved?.engine !== false, horn: saved?.horn !== false, indicator: saved?.indicator !== false }; } catch { return { engine: true, horn: true, indicator: true }; }
+  });
   const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("cdt.headUnit.v1") || "null") as Partial<HeadUnitState> | null;
@@ -309,6 +313,12 @@ export function SimulatorView({
   const engineSoundRef = useRef<EngineSound | null>(null);
   const lastEngineSoundAtRef = useRef(0);
   const hornPulseUntilRef = useRef(0);
+  const hornHeldRef = useRef(false);
+  const indicatorPhaseRef = useRef<number | null>(null);
+  const soundEnabledRef = useRef(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
+  const soundLayersRef = useRef(soundLayers);
+  soundLayersRef.current = soundLayers;
   useEffect(() => {
     try {
       localStorage.setItem("cdt.headUnit.v1", JSON.stringify({ ...headUnit, radioPlaying: false, streamStatus: "idle" }));
@@ -317,6 +327,22 @@ export function SimulatorView({
     }
     sceneCtrlRef.current?.setHeadUnitState(headUnit);
   }, [headUnit]);
+
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+    try { localStorage.setItem("cdt.sound.v1", soundEnabled ? "1" : "0"); } catch { /* storage blocked */ }
+    engineSoundRef.current?.setEnabled(soundEnabled);
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    soundLayersRef.current = soundLayers;
+    try { localStorage.setItem("cdt.soundLayers.v1", JSON.stringify(soundLayers)); } catch { /* storage blocked */ }
+    engineSoundRef.current?.setLayers(soundLayers);
+  }, [soundLayers]);
+
+  const toggleSoundLayer = useCallback((layer: "engine" | "horn" | "indicator") => {
+    setSoundLayers((prev) => ({ ...prev, [layer]: !prev[layer] }));
+  }, []);
 
   const worldRef = useRef<WorldData>(world);
   const gridRef = useRef<SpatialGrid>(new SpatialGrid(world.obstacles, 10));
@@ -533,6 +559,15 @@ export function SimulatorView({
     setShifterGlance(looking);
   }, [cameraMode]);
 
+  const ensureEngineSound = useCallback(() => {
+    if (!engineSoundRef.current) {
+      engineSoundRef.current = new EngineSound();
+      engineSoundRef.current.setEnabled(soundEnabledRef.current);
+      engineSoundRef.current.setLayers(soundLayersRef.current);
+    }
+    if (soundEnabledRef.current) engineSoundRef.current.ensureStarted();
+  }, []);
+
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
     const inp = inputRef.current;
@@ -542,13 +577,12 @@ export function SimulatorView({
       return;
     }
     inp.engineOn = !inp.engineOn;
-    if (!engineSoundRef.current) engineSoundRef.current = new EngineSound();
-    engineSoundRef.current.ensureStarted();
+    ensureEngineSound();
     setHud((current) => ({
       ...current,
       state: { ...current.state, engineOn: inp.engineOn },
     }));
-  }, [onNotify]);
+  }, [ensureEngineSound, onNotify]);
 
   const pressCockpitControl = useCallback((id: CockpitControlId) => {
     const inp = inputRef.current;
@@ -591,7 +625,7 @@ export function SimulatorView({
         onNotify("Короткий звуковой сигнал");
         break;
     }
-  }, [onNotify, setTurnSignal, toggleEngine]);
+  }, [ensureEngineSound, onNotify, setTurnSignal, toggleEngine]);
 
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
   useEffect(() => {
@@ -616,6 +650,7 @@ export function SimulatorView({
       rideStartedRef.current = false;
       lastAutoSaveRef.current = Date.now();
       keysRef.current = {};
+      hornHeldRef.current = false;
       releasePedals();
       sceneCtrlRef.current?.resetOrbit();
       setHud((prev) => ({
@@ -786,8 +821,13 @@ export function SimulatorView({
             rpm: soundState.rpm,
             throttle: inputRef.current.throttle,
             speedKmh: Math.abs(soundState.v) * 3.6,
-            horn: performance.now() < hornPulseUntilRef.current,
+            horn: hornHeldRef.current || performance.now() < hornPulseUntilRef.current,
           });
+          const signalPhase = soundState.signal && soundEnabledRef.current && soundLayersRef.current.indicator
+            ? Math.floor((soundState.time * 1000) / 667) % 2
+            : null;
+          if (signalPhase === 0 && indicatorPhaseRef.current !== 0) engineSoundRef.current.clickIndicator();
+          indicatorPhaseRef.current = signalPhase;
         }
       }
 
@@ -954,7 +994,14 @@ export function SimulatorView({
         case "KeyO":
           setShowControls((shown) => !shown);
           break;
+        case "KeyU":
+          onToggleImmersive();
+          break;
         case "KeyH":
+          ensureEngineSound();
+          hornHeldRef.current = true;
+          break;
+        case "KeyV":
           setShowHelp(false);
           setShowControls(false);
           setUiHidden((v) => {
@@ -1005,10 +1052,12 @@ export function SimulatorView({
     const onKeyUp = (e: KeyboardEvent) => {
       const code = logicalKey(bindingsRef.current, e.code);
       keysRef.current[code] = false;
+      if (code === "KeyH") hornHeldRef.current = false;
     };
 
     const onBlur = () => {
       keysRef.current = {};
+      hornHeldRef.current = false;
       releasePedals();
     };
 
@@ -1020,7 +1069,7 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify, cameraMode, toggleShifterGlance]);
+  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify, cameraMode, toggleShifterGlance, ensureEngineSound, onToggleImmersive]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
   // Управление мышью включается отдельно в панели «Управление»; по умолчанию выключено.
@@ -1303,8 +1352,7 @@ export function SimulatorView({
     const inp = inputRef.current;
     const targetGear: Gear = defaultGearForWorld(worldRef.current);
     inp.engineOn = true;
-    if (!engineSoundRef.current) engineSoundRef.current = new EngineSound();
-    engineSoundRef.current.ensureStarted();
+    ensureEngineSound();
     inp.belt = true;
     inp.handbrake = false;
     inp.lights = true;
@@ -1779,7 +1827,7 @@ export function SimulatorView({
               </button>
             </div>
             <KeyBindingsEditor value={bindings} onChange={setBindings} />
-            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} stations={radioStations} />
+            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} stations={radioStations} soundEnabled={soundEnabled} soundLayers={soundLayers} onSoundEnabledChange={(enabled) => { setSoundEnabled(enabled); if (enabled) ensureEngineSound(); }} onSoundLayerToggle={toggleSoundLayer} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
