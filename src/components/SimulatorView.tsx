@@ -87,6 +87,7 @@ type Props = {
 // === [SEC:sim-storage] Настройки клавиатурного руля и 2D-fallback без WebGL ===
 const CONTROLS_KEY = "cdt.controls.v1";
 const DEFAULT_STEER_KEY_RATE = 340;
+const HUD_PANEL_LABELS: Record<string, string> = { mirrorRear: "Заднее зеркало", mirrorLeft: "Левое зеркало", mirrorRight: "Правое зеркало", steeringWheel: "Руль", scorePanel: "Оценка", speedPanel: "Скорость", statusBar: "Статус", camToggles: "Камеры", cluster: "Приборы", pedalGas: "Газ", pedalBrake: "Тормоз" };
 /** Старт и сброс попытки всегда «холодные»: ДВС заглушен, КПП P. */
 const COLD_START = false;
 
@@ -270,6 +271,7 @@ export function SimulatorView({
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
   const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
   const [layerOrder, setLayerOrder] = useState<string[]>(loadLayerOrder);
+  const closedPanelIds = panelState.closed.filter((id) => HUD_PANEL_LABELS[id]);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
@@ -1576,6 +1578,17 @@ export function SimulatorView({
           onLostPointerCapture={handleCanvasPointerEnd}
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
+        {closedPanelIds.length > 0 && !immersive && !uiHidden && (
+          <div className="absolute left-2 top-2 z-[58] flex max-w-[calc(100%-16px)] flex-wrap items-center gap-1 rounded-lg border border-white/15 bg-[#091017]/90 p-1.5 backdrop-blur">
+            <span className="mono px-1 text-[9px] text-[#7c909d]">ПАНЕЛИ</span>
+            {closedPanelIds.map((id) => (
+              <button key={id} type="button" className="btn btn-mini py-0.5 px-1.5" onClick={() => restorePanel(id)}>
+                + {HUD_PANEL_LABELS[id]}
+              </button>
+            ))}
+            <button type="button" className="btn btn-mini py-0.5 px-1.5" onClick={() => setPanelState((prev) => ({ ...prev, closed: [] }))}>Все</button>
+          </div>
+        )}
 
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
         {!webglFallback && showRearMirror && (
