@@ -383,6 +383,7 @@ export function FloatingPanel({
       )}
       {!title && (onToggleCollapse || onClose) && (
         <div className="absolute right-1 top-1 z-10 flex items-center gap-1 rounded bg-[#131e28]/90 px-1 py-0.5">
+          {collapsed && <span className="max-w-28 truncate text-[9px] text-[#9bafbc]">{panelName}</span>}
           {onToggleCollapse && <button type="button" aria-label={collapsed ? "Развернуть: " + panelName : "Свернуть: " + panelName} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="text-[10px] text-[#9bafbc] hover:text-[#f5b942]">{collapsed ? "+" : "−"}</button>}
           {onClose && <button type="button" aria-label={"Закрыть: " + panelName} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="text-[10px] text-[#9bafbc] hover:text-[#ff8080]">×</button>}
         </div>
