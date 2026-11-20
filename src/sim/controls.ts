@@ -144,11 +144,11 @@ export function checkGearChange(
     if (!inp.engineOn) {
       return "Сначала запустите двигатель (I), затем удерживайте тормоз (S) и выберите передачу";
     }
-    if ((inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
+    if (inp.brake !== undefined && inp.brake < SHIFT_LOCK_MIN_BRAKE) {
       return "Удерживайте педаль тормоза (S или ТОРМОЗ), чтобы переключить КПП из P (Parking)";
     }
   }
-  if (requiresSelectorBrake(inp.gear, next) && (inp.brake ?? 0) < SHIFT_LOCK_MIN_BRAKE) {
+  if (requiresSelectorBrake(inp.gear, next) && inp.brake !== undefined && inp.brake < SHIFT_LOCK_MIN_BRAKE) {
     return "Удерживайте педаль тормоза (S или ТОРМОЗ) для переключения селектора; без тормоза доступны N ↔ D/R";
   }
   if (isManualGear(next)) {
