@@ -143,7 +143,8 @@ export function resolveActiveSpeedLimit(state: SimState, world: WorldData): numb
     const sz = world.speedZones[i];
     const dx = state.x - sz.x;
     const dz = state.z - sz.z;
-    if (dx * dx + dz * dz <= sz.radius * sz.radius) {
+    const radius = sz.radius ?? 0;
+    if (dx * dx + dz * dz <= radius * radius) {
       limit = Math.min(limit, sz.limitKmh);
     }
   }
