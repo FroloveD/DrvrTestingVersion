@@ -5,7 +5,7 @@ public class UEDevTarget : TargetRules
     public UEDevTarget(TargetInfo Target) : base(Target)
     {
         Type = TargetType.Game;
-        DefaultBuildSettings = BuildSettingsVersion.V5;
+        DefaultBuildSettings = BuildSettingsVersion.V6;
         ExtraModuleNames.Add("UEDev");
     }
 }

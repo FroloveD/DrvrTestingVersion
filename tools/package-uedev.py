@@ -1,8 +1,16 @@
 """Архив исходников UEDev (без SDK, ассетов сборки и кэшей). Запуск из любой папки."""
+import json
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
 root = Path(__file__).resolve().parents[1]
+project = root / 'ue' / 'UEDev'
+descriptor = (project / 'UEDev.uproject').read_bytes()
+# Не допускать UTF-16 и BOM: UBT читает descriptor как UTF-8 JSON.
+assert not descriptor.startswith((b'\xff\xfe', b'\xfe\xff', b'\xef\xbb\xbf'))
+assert json.loads(descriptor.decode('utf-8'))['EngineAssociation'] == '5.7'
+for target in ['UEDev.Target.cs', 'UEDevEditor.Target.cs']:
+    assert 'BuildSettingsVersion.V6' in (project / 'Source' / target).read_text(encoding='utf-8')
 out = root / 'deliverables' / 'UEDev-menu-starter.zip'
 out.parent.mkdir(exist_ok=True)
 skip = {'Binaries', 'DerivedDataCache', 'Intermediate', 'Saved', '.vs', '__pycache__'}
@@ -13,7 +21,7 @@ with ZipFile(out, 'w', ZIP_DEFLATED) as archive:
                 continue
             archive.write(path, 'UEDev-starter/' + path.relative_to(root).as_posix())
     archive.write(root / 'NOTICE', 'UEDev-starter/NOTICE')
-    archive.writestr('UEDev-starter/START_HERE.txt', '''UEDev — UE 5.6 C++: стартовое меню, пауза и технический итог.
+    archive.writestr('UEDev-starter/START_HERE.txt', '''UEDev — UE 5.7 C++: стартовое меню, пауза и технический итог.
 Распакуйте архив целиком. Прочтите ue/README.md и ue/PLAN.md.
 Откройте ue/UEDev/UEDev.uproject, соберите UEDevEditor.
 Play -> стартовое меню -> Начать заезд -> Enter -> W.

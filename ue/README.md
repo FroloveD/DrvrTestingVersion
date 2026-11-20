@@ -1,6 +1,6 @@
 # UEDev — начало работы
 
-**Статус:** исходный C++-каркас под **Unreal Engine 5.6**, клавиатура и мышь.
+**Статус:** исходный C++-каркас под **Unreal Engine 5.7**, клавиатура и мышь.
 Unreal Editor/UnrealBuildTool в среде агента не установлены: UE-модуль **не собран и не запущен**.
 Проверен только независимый C++-модуль и сохранность веб-сборки. Это не готовый порт и не доказательство прироста FPS.
 
@@ -9,8 +9,8 @@ Unreal Editor/UnrealBuildTool в среде агента не установле
 
 ## 1. Установка на компьютере разработчика (Windows)
 
-1. Установить Unreal Engine **5.6** через Epic Games Launcher. Версия выбрана как базовая для прототипа, не как заявление о последней версии UE.
-2. Установить Visual Studio 2022 с workload **Game development with C++**, MSVC и Windows SDK, совместимыми с выбранной UE 5.6. Сверить компоненты с подсказками установщика Epic/UE.
+1. Установить Unreal Engine **5.7** через Epic Games Launcher. Версия выбрана как базовая для прототипа, не как заявление о последней версии UE.
+2. Установить Visual Studio 2022 с workload **Game development with C++**, MSVC и Windows SDK, совместимыми с выбранной UE 5.7. Сверить компоненты с подсказками установщика Epic/UE.
 3. Открыть `ue/UEDev/UEDev.uproject`. При запросе пересборки согласиться.
 4. Если автоматическая сборка не удалась: ПКМ по `.uproject` → **Generate Visual Studio project files**, открыть `UEDev.sln`, выбрать **Development Editor / Win64**, собрать цель **UEDevEditor**. Не включать Live Coding для первой сборки.
 5. Если UE не привязана к `.uproject`, открыть проект через Launcher/Unreal Editor, а не менять версию проекта наугад.
@@ -18,7 +18,7 @@ Unreal Editor/UnrealBuildTool в среде агента не установле
 Альтернатива из PowerShell (исправить путь к установленному движку):
 
 ```powershell
-$UE = 'C:\Program Files\Epic Games\UE_5.6'
+$UE = 'C:\Program Files\Epic Games\UE_5.7'
 $Project = (Resolve-Path '.\ue\UEDev\UEDev.uproject').Path
 & "$UE\Engine\Build\BatchFiles\Build.bat" UEDevEditor Win64 Development "-Project=$Project" -WaitMutex
 if ($LASTEXITCODE -ne 0) { throw 'Сборка UEDevEditor не прошла' }
@@ -115,3 +115,9 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 python3 tools/package-uedev.py
 ```
 Архив — исходники для сборки, не EXE. UE API/Slate и эти переходы ещё требуют проверки в настоящем редакторе.
+
+## Совместимость UE 5.7: первые ошибки сборки
+
+Обе цели `Source/UEDev.Target.cs` и `Source/UEDevEditor.Target.cs` используют `BuildSettingsVersion.V6` по диагностике установленной UE 5.7.4. Это не подтверждение успешной сборки модуля: следующие ошибки следует разбирать по UBT Log.txt. `TargetBuildEnvironment.Unique` для Launcher-установки не включать.
+
+Если UBT сообщает `0xFF is an invalid start of a value`, descriptor повреждён/в неверной кодировке. Заменить `UEDev.uproject` из свежего архива целиком. В архиве он записан ASCII-совместимым UTF-8 без BOM (Unicode в JSON экранирован); не сохранять его как UTF-16. После замены повторное переключение версии не нужно — EngineAssociation уже 5.7.
