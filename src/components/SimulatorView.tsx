@@ -637,8 +637,9 @@ export function SimulatorView({
         inp.throttleMultiplier = throttleBoostRef.current;
 
         // Руль: отклонённое USB-устройство перехватывает управление у клавиатуры
-        const steerL = Boolean(keys.KeyA || keys.ArrowLeft);
-        const steerR = Boolean(keys.KeyD || keys.ArrowRight);
+        const cockpitLookMode = optsRef.current.cameraMode === "cockpit";
+        const steerL = Boolean(keys.KeyA || (!cockpitLookMode && keys.ArrowLeft));
+        const steerR = Boolean(keys.KeyD || (!cockpitLookMode && keys.ArrowRight));
         if (pad.steering) {
           inp.steerWheelDeg = pad.steerWheelDeg;
         } else if (steerL && !steerR) {
