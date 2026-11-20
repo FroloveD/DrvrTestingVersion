@@ -580,6 +580,117 @@ export function buildRussianBuilding(obs: ObstacleBox, env: CityEnvironmentPack)
  * Строит реалистичное городское дерево РФ/СНГ (липа/клён с многоярусной кроной, русская берёза или ель)
  * с развилкой ветвей и приствольной лункой у земли.
  */
+/**
+ * Упрощённый инстансинг деревьев для больших OSM-сцен.
+ * Сохраняет детерминированный тип/масштаб/цвет, но заменяет набор мелких мешей
+ * двумя батчами на дерево (ствол + крона), отдельно внутри пространственных ячеек.
+ */
+export function buildOsmTreeInstances(
+  group: THREE.Group,
+  trees: ObstacleBox[],
+  env: CityEnvironmentPack
+): void {
+  const cellSize = 96;
+  const trunkGeometry = new THREE.CylinderGeometry(1, 1, 1, 7);
+  const foliageGeometry = new THREE.IcosahedronGeometry(1, 1);
+  const spruceGeometry = new THREE.ConeGeometry(1, 1, 9);
+  const dummy = new THREE.Object3D();
+
+  type TreeInstance = { x: number; z: number; height: number; seed: number };
+  const cells = new Map<string, TreeInstance[]>();
+  for (const tree of trees) {
+    const seed = hashString(`${tree.id}:${Math.round(tree.cx * 10)}:${Math.round(tree.cz * 10)}`);
+    const key = `${Math.floor(tree.cx / cellSize)},${Math.floor(tree.cz / cellSize)}`;
+    const bucket = cells.get(key) ?? [];
+    bucket.push({ x: tree.cx, z: tree.cz, height: Math.max(3.4, tree.height), seed });
+    cells.set(key, bucket);
+  }
+
+  for (const [key, bucket] of cells) {
+    const [gx, gz] = key.split(",").map(Number);
+    const centerX = (gx + 0.5) * cellSize;
+    const centerZ = (gz + 0.5) * cellSize;
+    const trunkGroups = new Map<THREE.Material, TreeInstance[]>();
+    const crownGroups = new Map<string, TreeInstance[]>();
+
+    for (const tree of bucket) {
+      const kind = tree.seed % 9;
+      const isSpruce = kind === 0;
+      const isBirch = kind === 1 || kind === 2;
+      const trunkMat = isBirch ? env.birchMat : env.barkMat;
+      const trunkBucket = trunkGroups.get(trunkMat) ?? [];
+      trunkBucket.push(tree);
+      trunkGroups.set(trunkMat, trunkBucket);
+      const foliageIndex = tree.seed % env.foliageMats.length;
+      const crownKey = isSpruce ? `spruce:${foliageIndex}` : `leaf:${foliageIndex}`;
+      const crownBucket = crownGroups.get(crownKey) ?? [];
+      crownBucket.push(tree);
+      crownGroups.set(crownKey, crownBucket);
+    }
+
+    const makeMesh = (geometry: THREE.BufferGeometry, material: THREE.Material, count: number) => {
+      const mesh = new THREE.InstancedMesh(geometry, material, count);
+      mesh.position.set(centerX, 0, centerZ);
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.frustumCulled = true;
+      return mesh;
+    };
+
+    for (const [material, instances] of trunkGroups) {
+      const mesh = makeMesh(trunkGeometry, material, instances.length);
+      instances.forEach((tree, index) => {
+        const rand = makeRng(tree.seed);
+        const h = tree.height * (0.94 + rand() * 0.22);
+        const isBirch = tree.seed % 9 === 1 || tree.seed % 9 === 2;
+        const trunkH = h * (isBirch ? 0.54 : 0.45);
+        const radius = isBirch ? 0.14 : 0.2;
+        dummy.position.set(tree.x - centerX, trunkH * 0.5, tree.z - centerZ);
+        dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+        dummy.scale.set(radius, trunkH, radius);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
+
+    for (const [crownKey, instances] of crownGroups) {
+      const [kind, foliageIndexText] = crownKey.split(":");
+      const isSpruce = kind === "spruce";
+      const geometry = isSpruce ? spruceGeometry : foliageGeometry;
+      const material = isSpruce ? env.spruceMat : env.foliageMats[Number(foliageIndexText)];
+      const mesh = makeMesh(geometry, material, instances.length);
+      instances.forEach((tree, index) => {
+        const rand = makeRng(tree.seed);
+        const h = tree.height * (0.94 + rand() * 0.22);
+        const isBirch = tree.seed % 9 === 1 || tree.seed % 9 === 2;
+        if (isSpruce) {
+          dummy.position.set(tree.x - centerX, h * 0.65, tree.z - centerZ);
+          dummy.scale.set(h * 0.34, h * 0.7, h * 0.34);
+        } else {
+          const trunkH = h * (isBirch ? 0.54 : 0.45);
+          const crownR = h * (isBirch ? 0.25 : 0.3);
+          dummy.position.set(tree.x - centerX, trunkH + crownR * 0.62, tree.z - centerZ);
+          dummy.scale.set(crownR * 1.05, crownR * 0.95, crownR);
+        }
+        dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
+  }
+
+  // Геометрии разделяются между ячейками и освобождаются при очистке worldGroup.
+  void trunkGeometry;
+  void foliageGeometry;
+  void spruceGeometry;
+}
+
 export function buildRealisticTree(
   x: number,
   z: number,
