@@ -5,7 +5,7 @@
  * @tests T32–T33 (ядро маршрутизации), Browser Smoke P.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import {
   buildExamRouteRecord,
@@ -95,29 +95,13 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     const handlePointerEnd = (event: PointerEvent) => {
       if (dragCheckpointRef.current?.pointerId === event.pointerId) dragCheckpointRef.current = null;
     };
-    // Playwright's mouse input and older embedded browsers may deliver the
-    // compatibility mouse stream without a usable pointer-capture sequence.
-    // Keep it as a fallback, isolated by the sentinel pointerId -1.
-    const handleMouseMove = (event: globalThis.MouseEvent) => {
-      const drag = dragCheckpointRef.current;
-      if (!drag || drag.pointerId !== -1) return;
-      moveCheckpoint(drag, event.clientX, event.clientY);
-      event.preventDefault();
-    };
-    const handleMouseEnd = () => {
-      if (dragCheckpointRef.current?.pointerId === -1) dragCheckpointRef.current = null;
-    };
     window.addEventListener("pointermove", handlePointerMove, { passive: false });
     window.addEventListener("pointerup", handlePointerEnd);
     window.addEventListener("pointercancel", handlePointerEnd);
-    window.addEventListener("mousemove", handleMouseMove, { passive: false });
-    window.addEventListener("mouseup", handleMouseEnd);
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseEnd);
       dragCheckpointRef.current = null;
     };
   }, []);
@@ -231,19 +215,6 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
     // Pointer capture keeps subsequent pointermove events flowing while the marker is dragged.
     event.stopPropagation();
   };
-
-  const handleCheckpointMouseDown = (
-    event: React.MouseEvent<SVGCircleElement>,
-    checkpointId: string
-  ) => {
-    if (!editing) return;
-    const svg = event.currentTarget.ownerSVGElement;
-    if (!svg) return;
-    dragCheckpointRef.current = { checkpointId, pointerId: -1, svg };
-    event.preventDefault();
-    event.stopPropagation();
-  };
-
   // Обрабатываем движение также непосредственно на захватившем указатель маркере.
   // Это надёжнее одного window-listener в браузерах, которые ретаргетируют события
   // pointer capture на SVG-элемент.
@@ -563,7 +534,6 @@ export function RouteCatalogView({ sourceDef, onOpenRoute, onNotify }: Props) {
                             fill={index === editing.checkpoints.length - 1 ? "#ff7b7b" : "#52d6bd"}
                             stroke="#071018" strokeWidth="2" style={{ cursor: "grab" }}
                             onPointerDown={(event) => handleCheckpointPointerDown(event, checkpoint.id)}
-                            onMouseDown={(event) => handleCheckpointMouseDown(event, checkpoint.id)}
                             onPointerMove={handleCheckpointPointerMove}
                             onPointerUp={handleCheckpointPointerEnd}
                             onPointerCancel={handleCheckpointPointerEnd}
