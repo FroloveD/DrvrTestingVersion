@@ -1260,14 +1260,15 @@ export class SceneController {
     // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели
     this.frameCounter++;
     const inCockpit = opts.cameraMode === "cockpit";
-    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors);
+    const inReverseCam = inCockpit && state.engineOn && state.gear === "R";
+    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors, inReverseCam);
 
-    if (inCockpit && (opts.showRearMirror || opts.showMirrors)) {
+    if (inCockpit && (opts.showRearMirror || opts.showMirrors || inReverseCam)) {
       const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
       this.renderer.shadowMap.autoUpdate = false;
       const stride = this.qualityPreset === "low" ? 3 : 2;
       try {
-        if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
+        if ((opts.showRearMirror || inReverseCam) && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
           this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
           this.cockpitRearPrimed = true;
         }
@@ -1336,7 +1337,7 @@ export class SceneController {
   }
 
   /** Переключает материал физических 3D-полотeн между живым отражением и амальгамным стеклом покоя. */
-  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean): void {
+  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean, activeRevCam = false): void {
     const rig = this.playerRig;
     if (rig.rearMirrorGlass) {
       const target = activeRear ? this.cockpitRearMat : this.mirrorIdleMat;
@@ -1350,7 +1351,14 @@ export class SceneController {
       const target = activeSide ? this.cockpitRightMat : this.mirrorIdleMat;
       if (rig.rightMirrorGlass.material !== target) rig.rightMirrorGlass.material = target;
     }
-    if (!activeRear) this.cockpitRearPrimed = false;
+    if (rig.rearCamScreen && rig.rearCamOverlay && rig.headUnitScreen) {
+      const target = activeRevCam ? this.cockpitRearMat : this.mirrorIdleMat;
+      if (rig.rearCamScreen.material !== target) rig.rearCamScreen.material = target;
+      rig.rearCamScreen.visible = activeRevCam;
+      rig.rearCamOverlay.visible = activeRevCam;
+      rig.headUnitScreen.visible = !activeRevCam;
+    }
+    if (!activeRear && !activeRevCam) this.cockpitRearPrimed = false;
     if (!activeSide) this.cockpitSidePrimed = false;
   }
 
