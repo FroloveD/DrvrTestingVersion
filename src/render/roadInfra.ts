@@ -1061,11 +1061,111 @@ function makeSignalHeadT1(
   return head;
 }
 
+/**
+ * Инстансинг несущих конструкций светофоров в больших OSM-сценах.
+ * Сигнальные головки, линзы и управляемые материалы остаются отдельными.
+ */
+export function buildOsmTrafficSignalSupportInstances(
+  group: THREE.Group,
+  signals: TrafficSignalDef[],
+  mats: RoadMaterialPack
+): void {
+  const cellSize = 96;
+  const cells = new Map<string, TrafficSignalDef[]>();
+  for (const signal of signals) {
+    const key = `${Math.floor(signal.x / cellSize)},${Math.floor(signal.z / cellSize)}`;
+    const bucket = cells.get(key) ?? [];
+    bucket.push(signal);
+    cells.set(key, bucket);
+  }
+
+  const foundGeo = new THREE.CylinderGeometry(0.19, 0.23, 0.24, 8);
+  const flangeGeo = new THREE.CylinderGeometry(0.16, 0.17, 0.05, 8);
+  const poleGeo = new THREE.CylinderGeometry(0.068, 0.095, 1, 8);
+  const cabinetGeo = new THREE.BoxGeometry(0.24, 0.38, 0.16);
+  const armGeo = new THREE.CylinderGeometry(0.052, 0.066, 1, 8);
+  const braceGeo = new THREE.CylinderGeometry(0.028, 0.028, 1, 6);
+  const dummy = new THREE.Object3D();
+
+  for (const [key, bucket] of cells) {
+    const [gx, gz] = key.split(",").map(Number);
+    const centerX = (gx + 0.5) * cellSize;
+    const centerZ = (gz + 0.5) * cellSize;
+    const make = (geometry: THREE.BufferGeometry, material: THREE.Material, count: number) => {
+      const mesh = new THREE.InstancedMesh(geometry, material, count);
+      mesh.position.set(centerX, 0, centerZ);
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      return mesh;
+    };
+    const regular = bucket.filter((signal) => signal.stopLineWidth < 4);
+    const mast = bucket.filter((signal) => signal.stopLineWidth >= 4);
+    const addBaseParts = (items: TrafficSignalDef[], poleH: number) => {
+      if (!items.length) return;
+      const found = make(foundGeo, mats.concreteBaseMat, items.length);
+      const flange = make(flangeGeo, mats.darkIronMat, items.length);
+      const pole = make(poleGeo, mats.galvPoleMat, items.length);
+      const cabinet = make(cabinetGeo, mats.galvPoleMat, items.length);
+      items.forEach((signal, index) => {
+        const x = signal.x - centerX;
+        const z = signal.z - centerZ;
+        const set = (mesh: THREE.InstancedMesh, px: number, py: number, pz: number, scaleY = 1) => {
+          dummy.position.set(x + px * Math.cos(signal.h) + pz * Math.sin(signal.h), py, z - px * Math.sin(signal.h) + pz * Math.cos(signal.h));
+          dummy.rotation.set(0, signal.h, 0);
+          dummy.scale.set(1, scaleY, 1);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(index, dummy.matrix);
+        };
+        set(found, 0, 0.12, 0);
+        set(flange, 0, 0.26, 0);
+        set(pole, 0, poleH * 0.5, 0, poleH);
+        set(cabinet, 0, 1.25, 0.1);
+      });
+      for (const mesh of [found, flange, pole, cabinet]) {
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.computeBoundingSphere();
+        group.add(mesh);
+      }
+    };
+    addBaseParts(regular, 4.15);
+    addBaseParts(mast, 5.65);
+
+    if (mast.length) {
+      const arms = make(armGeo, mats.galvPoleMat, mast.length);
+      const braces = make(braceGeo, mats.galvPoleMat, mast.length);
+      mast.forEach((signal, index) => {
+        const x = signal.x - centerX;
+        const z = signal.z - centerZ;
+        const armSpan = Math.min(3.4, Math.max(2.2, signal.stopLineWidth * 0.62));
+        dummy.position.set(x + (armSpan * 0.5) * Math.cos(signal.h), 5.5, z - (armSpan * 0.5) * Math.sin(signal.h));
+        dummy.rotation.set(0, signal.h, 0);
+        dummy.rotateZ(-Math.PI / 2);
+        dummy.scale.set(1, armSpan, 1);
+        dummy.updateMatrix();
+        arms.setMatrixAt(index, dummy.matrix);
+
+        dummy.position.set(x + 0.42 * Math.cos(signal.h), 5.09, z - 0.42 * Math.sin(signal.h));
+        dummy.rotation.set(0, signal.h, 0);
+        dummy.rotateZ(-Math.PI / 4);
+        dummy.scale.set(1, 1.15, 1);
+        dummy.updateMatrix();
+        braces.setMatrixAt(index, dummy.matrix);
+      });
+      for (const mesh of [arms, braces]) {
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.computeBoundingSphere();
+        group.add(mesh);
+      }
+    }
+  }
+}
+
 /** Строит светофорный пост ГОСТ Р 52282: стоп-линия 1.12, опора, табличка 6.16 «СТОП», Т.1, Г-консоль и П.1. */
 export function buildGostTrafficSignal(
   group: THREE.Group,
   sig: TrafficSignalDef,
-  mats: RoadMaterialPack
+  mats: RoadMaterialPack,
+  includeSupport = true
 ): GostSignalVisualHandle {
   // Широкая стоп-линия 1.12 (0.40 м)
   const stopLine = new THREE.Mesh(new THREE.PlaneGeometry(sig.stopLineWidth, 0.42), mats.whiteMarkMat);
@@ -1101,16 +1201,18 @@ export function buildGostTrafficSignal(
   const poleH = hasMastArm ? 5.65 : 4.15;
 
   // Бетонный фундамент, анкерный фланец, гранёная оцинкованная опора и клеммный шкаф
-  const found = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.23, 0.24, 8), mats.concreteBaseMat);
-  found.position.y = 0.12;
-  const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.17, 0.05, 8), mats.darkIronMat);
-  flange.position.y = 0.26;
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.095, poleH, 8), mats.galvPoleMat);
-  pole.position.y = poleH * 0.5;
-  pole.castShadow = true;
-  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.38, 0.16), mats.galvPoleMat);
-  cabinet.position.set(0, 1.25, 0.1);
-  g.add(found, flange, pole, cabinet);
+  if (includeSupport) {
+    const found = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.23, 0.24, 8), mats.concreteBaseMat);
+    found.position.y = 0.12;
+    const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.17, 0.05, 8), mats.darkIronMat);
+    flange.position.y = 0.26;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.095, poleH, 8), mats.galvPoleMat);
+    pole.position.y = poleH * 0.5;
+    pole.castShadow = true;
+    const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.38, 0.16), mats.galvPoleMat);
+    cabinet.position.set(0, 1.25, 0.1);
+    g.add(found, flange, pole, cabinet);
+  }
 
   // Табличка 6.16 «СТОП» на опоре под основной секцией
   const stopPlaque = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.24), mats.stopPlaqueMat);
@@ -1158,7 +1260,9 @@ export function buildGostTrafficSignal(
       greenHaloMat
     );
     overHead.position.set(armSpan - 0.25, poleH - 0.22, -0.14);
-    g.add(arm, brace, overHead);
+    g.add(arm, brace);
+    }
+    g.add(overHead);
   }
 
   // Боковая двухсекционная пешеходная головка П.1 (обращена поперёк дороги к переходящим)
