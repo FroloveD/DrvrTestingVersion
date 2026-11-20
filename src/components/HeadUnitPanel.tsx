@@ -26,15 +26,6 @@ export function HeadUnitPanel({ value, onChange }: { value: HeadUnitState; onCha
 
   const station = INTERNET_RADIO_STATIONS[Math.max(0, Math.min(INTERNET_RADIO_STATIONS.length - 1, value.stationIndex))];
 
-  const refreshTracks = async () => {
-    try {
-      const list = await trackStore.listTracks();
-      setTracks(list);
-      onChange({ ...value, savedCount: list.length });
-    } catch {
-      setMessage("Локальный список треков недоступен.");
-    }
-  };
 
   useEffect(() => {
     void trackStore.listTracks().then(setTracks).catch(() => setTracks([]));
