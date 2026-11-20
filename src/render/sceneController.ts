@@ -253,8 +253,9 @@ export class SceneController {
   private lastBuildingCullZ = Number.NaN;
   private lastBuildingCullRadius = Number.NaN;
 
-  // Общие текстуры (освобождаются при dispose)
+  // Общие текстуры и prefiltered environment map (освобождаются при dispose).
   private readonly sharedTextures: THREE.Texture[] = [];
+  private readonly envMapRT: THREE.WebGLRenderTarget | null;
 
   // Метрики производительности (FPS и p95 кадра)
   private readonly frameTimes: number[] = [];
@@ -276,7 +277,28 @@ export class SceneController {
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    const skyTex = makeCloudySkyTexture();
+    const gl = this.renderer.getContext();
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info") as { UNMASKED_RENDERER_WEBGL: number } | null;
+    const rendererName = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : "";
+    const isSoftwareGl = /swiftshader|llvmpipe|softpipe|software/i.test(rendererName);
+    const skyTex = makeCloudySkyTexture(!isSoftwareGl);
+    let envMapRT: THREE.WebGLRenderTarget | null = null;
+    if (!isSoftwareGl) {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      try {
+        pmrem.compileEquirectangularShader();
+        envMapRT = pmrem.fromEquirectangular(skyTex);
+      } catch {
+        envMapRT = null;
+      } finally {
+        pmrem.dispose();
+      }
+    }
+    this.envMapRT = envMapRT;
+    if (envMapRT) {
+      this.scene.environment = envMapRT.texture;
+      this.scene.environmentIntensity = 0.56;
+    }
     const shadowTex = makeContactShadowTexture();
     const learnerTex = makeLearnerSignTexture();
     const grassTex = makeUrbanGrassTexture();
@@ -1567,6 +1589,8 @@ export class SceneController {
 
   dispose(): void {
     this.syncPhysicalMirrorMaterials(false, false);
+    this.scene.environment = null;
+    this.envMapRT?.dispose();
     this.groundMesh.geometry.dispose();
     (this.groundMesh.material as THREE.Material).dispose();
     this.disposeGroup(this.worldGroup);
