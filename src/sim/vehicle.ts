@@ -173,16 +173,16 @@ export function normalizeWheelLock(value: unknown): number {
 }
 
 /** Из предела внутреннего колеса получаем предельный угол велосипедной модели. */
-export function centralSteerLimit(innerWheelDeg?: number): number {
+export function centralSteerLimit(innerWheelDeg?: number, geo: CarGeometry = BASE_GEOMETRY): number {
   const inner = normalizeWheelLock(innerWheelDeg);
-  if (inner === WHEEL_LOCK.defaultDeg) return CAR.maxSteer;
+  if (inner === WHEEL_LOCK.defaultDeg && geo === BASE_GEOMETRY) return CAR.maxSteer;
   const cotInner = 1 / Math.tan((inner * Math.PI) / 180);
-  return Math.atan(1 / (cotInner + CAR.track / (2 * CAR.wheelbase)));
+  return Math.atan(1 / (cotInner + geo.track / (2 * geo.wheelbase)));
 }
 
 /** Ход руля всегда ±540°. Предел колёс не меняет скорость вращения руля или габариты автомобиля. */
-export function wheelDegToSteerRad(swDeg: number, innerWheelDeg?: number): number {
-  const limit = centralSteerLimit(innerWheelDeg);
+export function wheelDegToSteerRad(swDeg: number, innerWheelDeg?: number, geo: CarGeometry = BASE_GEOMETRY): number {
+  const limit = centralSteerLimit(innerWheelDeg, geo);
   const ratio = STEER_WHEEL.maxDeg / ((limit * 180) / Math.PI);
   const clamped = clamp(swDeg, -STEER_WHEEL.maxDeg, STEER_WHEEL.maxDeg);
   // Сохраняем порядок операций v0.3: старые реплеи при 35° совпадают побитно.
@@ -190,12 +190,12 @@ export function wheelDegToSteerRad(swDeg: number, innerWheelDeg?: number): numbe
 }
 
 /** Радиус поворота по внешнему переднему габариту (м) при данном центральном угле. */
-export function outerTurningRadius(delta: number): number {
+export function outerTurningRadius(delta: number, geo: CarGeometry = BASE_GEOMETRY): number {
   const absD = Math.abs(delta);
   if (absD < 0.01) return Infinity;
-  const rRearCenter = CAR.wheelbase / Math.tan(absD);
-  const rOuterSide = rRearCenter + CAR.width / 2;
-  const frontFromRearAxle = CAR.wheelbase + CAR.frontOverhang;
+  const rRearCenter = geo.wheelbase / Math.tan(absD);
+  const rOuterSide = rRearCenter + geo.width / 2;
+  const frontFromRearAxle = geo.wheelbase + geo.frontOverhang;
   return Math.hypot(rOuterSide, frontFromRearAxle);
 }
 
@@ -273,7 +273,7 @@ export function stepEngineRpm(prevRpm:number,throttlePos:number,gear:Gear,autoSu
   const rising=target>prevRpm, rate=shiftTimer>0?7.2:rising?5.6:6, slew=shiftTimer>0?7800:rising?5000:6200;
   return clamp(smoothSlewRpm(prevRpm,target,rate,slew,dt),0,ENGINE_REDLINE_RPM);
 }
-export function computeEngineAccel(throttle:number,gear:Gear,autoSubGear:number,v:number,engineOn:boolean,handbrake:boolean,shiftTimer=0):number {
+export function computeEngineAccel(throttle:number,gear:Gear,autoSubGear:number,v:number,engineOn:boolean,handbrake:boolean,shiftTimer=0,accelScale=1,vmaxKmh=MAX_SPEED_KMH):number {
   if(!engineOn||handbrake||gear==="N"||gear==="P"||throttle<=0)return 0;
   const th=clamp(throttle,0,1);
   if(gear==="R"){
@@ -281,14 +281,15 @@ export function computeEngineAccel(throttle:number,gear:Gear,autoSubGear:number,
     return -2.45*Math.pow(th,0.65)*clamp(1-kmh/(MAX_REVERSE_KMH+1.2),0.14,1);
   }
   const active=clamp(gear==="D"?autoSubGear:Number(gear)||1,1,MAX_FORWARD_GEAR), fwdKmh=Math.max(0,v*3.6);
-  if(fwdKmh>=MAX_SPEED_KMH)return 0;
-  const cap=GEAR_MAX_KMH[active]; let limit=1;
+  const maxSpeed=clamp(vmaxKmh,130,230), speedScale=maxSpeed/MAX_SPEED_KMH;
+  if(fwdKmh>=maxSpeed)return 0;
+  const cap=GEAR_MAX_KMH[active]*speedScale; let limit=1;
   if(active<MAX_FORWARD_GEAR){if(fwdKmh>=cap)return 0;if(fwdKmh>cap-1.2)limit=(cap-fwdKmh)/1.2;}
-  if(fwdKmh>MAX_SPEED_KMH-0.8)limit=Math.min(limit,0.78+0.22*((MAX_SPEED_KMH-fwdKmh)/0.8));
+  if(fwdKmh>maxSpeed-0.8)limit=Math.min(limit,0.78+0.22*((maxSpeed-fwdKmh)/0.8));
   const wheelRpm=fwdKmh*GEAR_RPM_PER_KMH[active], lock=clamp((wheelRpm-700)/1700,0,1);
   const effRpm=Math.max(ENGINE_IDLE_RPM,wheelRpm+th*1050*(1-lock*0.92)), torque=engineTorqueFactor(effRpm);
   const launch=active===1?1+0.1*(1-clamp(fwdKmh/18,0,1)):1;
-  return th*GEAR_PEAK_ACCEL[active]*torque*launch*(shiftTimer>0?0.14:1)*limit;
+  return th*GEAR_PEAK_ACCEL[active]*clamp(accelScale,0.7,1.35)*torque*launch*(shiftTimer>0?0.14:1)*limit;
 }
 /** Четыре угла кузова автомобиля в мировых координатах: [FL, FR, RR, RL]. */
 export function getCarCorners(x: number, z: number, h: number, geo: CarGeometry = BASE_GEOMETRY): [Vec2, Vec2, Vec2, Vec2] {
@@ -329,8 +330,8 @@ export function predictTrajectoryArc(
   let cx = x;
   let cz = z;
   let ch = h;
-  const halfW = CAR.width / 2;
-  const zLocal = reverse ? -(CAR.wheelbase / 2 + CAR.rearOverhang) : CAR.wheelbase / 2 + CAR.frontOverhang;
+  const halfW = geo.width / 2;
+  const zLocal = reverse ? -(geo.wheelbase / 2 + geo.rearOverhang) : geo.wheelbase / 2 + geo.frontOverhang;
 
   for (let i = 0; i <= steps; i++) {
     const fx = Math.sin(ch);
@@ -367,7 +368,8 @@ export function writeTrajectoryArcPositions(
   rightPositions: Float32Array,
   distance = 6.5,
   steps = 18,
-  y = 0.06
+  y = 0.06,
+  geo: CarGeometry = BASE_GEOMETRY
 ): void {
   const requiredLength = (steps + 1) * 3;
   if (!Number.isInteger(steps) || steps < 1 || leftPositions.length < requiredLength || rightPositions.length < requiredLength) {
