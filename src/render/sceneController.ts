@@ -40,6 +40,7 @@ import {
   type RoadMaterialPack,
 } from "./roadInfra";
 import { makeGostBayStencilTexture, makeUrbanGrassTexture } from "./roadTextures";
+import { CockpitDisplayController, DEFAULT_HEAD_UNIT_STATE, type HeadUnitState } from "./cockpitDisplays";
 import {
   buildDetailedCar,
   buildDetailedPedestrian,
@@ -48,7 +49,7 @@ import {
   type DetailedCarRig,
   type DetailedPedestrianVisual,
 } from "./vehiclesAndPeds";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "./vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "./vehiclesAndPeds";
 import { cockpitFramingFor, type CockpitFraming } from "./cockpitFraming";
 import { dampedHeadStep, HEAD_TURN, detentYawRad } from "./headLook";
 import { SHIFT_LOCK_MIN_BRAKE } from "../sim/controls";
@@ -165,6 +166,10 @@ export class SceneController {
   private readonly pedVisuals: PedestrianVisual[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
   private readonly bayVisuals: BayVisual[] = [];
+  private readonly cockpitDisplays: CockpitDisplayController;
+  private headUnit: HeadUnitState = DEFAULT_HEAD_UNIT_STATE;
+  private cockpitControlHover: CockpitControlId | null = null;
+  private controlPressAnim: Partial<Record<CockpitControlId, number>> = {};
   private playerRig: CarRig;
   private playerCarId = "ceed";
 
@@ -248,8 +253,9 @@ export class SceneController {
   private lastBuildingCullZ = Number.NaN;
   private lastBuildingCullRadius = Number.NaN;
 
-  // Общие текстуры (освобождаются при dispose)
+  // Общие текстуры и prefiltered environment map (освобождаются при dispose).
   private readonly sharedTextures: THREE.Texture[] = [];
+  private readonly envMapRT: THREE.WebGLRenderTarget | null;
 
   // Метрики производительности (FPS и p95 кадра)
   private readonly frameTimes: number[] = [];
@@ -271,13 +277,35 @@ export class SceneController {
     this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    const skyTex = makeCloudySkyTexture();
+    const gl = this.renderer.getContext();
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info") as { UNMASKED_RENDERER_WEBGL: number } | null;
+    const rendererName = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : "";
+    const isSoftwareGl = /swiftshader|llvmpipe|softpipe|software/i.test(rendererName);
+    const skyTex = makeCloudySkyTexture(!isSoftwareGl);
+    let envMapRT: THREE.WebGLRenderTarget | null = null;
+    if (!isSoftwareGl) {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      try {
+        pmrem.compileEquirectangularShader();
+        envMapRT = pmrem.fromEquirectangular(skyTex);
+      } catch {
+        envMapRT = null;
+      } finally {
+        pmrem.dispose();
+      }
+    }
+    this.envMapRT = envMapRT;
+    if (envMapRT) {
+      this.scene.environment = envMapRT.texture;
+      this.scene.environmentIntensity = 0.56;
+    }
     const shadowTex = makeContactShadowTexture();
     const learnerTex = makeLearnerSignTexture();
     const grassTex = makeUrbanGrassTexture();
     const playerPlateTex = makeRussianLicensePlateTexture("У 077 КС");
     const civilPlateTex = makeRussianLicensePlateTexture("А 482 МН");
     const clusterTex = makeInstrumentClusterTexture();
+    this.cockpitDisplays = new CockpitDisplayController();
     grassTex.repeat.set(160, 160);
     this.sharedTextures.push(skyTex, shadowTex, learnerTex, grassTex, playerPlateTex, civilPlateTex, clusterTex);
     this.scene.background = skyTex;
@@ -317,7 +345,9 @@ export class SceneController {
 
     // Детализированный Kia Ceed JD: кузов, оптика, диски, салон и приборная панель.
     this.playerRig = buildDetailedCar(
-      "ceed", 0xd97706, true, shadowTex, learnerTex, playerPlateTex, clusterTex, OWN_MIRROR_HARDWARE_LAYER
+      "ceed", 0xd97706, true, shadowTex, learnerTex, playerPlateTex,
+      this.cockpitDisplays.clusterTex, OWN_MIRROR_HARDWARE_LAYER,
+      { headUnitTex: this.cockpitDisplays.headUnitTex, rearOverlayTex: this.cockpitDisplays.rearOverlayTex }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -549,8 +579,9 @@ export class SceneController {
       this.sharedTextures[1] as THREE.CanvasTexture,
       this.sharedTextures[2] as THREE.CanvasTexture,
       this.sharedTextures[4] as THREE.CanvasTexture,
-      this.sharedTextures[6] as THREE.CanvasTexture,
-      OWN_MIRROR_HARDWARE_LAYER
+      this.cockpitDisplays.clusterTex,
+      OWN_MIRROR_HARDWARE_LAYER,
+      { headUnitTex: this.cockpitDisplays.headUnitTex, rearOverlayTex: this.cockpitDisplays.rearOverlayTex }
     );
     this.playerRig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && !obj.layers.isEnabled(OWN_MIRROR_HARDWARE_LAYER)) {
@@ -1078,6 +1109,9 @@ export class SceneController {
 
     // Поворотники (период 700 мс, как в v8)
     const { blinkOn, leftLit, rightLit } = getTurnSignalFlash(state.signal, state.time);
+    if (opts.cameraMode === "cockpit") {
+      this.cockpitDisplays.update(state, world, leftLit, rightLit, this.headUnit, isBraking, now / 1000);
+    }
     for (const m of rig.blinkLeftMats) m.color.setHex(leftLit ? 0xffb020 : 0x9a621e);
     for (const m of rig.blinkRightMats) m.color.setHex(rightLit ? 0xffb020 : 0x9a621e);
 
@@ -1088,6 +1122,37 @@ export class SceneController {
       const inten = state.lights && state.engineOn ? 1.8 : 0;
       rig.headSpotL.intensity = inten;
       rig.headSpotR.intensity = inten;
+    }
+    if (rig.handbrakePivot) rig.handbrakePivot.rotation.x = state.handbrake ? -0.44 : -0.05;
+    if (rig.leftStalkPivot) rig.leftStalkPivot.rotation.z = state.signal === "left" ? -0.17 : state.signal === "right" ? 0.17 : 0;
+    if (rig.hazardBtnMat) rig.hazardBtnMat.color.setHex(state.signal === "hazard" && blinkOn ? 0xff2e2e : 0x8a1c1c);
+    if (rig.startBtnMat) rig.startBtnMat.color.setHex(state.engineOn ? 0x22c55e : 0xd97706);
+
+    const dtSec = Math.min(0.1, Math.max(0, dtMs) / 1000);
+    for (const key of Object.keys(this.controlPressAnim) as CockpitControlId[]) {
+      const v = this.controlPressAnim[key] ?? 0;
+      if (v <= 0) delete this.controlPressAnim[key];
+      else this.controlPressAnim[key] = Math.max(0, v - dtSec * 2.6);
+    }
+    const pressOf = (id: CockpitControlId) => this.controlPressAnim[id] ?? 0;
+    if (rig.headUnitKnobL) {
+      rig.headUnitKnobL.rotation.y = this.headUnit.stationIndex * 0.42 + pressOf("vol") * 0.9;
+      rig.headUnitKnobL.scale.setScalar(1 + (this.cockpitControlHover === "vol" ? 0.16 : 0) + pressOf("vol") * 0.12);
+    }
+    if (rig.headUnitKnobR) {
+      rig.headUnitKnobR.rotation.y = (this.cockpitControlHover === "tune" ? 0.22 : 0) + pressOf("tune") * 0.6;
+      rig.headUnitKnobR.scale.setScalar(1 + (this.cockpitControlHover === "tune" ? 0.16 : 0) + pressOf("tune") * 0.12);
+    }
+    if (rig.headlightSwitchPivot) rig.headlightSwitchPivot.rotation.z = state.lights ? -0.62 - pressOf("headlight") * 0.2 : pressOf("headlight") * -0.18;
+    if (rig.headlightSwitchMat) rig.headlightSwitchMat.color.setHex(state.lights ? 0x22c55e : this.cockpitControlHover === "headlight" ? 0x64748b : 0x334155);
+    if (rig.headUnitScreen) {
+      const mat = rig.headUnitScreen.material as THREE.MeshBasicMaterial;
+      const hover = this.cockpitControlHover === "headunit" || this.cockpitControlHover === "vol" || this.cockpitControlHover === "tune";
+      mat.color.setHex(this.headUnit.mode === "off" ? 0x51606e : hover ? 0xa9d4e6 : 0xffffff);
+    }
+    if (rig.startBtnMat && pressOf("start") > 0) rig.startBtnMat.color.setHex(0xfef08a);
+    if (rig.hazardBtnMat && (pressOf("hazard") > 0 || this.cockpitControlHover === "hazard") && state.signal !== "hazard") {
+      rig.hazardBtnMat.color.setHex(0xb91c1c);
     }
 
     // Подвижная тень солнца вокруг автомобиля
@@ -1217,14 +1282,15 @@ export class SceneController {
     // 7. Зеркала: в виде из салона — живое GPU-отражение прямо на физических 3D-зеркалах; снаружи — в HUD-панели
     this.frameCounter++;
     const inCockpit = opts.cameraMode === "cockpit";
-    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors);
+    const inReverseCam = inCockpit && state.engineOn && state.gear === "R";
+    this.syncPhysicalMirrorMaterials(inCockpit && opts.showRearMirror, inCockpit && opts.showMirrors, inReverseCam);
 
-    if (inCockpit && (opts.showRearMirror || opts.showMirrors)) {
+    if (inCockpit && (opts.showRearMirror || opts.showMirrors || inReverseCam)) {
       const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
       this.renderer.shadowMap.autoUpdate = false;
       const stride = this.qualityPreset === "low" ? 3 : 2;
       try {
-        if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
+        if ((opts.showRearMirror || inReverseCam) && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
           this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
           this.cockpitRearPrimed = true;
         }
@@ -1266,8 +1332,34 @@ export class SceneController {
     this.renderer.render(this.scene, this.camera);
   }
 
+  /** Сохраняет состояние мультимедийного блока для 3D-экрана салона. */
+  setHeadUnitState(headUnit: HeadUnitState): void {
+    this.headUnit = headUnit;
+  }
+
+  getHeadUnitState(): HeadUnitState {
+    return this.headUnit;
+  }
+
+  setCockpitControlInteraction(hovered: CockpitControlId | null, pressed: CockpitControlId | null = null): void {
+    this.cockpitControlHover = hovered;
+    if (pressed) this.controlPressAnim[pressed] = 1;
+  }
+
+  pickCockpitControl(normX: number, normY: number): CockpitControlId | null {
+    if (this.lastCameraMode !== "cockpit") return null;
+    const targets = this.playerRig.cockpitPickTargets;
+    if (!targets?.length) return null;
+    this.playerRig.chassis.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
+    this.shifterNdc.set(normX * 2 - 1, -(normY * 2 - 1));
+    this.shifterRaycaster.setFromCamera(this.shifterNdc, this.camera);
+    const hits = this.shifterRaycaster.intersectObjects(targets, false);
+    return (hits[0]?.object.userData.cockpitControl as CockpitControlId | undefined) ?? null;
+  }
+
   /** Переключает материал физических 3D-полотeн между живым отражением и амальгамным стеклом покоя. */
-  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean): void {
+  private syncPhysicalMirrorMaterials(activeRear: boolean, activeSide: boolean, activeRevCam = false): void {
     const rig = this.playerRig;
     if (rig.rearMirrorGlass) {
       const target = activeRear ? this.cockpitRearMat : this.mirrorIdleMat;
@@ -1281,7 +1373,14 @@ export class SceneController {
       const target = activeSide ? this.cockpitRightMat : this.mirrorIdleMat;
       if (rig.rightMirrorGlass.material !== target) rig.rightMirrorGlass.material = target;
     }
-    if (!activeRear) this.cockpitRearPrimed = false;
+    if (rig.rearCamScreen && rig.rearCamOverlay && rig.headUnitScreen) {
+      const target = activeRevCam ? this.cockpitRearMat : this.mirrorIdleMat;
+      if (rig.rearCamScreen.material !== target) rig.rearCamScreen.material = target;
+      rig.rearCamScreen.visible = activeRevCam;
+      rig.rearCamOverlay.visible = activeRevCam;
+      rig.headUnitScreen.visible = !activeRevCam;
+    }
+    if (!activeRear && !activeRevCam) this.cockpitRearPrimed = false;
     if (!activeSide) this.cockpitSidePrimed = false;
   }
 
@@ -1490,10 +1589,13 @@ export class SceneController {
 
   dispose(): void {
     this.syncPhysicalMirrorMaterials(false, false);
+    this.scene.environment = null;
+    this.envMapRT?.dispose();
     this.groundMesh.geometry.dispose();
     (this.groundMesh.material as THREE.Material).dispose();
     this.disposeGroup(this.worldGroup);
     this.disposeGroup(this.playerRig.root);
+    this.cockpitDisplays.dispose();
     this.trajLineL.geometry.dispose();
     (this.trajLineL.material as THREE.Material).dispose();
     this.trajLineR.geometry.dispose();

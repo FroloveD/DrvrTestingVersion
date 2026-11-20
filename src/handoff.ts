@@ -9,7 +9,7 @@
 
 /** Короткий блок — вставляется первым сообщением в новый чат. */
 export const HANDOFF_PROMPT: string = [
-  "Продолжаем CityDrivingTraining — офлайн 3D-тренажёр вождения (React 19 + Vite + Three.js 0.187, всё в одном dist/index.html).",
+  "Продолжаем CityDrivingTraining — 3D-тренажёр вождения (React 19 + Vite + Three.js 0.187, всё в одном dist/index.html; симуляция работает офлайн, интернет-радио подключается по действию пользователя).",
   "",
   "Прочитай целиком AGENTS.md, HANDOFF.md и WORKLOG.md в корне репозитория (при работе с ядром и рендером — docs/ARCHITECTURE.md и docs/ADR.md).",
   "",
@@ -18,7 +18,7 @@ export const HANDOFF_PROMPT: string = [
   "  ./node_modules/.bin/esbuild src/sim/selfTest.ts --bundle --platform=node --format=esm --outfile=/tmp/st.mjs --log-level=error && node --input-type=module -e \"const {runAllSelfTests}=await import('/tmp/st.mjs');const r=runAllSelfTests();console.log(r.filter(t=>!t.passed));if(r.some(t=>!t.passed))process.exit(1)\"",
   "  npm run build && node scripts/run-tests.mjs --check-dist",
   "",
-  "Правила работы: правки точечные; src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy — без импортов three, window и document; ничего не загружаем из сети; правила оценки и размеры боксов не выдаём за норматив ГИБДД (статус unvalidated до подписи инструктора); package.json и vite.config.ts руками не правим; после каждого шага обновляем WORKLOG.md.",
+  "Правила работы: правки точечные; src/sim, src/scoring, src/maps, src/scenarios, src/analytics, src/storage, src/strategy — без импортов three, window и document; ничего не загружаем из сети; правила оценки и размеры боксов не выдаём за норматив ГИБДД (статус unvalidated до подписи инструктора); интернет-радио — единственная штатная функция с внешним сетевым потоком; package.json и vite.config.ts руками не правим; после каждого шага обновляем WORKLOG.md.",
   "",
   "Задача: <опиши задачу>",
 ].join("\n");
@@ -49,8 +49,8 @@ L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
 L.push("| Тесты ядра | 34 автотеста ядра (T01–T34), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
-L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–P, >110 проверок (Playwright + headless Chromium, автозапуск в CI) |");
-L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
+L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–Q (Playwright + headless Chromium, автозапуск в CI) |");
+L.push("| Сеть | базовая симуляция локальна; внешние радиопотоки запрашиваются только после запуска радио пользователем; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
 L.push("| Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |");
 L.push("");
@@ -130,23 +130,27 @@ L.push("| `src/maps/routeCatalog.ts` | построение/проверка OSM
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |");
-L.push("| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда и raycast 3D-селектора |");
+L.push("| `src/render/sceneController.ts` | OSM-сцена, физические зеркала, паспортная камера салона, инерция взгляда, живые дисплеи, raycast органов и guarded PMREM/IBL |");
 L.push("| `src/render/cityBuildings.ts` | процедурные фасады зданий РФ/СНГ, деревья и облачное небо |");
 L.push("| `src/render/roadInfra.ts`, `src/render/roadTextures.ts` | PBR-дороги, тротуары, бордюры, разметка, знаки, светофоры и уличная инфраструктура ГОСТ |");
 L.push("| `src/render/roadSignTextures.ts` | процедурные отражающие текстуры 12 классов дорожных знаков и дополнительные таблички |");
 L.push("| `src/render/vehiclesAndPeds.ts` | пять детализированных Kia, салон, 3D-рычаг Shiftronic и hit-зоны органов управления |");
+L.push("| `src/render/cockpitDisplays.ts` | текстуры приборной панели, ШГУ и камеры заднего вида |");
+L.push("| `src/audio/engineSound.ts`, `src/audio/radioCatalog.ts`, `src/audio/trackStore.ts` | Web Audio двигатель/шины/клаксон/реле, FM-каталог и IndexedDB-кэш треков |");
+L.push("| `src/input/keyBindings.ts`, `src/components/KeyBindingsEditor.tsx` | переназначаемая клавиатура с проверкой конфликтов |");
 L.push("| `src/input/gamepad.ts`, `src/input/browserGamepads.ts` | пошаговая калибровка USB-руля, AxisArming и чтение Gamepad API |");
 L.push("| `src/analytics/summary.ts`, `src/analytics/calibration.ts` | статистика учеников, CSV, сводный отчёт Markdown, сверка вердиктов (ДИ Уилсона) |");
 L.push("| `src/storage/journalStore.ts` | IndexedDB `cdt-journal` (meta + payload), миграция, деградация без падения |");
 L.push("| `src/storage/routeCatalogStore.ts` | IndexedDB `cdt-route-catalog` v2: `routes` хранит маршруты, `maps` — общие OSM snapshot по fingerprint; миграция v1 → v2 |");
 L.push("| `src/strategy/plan.ts` | фазы, принципы, приоритеты, журнал решений, экспорт strategy.md |");
 L.push("| `src/render/headLook.ts`, `src/render/cockpitFraming.ts` | кадрировка салона по модели Kia, точки внимания зеркал/дороги и инерция головы |");
-L.push("| `src/components/SimulatorView.tsx` | управление сценой, вид из салона, обзор головы, drag-селектор АКПП, HUD и запись заезда |");
+L.push("| `src/components/SimulatorView.tsx`, `src/components/HeadUnitPanel.tsx` | управление сценой, интерактивные органы салона, ШГУ/радио, HUD, звук и запись заезда |");
+L.push("| `src/components/CustomScenarioView.tsx` | 2D-редактор, выбор машины и списка радио, сворачиваемые/закрываемые панели редактора |");
 L.push("| `src/components/RouteCatalogView.tsx` | выбор начала/конца на SVG-схеме OSM, проверка, сохранение, импорт/экспорт и открытие маршрута |");
 L.push("| `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |");
 L.push("| `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |");
 L.push("| `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |");
-L.push("| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–P |");
+L.push("| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–Q |");
 L.push("| `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |");
 L.push("");
 
@@ -169,7 +173,7 @@ L.push("11. **Выворот живёт в заезде**: каждый RLE-бл
 L.push("12. **Мышь**: руление и газ (>400 мс ЛКМ) — независимые опции; руль выбирает режим свободного курсора или перетаскивания с ЛКМ; ПКМ — орбита снаружи и свободный обзор головы в салоне; колесо — зум, над 3D-селектором — шаг КПП.");
 L.push("13. **Вид из салона**: камера привязана к матрице кузова и паспортной кадрировке выбранной Kia; ←/→ — левое/правое зеркало, центр — дорога; G — взгляд на селектор и возврат. Физические зеркала отображаются через GPU Render Targets.");
 L.push("14. **HUD**: панели перетаскиваются за grip ⠿ или долгим нажатием 420 мс; педали — только за grip,");
-L.push("    удержание самой кнопки нажимает педаль. H скрывает HUD, зеркала остаются.");
+L.push("    удержание самой кнопки нажимает педаль. H — клаксон (удержание), V скрывает HUD, зеркала остаются.");
 L.push("15. **Запись попытки**: `finished` — выполнено упражнение, `closed` — запись закрыта пользователем.");
 L.push("    После закрытия ввод не пишется; новый заезд — только через «Сброс».");
 L.push("16. **Оценка**: статус `unvalidated`, пока инструктор не подписал; не называть официальным экзаменом ГИБДД.");
@@ -186,6 +190,13 @@ L.push("localStorage:");
 L.push("");
 L.push("```text");
 L.push("cdt.layout.v1           позиции и размеры плавающих панелей HUD");
+L.push("cdt.panelState.v1       свёрнутые и закрытые панели HUD");
+L.push("cdt.editorPanelState.v1 свёрнутые и закрытые панели 2D-редактора");
+L.push("cdt.layoutOrder.v1      порядок слоёв HUD");
+L.push("cdt.keybindings.v1      назначения клавиш");
+L.push("cdt.sound.v1            главный переключатель звука");
+L.push("cdt.soundLayers.v1      отдельные слои двигателя, клаксона и реле");
+L.push("cdt.headUnit.v1         настройки режима ШГУ, станции и громкости");
 L.push("cdt.controls.v1         скорость клавиш A/D, режимы руления мышью и опции мышиного газа");
 L.push("cdt.calibration.v1      размеры боксов, выворот колёс, табличка «У»");
 L.push("cdt.ruleset.v1          активный набор правил");
@@ -239,6 +250,13 @@ L.push("8. Новые упражнения: разворот в ограниче
 L.push("9. Движущийся трафик как детерминированная функция model time (сейчас поток статичный).");
 L.push("");
 
+L.push("**Выборочная интеграция Arena_v1 — отдельная подветка**");
+L.push("");
+L.push("- Рабочая подветка: `arena/exam-routes-v1-integration-final`, создана от актуальной `arena/exam-routes`.");
+L.push("- Переносить только салон/мультимедиа/звук, настройки клавиатуры, пользовательский выбор машины и UI; не заменять OSM, дорожный граф, каталог маршрутов и оптимизации целевой ветки.");
+L.push("- TypeScript, production bundle и core/docs/offline gate прошли на промежуточных коммитах; завершить Browser Smoke Q и проверить радиопотоки/физические зоны салона вручную.");
+L.push("- После зелёного CI открыть PR в `arena/exam-routes`; не вливать в `main`.");
+L.push("");
 L.push("## 8. Как принимать задачу");
 L.push("");
 L.push("1. Прочитать `AGENTS.md`, этот документ, `WORKLOG.md` и затронутые модули целиком — не по памяти.");

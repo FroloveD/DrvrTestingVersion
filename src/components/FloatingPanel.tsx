@@ -14,6 +14,47 @@ export type LayoutMap = Record<string, PanelLayout>;
 export const LAYOUT_STORAGE_KEY = "cdt.layout.v1";
 /** Длительность удержания для переноса панели (мс). */
 export const LONG_PRESS_MS = 420;
+export const LAYER_ORDER_STORAGE_KEY = "cdt.layoutOrder.v1";
+export const PANEL_STATE_STORAGE_KEY = "cdt.panelState.v1";
+export type PanelStateMap = { collapsed: string[]; closed: string[] };
+const EMPTY_PANEL_STATE: PanelStateMap = { collapsed: [], closed: [] };
+
+function sanitizePanelIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 48))].slice(0, 32);
+}
+
+export function loadPanelState(): PanelStateMap {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PANEL_STATE_STORAGE_KEY) || "null") as Partial<PanelStateMap> | null;
+    return raw ? { collapsed: sanitizePanelIds(raw.collapsed), closed: sanitizePanelIds(raw.closed) } : EMPTY_PANEL_STATE;
+  } catch { return EMPTY_PANEL_STATE; }
+}
+
+export function savePanelState(state: PanelStateMap): void {
+  try {
+    if (!state.collapsed.length && !state.closed.length) localStorage.removeItem(PANEL_STATE_STORAGE_KEY);
+    else localStorage.setItem(PANEL_STATE_STORAGE_KEY, JSON.stringify({ collapsed: state.collapsed.slice(0, 32), closed: state.closed.slice(0, 32) }));
+  } catch { /* storage blocked */ }
+}
+
+export function loadLayerOrder(): string[] {
+  try { return sanitizePanelIds(JSON.parse(localStorage.getItem(LAYER_ORDER_STORAGE_KEY) || "[]")); } catch { return []; }
+}
+
+export function saveLayerOrder(order: string[]): void {
+  try { localStorage.setItem(LAYER_ORDER_STORAGE_KEY, JSON.stringify(sanitizePanelIds(order))); } catch { /* storage blocked */ }
+}
+
+export function promotePanelToFront(order: readonly string[], id: string): string[] {
+  return [...order.filter((item) => item !== id), id].slice(-32);
+}
+
+export function resolvePanelZIndex(id: string, baseZ: number, order: readonly string[]): number {
+  const index = order.indexOf(id);
+  return index < 0 ? baseZ : Math.min(44, 28 + index);
+}
+
 
 export function loadLayout(): LayoutMap {
   try {
@@ -57,6 +98,12 @@ type Props = {
   /** Доступное имя ручки. В режиме grip вся верхняя полоска отделена от кнопки педали. */
   gripLabel?: string;
   resizable?: boolean;
+  panelName?: string;
+  collapsed?: boolean;
+  hidden?: boolean;
+  onToggleCollapse?: (id: string) => void;
+  onClose?: (id: string) => void;
+  onBringToFront?: (id: string) => void;
   children: ReactNode;
 };
 
@@ -79,6 +126,12 @@ export function FloatingPanel({
   activation,
   gripLabel = "Перетащить панель",
   resizable = true,
+  panelName = title ?? id,
+  collapsed = false,
+  hidden = false,
+  onToggleCollapse,
+  onClose,
+  onBringToFront,
   children,
 }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -86,6 +139,7 @@ export function FloatingPanel({
   const [armed, setArmed] = useState(false);
   const current: PanelLayout = layout ?? fallback ?? { x: 12, y: 12, w: minW };
   const mode = activation ?? (title ? "header" : "longPress");
+  if (hidden) return null;
   const dragRef = useRef<{
     mode: "move" | "resize";
     pointerId: number;
@@ -144,6 +198,7 @@ export function FloatingPanel({
     if (e.button !== 0 || dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
+    onBringToFront?.(id);
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { mode: kind, pointerId: e.pointerId, sx: e.clientX, sy: e.clientY, ox: current.x, oy: current.y, ow: current.w };
     setArmed(true);
@@ -284,7 +339,7 @@ export function FloatingPanel({
             ? "border-[#1f2c38] hover:border-[#2d414f]"
             : "border-[#1f2c38]"
       }`}
-      onPointerDown={bodyDown}
+      onPointerDown={(e) => { onBringToFront?.(id); bodyDown(e); }}
       onPointerMove={bodyMove}
       onPointerUp={bodyUp}
       onPointerCancel={bodyUp}
@@ -304,6 +359,8 @@ export function FloatingPanel({
           <Icon name={icon} size={11} />
           <span className="truncate">{title}</span>
           <span className="ml-auto text-[#5b6f7d]">⋮⋮</span>
+          {onToggleCollapse && <button type="button" aria-label={collapsed ? "Развернуть: " + panelName : "Свернуть: " + panelName} title={collapsed ? "Развернуть" : "Свернуть"} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="ml-1 rounded px-1 text-[11px] hover:text-[#f5b942]">{collapsed ? "+" : "−"}</button>}
+          {onClose && <button type="button" aria-label={"Закрыть: " + panelName} title={"Закрыть «" + panelName + "»"} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="rounded px-1 text-[11px] hover:text-[#ff8080]">×</button>}
         </div>
       )}
       {mode === "grip" && (
@@ -318,6 +375,7 @@ export function FloatingPanel({
             const dir = delta[e.key];
             if (!dir) return;
             e.preventDefault(); e.stopPropagation();
+            onBringToFront?.(id);
             onChange(id, { ...current, ...clampPos(current.x + dir[0], current.y + dir[1], current.w) });
           }}>
           <svg width="22" height="10" viewBox="0 0 22 10" fill="currentColor" aria-hidden="true">
@@ -325,7 +383,14 @@ export function FloatingPanel({
           </svg>
         </button>
       )}
-      <div>{children}</div>
+      {!title && (onToggleCollapse || onClose) && (
+        <div className="absolute right-1 top-1 z-10 flex items-center gap-1 rounded bg-[#131e28]/90 px-1 py-0.5">
+          {collapsed && <span className="max-w-28 truncate text-[9px] text-[#9bafbc]">{panelName}</span>}
+          {onToggleCollapse && <button type="button" aria-label={collapsed ? "Развернуть: " + panelName : "Свернуть: " + panelName} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(id); }} className="text-[10px] text-[#9bafbc] hover:text-[#f5b942]">{collapsed ? "+" : "−"}</button>}
+          {onClose && <button type="button" aria-label={"Закрыть: " + panelName} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(id); }} className="text-[10px] text-[#9bafbc] hover:text-[#ff8080]">×</button>}
+        </div>
+      )}
+      {!collapsed && <div>{children}</div>}
 
       {/* У педалей ручка находится над рабочей кнопкой и не перекрывает её. */}
       {mode !== "grip" && <div

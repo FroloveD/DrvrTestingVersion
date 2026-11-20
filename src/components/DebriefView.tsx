@@ -26,7 +26,8 @@ import {
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialState, createReadyInput, stepSimulation } from "../sim/step";
 import type { CalibrationConfig } from "../sim/types";
-import { CAR, centralSteerLimit, FIXED_DT, getCarCorners } from "../sim/vehicle";
+import { carGeometry, centralSteerLimit, FIXED_DT, getCarCorners } from "../sim/vehicle";
+import { getPlayerCar } from "../sim/playerCar";
 import { Chip, downloadJson, Icon } from "./Icons";
 
 type Verdict = InstructorReview["verdict"];
@@ -50,6 +51,7 @@ type Props = {
   loadAllAttempts: () => Promise<RecordedAttempt[]>;
   onClearJournal: () => void;
   onBackToSim: () => void;
+  onNewAttempt: () => void;
   onNotify: (msg: string) => void;
 };
 
@@ -250,6 +252,7 @@ export function DebriefView({
   loadAllAttempts,
   onClearJournal,
   onBackToSim,
+  onNewAttempt,
   onNotify,
 }: Props) {
   const [cursor, setCursor] = useState(0);
@@ -427,10 +430,10 @@ export function DebriefView({
       downloadJson(
         `golden-set-${ruleSet.version}.json`,
         buildGoldenSet(source, ruleSet, {
-          model: CAR.model,
-          length: CAR.length,
-          width: CAR.width,
-          wheelbase: CAR.wheelbase,
+          model: getPlayerCar(attempt.playerCarId).name,
+          length: getPlayerCar(attempt.playerCarId).length,
+          width: getPlayerCar(attempt.playerCarId).width,
+          wheelbase: getPlayerCar(attempt.playerCarId).wheelbase,
           // Паспорт текущей конфигурации; в каждой попытке сохранена её собственная история выворота.
           maxSteerDeg: (centralSteerLimit(calibration.maxInnerWheelDeg) * 180) / Math.PI,
         }),
@@ -452,7 +455,7 @@ export function DebriefView({
     gear: "P" as const,
     swDeg: 0,
   };
-  const carPoly = getCarCorners(sample.x, sample.z, sample.h)
+  const carPoly = getCarCorners(sample.x, sample.z, sample.h, carGeometry(attempt.playerCarId ?? replayWorld.playerCarId))
     .map((c) => `${-c.x},${-c.z}`)
     .join(" ");
   const noseX = -(sample.x + Math.sin(sample.h) * 1.9);
@@ -471,7 +474,7 @@ export function DebriefView({
               <Chip tone={liveEval.verdict === "СДАЛ" ? "mint" : "red"}>{liveEval.verdict}</Chip>
             )}
             <span className="mono text-[11px] text-[#7c909d]">
-              {attempt.scenarioTitle} · {attempt.durationSec} с · {attempt.distanceMeters} м
+              {attempt.scenarioTitle} · {getPlayerCar(attempt.playerCarId).shortName} · {attempt.durationSec} с · {attempt.distanceMeters} м
               {attempt.student ? ` · ${attempt.student}` : ""}
             </span>
           </div>
@@ -497,7 +500,7 @@ export function DebriefView({
           >
             <Icon name="layers" size={13} /> {exporting ? "Собираю…" : `Golden-набор (${journal.length || 1})`}
           </button>
-          <button type="button" className="btn btn-primary btn-mini" onClick={onBackToSim}>
+          <button type="button" data-testid="debrief-new-attempt" className="btn btn-primary btn-mini" onClick={onNewAttempt}>
             <Icon name="car" size={13} /> Новый заезд
           </button>
         </div>

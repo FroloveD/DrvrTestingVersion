@@ -18,6 +18,12 @@
  * - `[SEC:sim-cluster]`  — приборная панель, селектор `P/R/N/D`, кнопки `I/РН/B/L`, раздельные педали и подвал ODbL.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyBindingsEditor } from "./KeyBindingsEditor";
+import { HeadUnitPanel } from "./HeadUnitPanel";
+import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_MODES, type HeadUnitState } from "../render/cockpitDisplays";
+import { INTERNET_RADIO_STATIONS, nextStationIndex, radioStationsFor } from "../audio/radioCatalog";
+import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
+import { EngineSound } from "../audio/engineSound";
 import { loadGamepadProfile, readBrowserGamepad, saveGamepadProfile } from "../input/browserGamepads";
 import { createAxisArming, readGamepad, updateAxisArming, type GamepadProfile } from "../input/gamepad";
 import { parseMapFileText, type NormalizedOsmPack } from "../maps/osmLoader";
@@ -55,14 +61,15 @@ import {
   STEER_WHEEL,
 } from "../sim/vehicle";
 import { Chip, Icon } from "./Icons";
-import { FloatingPanel, loadLayout, saveLayout, type LayoutMap, type PanelLayout } from "./FloatingPanel";
+import { FloatingPanel, loadLayout, saveLayout, loadPanelState, savePanelState, loadLayerOrder, saveLayerOrder, promotePanelToFront, resolvePanelZIndex, type LayoutMap, type PanelLayout, type PanelStateMap } from "./FloatingPanel";
 import { GamepadPanel } from "./GamepadPanel";
 import { SteeringLimitControl } from "./SteeringLimitControl";
-import { SHIFTER_LAYOUT, type ShifterHitId } from "../render/vehiclesAndPeds";
+import { SHIFTER_LAYOUT, type CockpitControlId, type ShifterHitId } from "../render/vehiclesAndPeds";
 
 type Props = {
   /** Тренажёр примонтирован всегда, но работает, пока его вкладка активна */
   active: boolean;
+  newAttemptRequest: number;
   immersive: boolean;
   onToggleImmersive: () => void;
   scenarioId: ScenarioId;
@@ -80,6 +87,7 @@ type Props = {
 // === [SEC:sim-storage] Настройки клавиатурного руля и 2D-fallback без WebGL ===
 const CONTROLS_KEY = "cdt.controls.v1";
 const DEFAULT_STEER_KEY_RATE = 340;
+const HUD_PANEL_LABELS: Record<string, string> = { mirrorRear: "Заднее зеркало", mirrorLeft: "Левое зеркало", mirrorRight: "Правое зеркало", steeringWheel: "Руль", scorePanel: "Оценка", speedPanel: "Скорость", statusBar: "Статус", camToggles: "Камеры", cluster: "Приборы", pedalGas: "Газ", pedalBrake: "Тормоз" };
 /** Старт и сброс попытки всегда «холодные»: ДВС заглушен, КПП P. */
 const COLD_START = false;
 
@@ -181,6 +189,7 @@ function render2DFallback(canvas: HTMLCanvasElement, s: SimState, world: WorldDa
 // === [SEC:sim-state] Состояние компонента, рефы симуляции, раскладка и геймпад ===
 export function SimulatorView({
   active,
+  newAttemptRequest,
   immersive,
   onToggleImmersive,
   scenarioId,
@@ -197,7 +206,12 @@ export function SimulatorView({
   const activeRef = useRef(true);
   const { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth } = calibration;
   // Новое значение выворота не изменяет площадку и не должно сбрасывать двигатель, позу или запись.
-  const [playerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
+  const [selectedPlayerCarId, setPlayerCarId] = useState<PlayerCarId>("ceed");
+  const playerCarId: PlayerCarId = scenarioId === "custom" ? customDef.playerCarId ?? "ceed" : selectedPlayerCarId;
+  const radioStations = useMemo(
+    () => (scenarioId === "custom" ? radioStationsFor(customDef.radioStationIds) : [...INTERNET_RADIO_STATIONS]),
+    [scenarioId, customDef.radioStationIds]
+  );
   const world = useMemo(
     () => ({ ...buildScenarioWorld(scenarioId, { perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth }, customOsm, customDef), playerCarId }),
     [scenarioId, customOsm, customDef, perpBayWidth, perpBayLength, aisleWidth, parBayLength, parBayWidth, playerCarId]
@@ -218,6 +232,21 @@ export function SimulatorView({
   const [showMirrors, setShowMirrors] = useState(true);
   const [showRearMirror, setShowRearMirror] = useState(true);
   const [uiHidden, setUiHidden] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
+  const [soundLayers, setSoundLayers] = useState<{ engine: boolean; horn: boolean; indicator: boolean }>(() => {
+    try { const saved = JSON.parse(localStorage.getItem("cdt.soundLayers.v1") || "null") as Partial<{ engine: boolean; horn: boolean; indicator: boolean }> | null; return { engine: saved?.engine !== false, horn: saved?.horn !== false, indicator: saved?.indicator !== false }; } catch { return { engine: true, horn: true, indicator: true }; }
+  });
+  const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("cdt.headUnit.v1") || "null") as Partial<HeadUnitState> | null;
+      return saved ? { ...DEFAULT_HEAD_UNIT_STATE, ...saved, radioPlaying: false, streamStatus: "idle" } : DEFAULT_HEAD_UNIT_STATE;
+    } catch {
+      return DEFAULT_HEAD_UNIT_STATE;
+    }
+  });
+  const [bindings, setBindings] = useState<KeyBindings>(loadKeyBindings);
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
   const [showHelp, setShowHelp] = useState(false);
   const [showQuickStartPrompt, setShowQuickStartPrompt] = useState(true);
   const [quickStartUsed, setQuickStartUsed] = useState(false);
@@ -240,6 +269,9 @@ export function SimulatorView({
   const steerRateRef = useRef<number>(steerKeyRate);
   const [showControls, setShowControls] = useState(false);
   const [layout, setLayout] = useState<LayoutMap>(loadLayout);
+  const [panelState, setPanelState] = useState<PanelStateMap>(loadPanelState);
+  const [layerOrder, setLayerOrder] = useState<string[]>(loadLayerOrder);
+  const closedPanelIds = panelState.closed.filter((id) => HUD_PANEL_LABELS[id]);
 
   // USB-руль / педали / геймпад (Gamepad API). По умолчанию выключено: пока устройство явно
   // не включено в панели «Управление», оно не опрашивается и на управление не влияет.
@@ -267,13 +299,64 @@ export function SimulatorView({
     saveLayout(layout);
   }, [layout]);
 
+  useEffect(() => savePanelState(panelState), [panelState]);
+  useEffect(() => saveLayerOrder(layerOrder), [layerOrder]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cdt.keybindings.v1", JSON.stringify(bindings));
+    } catch {
+      // Раскладка остаётся активной до закрытия вкладки, если storage недоступно.
+    }
+  }, [bindings]);
+
   const handleLayoutChange = useCallback((id: string, next: PanelLayout) => {
     setLayout((prev) => ({ ...prev, [id]: next }));
   }, []);
+  const togglePanelCollapse = useCallback((id: string) => setPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((item) => item !== id) : [...prev.collapsed, id] })), []);
+  const closePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
+  const restorePanel = useCallback((id: string) => setPanelState((prev) => ({ ...prev, closed: prev.closed.filter((item) => item !== id) })), []);
+  const bringPanelToFront = useCallback((id: string) => setLayerOrder((prev) => promotePanelToFront(prev, id)), []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Мутабельные рефы симуляционного цикла (без лишних ререндеров на 60 Гц)
   const sceneCtrlRef = useRef<SceneController | null>(null);
+  const headUnitRef = useRef(headUnit);
+  headUnitRef.current = headUnit;
+  const engineSoundRef = useRef<EngineSound | null>(null);
+  const lastEngineSoundAtRef = useRef(0);
+  const hornPulseUntilRef = useRef(0);
+  const hornHeldRef = useRef(false);
+  const indicatorPhaseRef = useRef<number | null>(null);
+  const soundEnabledRef = useRef(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
+  const soundLayersRef = useRef(soundLayers);
+  soundLayersRef.current = soundLayers;
+  useEffect(() => {
+    try {
+      localStorage.setItem("cdt.headUnit.v1", JSON.stringify({ ...headUnit, radioPlaying: false, streamStatus: "idle" }));
+    } catch {
+      // Настройки мультимедиа остаются активными до закрытия вкладки.
+    }
+    sceneCtrlRef.current?.setHeadUnitState(headUnit);
+  }, [headUnit]);
+
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+    try { localStorage.setItem("cdt.sound.v1", soundEnabled ? "1" : "0"); } catch { /* storage blocked */ }
+    engineSoundRef.current?.setEnabled(soundEnabled);
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    soundLayersRef.current = soundLayers;
+    try { localStorage.setItem("cdt.soundLayers.v1", JSON.stringify(soundLayers)); } catch { /* storage blocked */ }
+    engineSoundRef.current?.setLayers(soundLayers);
+  }, [soundLayers]);
+
+  const toggleSoundLayer = useCallback((layer: "engine" | "horn" | "indicator") => {
+    setSoundLayers((prev) => ({ ...prev, [layer]: !prev[layer] }));
+  }, []);
+
   const worldRef = useRef<WorldData>(world);
   const gridRef = useRef<SpatialGrid>(new SpatialGrid(world.obstacles, 10));
   const calRef = useRef<CalibrationConfig>(calibration);
@@ -489,6 +572,15 @@ export function SimulatorView({
     setShifterGlance(looking);
   }, [cameraMode]);
 
+  const ensureEngineSound = useCallback(() => {
+    if (!engineSoundRef.current) {
+      engineSoundRef.current = new EngineSound();
+      engineSoundRef.current.setEnabled(soundEnabledRef.current);
+      engineSoundRef.current.setLayers(soundLayersRef.current);
+    }
+    if (soundEnabledRef.current) engineSoundRef.current.ensureStarted();
+  }, []);
+
   /** Запуск ДВС разрешён только в P или N (src/sim/controls.ts); заглушить можно в любом режиме. */
   const toggleEngine = useCallback(() => {
     const inp = inputRef.current;
@@ -498,11 +590,55 @@ export function SimulatorView({
       return;
     }
     inp.engineOn = !inp.engineOn;
+    ensureEngineSound();
     setHud((current) => ({
       ...current,
       state: { ...current.state, engineOn: inp.engineOn },
     }));
-  }, [onNotify]);
+  }, [ensureEngineSound, onNotify]);
+
+  const pressCockpitControl = useCallback((id: CockpitControlId) => {
+    const inp = inputRef.current;
+    sceneCtrlRef.current?.setCockpitControlInteraction(null, id);
+    switch (id) {
+      case "headunit":
+        setHeadUnit((prev) => {
+          const index = HEAD_UNIT_MODES.findIndex((mode) => mode.id === prev.mode);
+          const mode = HEAD_UNIT_MODES[(index + 1 + HEAD_UNIT_MODES.length) % HEAD_UNIT_MODES.length].id;
+          return { ...prev, mode, radioPlaying: mode === "radio" ? prev.radioPlaying : false };
+        });
+        break;
+      case "vol":
+        setHeadUnit((prev) => ({ ...prev, mode: "radio", source: "stream", savedTrackKey: null, radioPlaying: !prev.radioPlaying }));
+        break;
+      case "tune":
+        setHeadUnit((prev) => ({ ...prev, mode: "radio", source: "stream", savedTrackKey: null, stationIndex: nextStationIndex(prev.stationIndex, 1), radioPlaying: true }));
+        break;
+      case "hazard":
+        setTurnSignal(inp.signal === "hazard" ? null : "hazard");
+        break;
+      case "start":
+        toggleEngine();
+        break;
+      case "headlight":
+        inp.lights = !inp.lights;
+        onNotify(inp.lights ? "Ближний свет включён" : "Ближний свет выключен");
+        break;
+      case "stalk-left":
+        setTurnSignal(inp.signal === null ? "left" : inp.signal === "left" ? "right" : null);
+        break;
+      case "handbrake":
+        inp.handbrake = !inp.handbrake;
+        onNotify(inp.handbrake ? "Стояночный тормоз затянут" : "Стояночный тормоз снят");
+        break;
+      case "horn":
+        if (!engineSoundRef.current) engineSoundRef.current = new EngineSound();
+        engineSoundRef.current.ensureStarted();
+        hornPulseUntilRef.current = performance.now() + 600;
+        onNotify("Короткий звуковой сигнал");
+        break;
+    }
+  }, [ensureEngineSound, onNotify, setTurnSignal, toggleEngine]);
 
   // Экшен-функции для цикла симуляции через ref (loop не пересоздаётся при их изменении)
   useEffect(() => {
@@ -527,6 +663,7 @@ export function SimulatorView({
       rideStartedRef.current = false;
       lastAutoSaveRef.current = Date.now();
       keysRef.current = {};
+      hornHeldRef.current = false;
       releasePedals();
       sceneCtrlRef.current?.resetOrbit();
       setHud((prev) => ({
@@ -546,7 +683,7 @@ export function SimulatorView({
     worldRef.current = world;
     sceneCtrlRef.current?.loadWorld(world);
     resetAttempt(world, COLD_START);
-  }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign]);
+  }, [world, resetAttempt, calibration.maxParkSpeedKmh, calibration.holdDurationSec, calibration.showLearnerSign, newAttemptRequest]);
 
   // === [SEC:sim-loop] Three.js, главный цикл с фиксированным шагом 1/60 с и запись заезда ===
   useEffect(() => {
@@ -557,6 +694,7 @@ export function SimulatorView({
     let ctrl: SceneController | null = null;
     try {
       ctrl = new SceneController(canvas);
+      ctrl.setHeadUnitState(headUnitRef.current);
       ctrl.applyQuality(optsRef.current.quality);
       ctrl.loadWorld(worldRef.current);
       ctrl.resize(box.clientWidth, box.clientHeight);
@@ -686,6 +824,26 @@ export function SimulatorView({
         accumulator -= FIXED_DT;
       }
 
+      const soundNow = performance.now();
+      if (soundNow - lastEngineSoundAtRef.current >= 55) {
+        lastEngineSoundAtRef.current = soundNow;
+        const soundState = stateRef.current;
+        if (engineSoundRef.current) {
+          engineSoundRef.current.update({
+            engineOn: soundState.engineOn,
+            rpm: soundState.rpm,
+            throttle: inputRef.current.throttle,
+            speedKmh: Math.abs(soundState.v) * 3.6,
+            horn: hornHeldRef.current || performance.now() < hornPulseUntilRef.current,
+          });
+          const signalPhase = soundState.signal && soundEnabledRef.current && soundLayersRef.current.indicator
+            ? Math.floor((soundState.time * 1000) / 667) % 2
+            : null;
+          if (signalPhase === 0 && indicatorPhaseRef.current !== 0) engineSoundRef.current.clickIndicator();
+          indicatorPhaseRef.current = signalPhase;
+        }
+      }
+
       if (newEventsBatch.length > 0) {
         const lastEv = newEventsBatch[newEventsBatch.length - 1];
         const rule = ruleRef.current.rules.find((r) => r.code === lastEv.code && r.enabled);
@@ -779,6 +937,8 @@ export function SimulatorView({
       cancelAnimationFrame(rafId);
       ro.disconnect();
       ctrl?.dispose();
+      engineSoundRef.current?.dispose();
+      engineSoundRef.current = null;
       sceneCtrlRef.current = null;
     };
     // Сцена создаётся один раз; актуальные колбэки берутся из ref.
@@ -798,16 +958,16 @@ export function SimulatorView({
       // Слайдеру оставляем стрелки, Home и End. Клавиши вождения работают и после настройки.
       const drivingFromSlider = e.target instanceof HTMLInputElement && e.target.type === "range" && /^Key[A-Z]$/.test(e.code);
       if (isEditable(e.target) && !drivingFromSlider) return;
-      const code = e.code;
-      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code)) {
-        e.preventDefault();
-      }
+      const code = logicalKey(bindingsRef.current, e.code);
+      if (code === "unbound") return;
+      e.preventDefault();
       keysRef.current[code] = true;
       if (e.repeat) return;
 
       const inp = inputRef.current;
-      if (e.shiftKey && code === "ArrowUp") { shiftGear(1); return; }
-      if (e.shiftKey && code === "ArrowDown") { shiftGear(-1); return; }
+      const shiftHeld = Boolean(keysRef.current.ShiftLeft || keysRef.current.ShiftRight);
+      if (shiftHeld && code === "ArrowUp") { shiftGear(1); return; }
+      if (shiftHeld && code === "ArrowDown") { shiftGear(-1); return; }
       switch (code) {
         case "KeyI":
           toggleEngine();
@@ -844,7 +1004,17 @@ export function SimulatorView({
         case "KeyF":
           setGear("D");
           break;
+        case "KeyO":
+          setShowControls((shown) => !shown);
+          break;
+        case "KeyU":
+          onToggleImmersive();
+          break;
         case "KeyH":
+          ensureEngineSound();
+          hornHeldRef.current = true;
+          break;
+        case "KeyV":
           setShowHelp(false);
           setShowControls(false);
           setUiHidden((v) => {
@@ -893,11 +1063,14 @@ export function SimulatorView({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
+      const code = logicalKey(bindingsRef.current, e.code);
+      keysRef.current[code] = false;
+      if (code === "KeyH") hornHeldRef.current = false;
     };
 
     const onBlur = () => {
       keysRef.current = {};
+      hornHeldRef.current = false;
       releasePedals();
     };
 
@@ -909,7 +1082,7 @@ export function SimulatorView({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify, cameraMode, toggleShifterGlance]);
+  }, [resetAttempt, releasePedals, setTurnSignal, setGear, shiftGear, toggleEngine, onNotify, cameraMode, toggleShifterGlance, ensureEngineSound, onToggleImmersive]);
 
   // === [SEC:sim-pointer] Мышь на холсте, экранный руль, раздельные педали и импорт OSM ===
   // Управление мышью включается отдельно в панели «Управление»; по умолчанию выключено.
@@ -975,6 +1148,7 @@ export function SimulatorView({
   };
 
   const handleCanvasPointerLeave = () => {
+    sceneCtrlRef.current?.setCockpitControlInteraction(null);
     if (shifterDragRef.current) return;
     shifterHoverRef.current = null;
     sceneCtrlRef.current?.setShifterInteraction(null, false, 0);
@@ -987,6 +1161,12 @@ export function SimulatorView({
     if (e.button === 0 && cameraMode === "cockpit") {
       const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
       const ctrl = sceneCtrlRef.current;
+      const control = pos && ctrl ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      if (control && pos && ctrl) {
+        e.preventDefault();
+        pressCockpitControl(control);
+        return;
+      }
       const hit = pos && ctrl ? ctrl.pickCockpitShifter(pos.x, pos.y) : null;
       if (hit && pos && ctrl) {
         e.preventDefault();
@@ -1044,6 +1224,13 @@ export function SimulatorView({
       }
       return;
     }
+    if (!pointerDragRef.current && cameraMode === "cockpit" && ctrl) {
+      const pos = readCanvasNorm(e.currentTarget, e.clientX, e.clientY);
+      const control = pos ? ctrl.pickCockpitControl(pos.x, pos.y) : null;
+      ctrl.setCockpitControlInteraction(control);
+      if (control) return;
+    }
+
     if (e.pointerType === "mouse" && mouseSteerEnabled) {
       const prevX = mouseSteerXRef.current;
       const activeDrag = pointerDragRef.current;
@@ -1178,6 +1365,7 @@ export function SimulatorView({
     const inp = inputRef.current;
     const targetGear: Gear = defaultGearForWorld(worldRef.current);
     inp.engineOn = true;
+    ensureEngineSound();
     inp.belt = true;
     inp.handbrake = false;
     inp.lights = true;
@@ -1278,7 +1466,9 @@ export function SimulatorView({
           <select
             value={playerCarId}
             onChange={(e) => setPlayerCarId(e.target.value as PlayerCarId)}
-            className="bg-[#111d28] text-[#e4edf3] rounded px-2 py-1 border border-white/10"
+            disabled={scenarioId === "custom"}
+            title={scenarioId === "custom" ? "Автомобиль задаётся в редакторе пользовательского сценария" : "Выбор автомобиля"}
+            className="bg-[#111d28] text-[#e4edf3] rounded px-2 py-1 border border-white/10 disabled:opacity-60"
             aria-label="Выбор автомобиля"
           >
             {PLAYER_CARS.map((car) => <option key={car.id} value={car.id}>{car.name}</option>)}
@@ -1388,11 +1578,28 @@ export function SimulatorView({
           onLostPointerCapture={handleCanvasPointerEnd}
           className="block w-full h-full cursor-grab active:cursor-grabbing touch-none"
         />
+        {closedPanelIds.length > 0 && !immersive && !uiHidden && (
+          <div className="absolute left-2 top-2 z-[58] flex max-w-[calc(100%-16px)] flex-wrap items-center gap-1 rounded-lg border border-white/15 bg-[#091017]/90 p-1.5 backdrop-blur">
+            <span className="mono px-1 text-[9px] text-[#7c909d]">ПАНЕЛИ</span>
+            {closedPanelIds.map((id) => (
+              <button key={id} type="button" className="btn btn-mini py-0.5 px-1.5" onClick={() => restorePanel(id)}>
+                + {HUD_PANEL_LABELS[id]}
+              </button>
+            ))}
+            <button type="button" className="btn btn-mini py-0.5 px-1.5" onClick={() => setPanelState((prev) => ({ ...prev, closed: [] }))}>Все</button>
+          </div>
+        )}
 
         {/* [SEC:sim-mirrors] Зеркала (320×96 и 320×160; в режиме H остаются видимыми) и экранный руль */}
         {!webglFallback && showRearMirror && (
           <FloatingPanel
             id="mirrorRear"
+            panelName="Зеркало заднего вида"
+            hidden={panelState.closed.includes("mirrorRear")}
+            collapsed={panelState.collapsed.includes("mirrorRear")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             title="Зеркало заднего вида"
             icon="eye"
             layout={layout.mirrorRear}
@@ -1401,7 +1608,7 @@ export function SimulatorView({
             maxW={640}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={26}
+            zIndex={resolvePanelZIndex("mirrorRear", 26, layerOrder)}
           >
             <canvas ref={rearMirrorRef} role="img" aria-label="Отражение в зеркале заднего вида" width={320} height={96} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1409,13 +1616,19 @@ export function SimulatorView({
         {!immersive && !webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorLeft"
+            panelName="Левое зеркало"
+            hidden={panelState.closed.includes("mirrorLeft")}
+            collapsed={panelState.collapsed.includes("mirrorLeft")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.mirrorLeft}
             defaults={(_cw, ch) => ({ x: 12, y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
             maxW={420}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={25}
+            zIndex={resolvePanelZIndex("mirrorLeft", 25, layerOrder)}
           >
             <canvas ref={leftMirrorRef} role="img" aria-label="Отражение в левом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1423,13 +1636,19 @@ export function SimulatorView({
         {!webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorRight"
+            panelName="Правое зеркало"
+            hidden={panelState.closed.includes("mirrorRight")}
+            collapsed={panelState.collapsed.includes("mirrorRight")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.mirrorRight}
             defaults={(cw, ch) => ({ x: Math.max(0, cw - 182), y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
             maxW={420}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={25}
+            zIndex={resolvePanelZIndex("mirrorRight", 25, layerOrder)}
           >
             <canvas ref={rightMirrorRef} role="img" aria-label="Отражение в правом зеркале" width={320} height={160} className="block w-full h-auto" />
           </FloatingPanel>
@@ -1439,6 +1658,12 @@ export function SimulatorView({
         {!immersive && !uiHidden && !webglFallback && (
           <FloatingPanel
             id="steeringWheel"
+            panelName="Рулевое колесо"
+            hidden={panelState.closed.includes("steeringWheel")}
+            collapsed={panelState.collapsed.includes("steeringWheel")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.steeringWheel}
             defaults={(cw, ch) => cw < 720
               ? {x: 8, y: ch - 162, w: 106}
@@ -1447,7 +1672,7 @@ export function SimulatorView({
             maxW={320}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={24}
+            zIndex={resolvePanelZIndex("steeringWheel", 24, layerOrder)}
           >
             <div className="p-2 flex flex-col gap-1.5">
               <svg
@@ -1500,13 +1725,19 @@ export function SimulatorView({
         {!immersive && !uiHidden && (
           <FloatingPanel
             id="scorePanel"
+            panelName="Оценка заезда"
+            hidden={panelState.closed.includes("scorePanel")}
+            collapsed={panelState.collapsed.includes("scorePanel")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.scorePanel}
             defaults={() => ({ x: 12, y: 12, w: 232 })}
             minW={190}
             maxW={460}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={resolvePanelZIndex("scorePanel", 20, layerOrder)}
           >
             <div className="px-3 py-2 pr-7">
             <div className="flex items-center gap-2">
@@ -1538,13 +1769,19 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="speedPanel"
+            panelName="Скорость и подсказки"
+            hidden={panelState.closed.includes("speedPanel")}
+            collapsed={panelState.collapsed.includes("speedPanel")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.speedPanel}
             defaults={(cw) => ({ x: Math.max(0, cw - 236), y: 12, w: 232 })}
             minW={150}
             maxW={480}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={resolvePanelZIndex("speedPanel", 20, layerOrder)}
           >
             <div className="flex items-center gap-2 px-8 py-1.5 flex-wrap">
             {hud.nextSignal && (
@@ -1589,13 +1826,19 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="statusBar"
+            panelName="Статус поездки"
+            hidden={panelState.closed.includes("statusBar")}
+            collapsed={panelState.collapsed.includes("statusBar")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.statusBar}
             defaults={(cw) => ({ x: Math.max(0, (cw - 540) / 2), y: 148, w: 540 })}
             minW={300}
             maxW={820}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            zIndex={resolvePanelZIndex("statusBar", 20, layerOrder)}
           >
             <div className="px-8 py-1.5">
             <div
@@ -1649,6 +1892,8 @@ export function SimulatorView({
                 ✕
               </button>
             </div>
+            <KeyBindingsEditor value={bindings} onChange={setBindings} />
+            <HeadUnitPanel value={headUnit} onChange={setHeadUnit} stations={radioStations} soundEnabled={soundEnabled} soundLayers={soundLayers} onSoundEnabledChange={(enabled) => { soundEnabledRef.current = enabled; setSoundEnabled(enabled); if (enabled) ensureEngineSound(); }} onSoundLayerToggle={toggleSoundLayer} />
             <div className="mb-4"><SteeringLimitControl value={wheelLimit} onChange={onWheelLockChange} /></div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
               <div className="mono text-[10px] text-[#7c909d] mb-2">УПРАВЛЕНИЕ МЫШЬЮ · ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО</div>
@@ -1799,6 +2044,12 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="camToggles"
+            panelName="Камеры и зеркала"
+            hidden={panelState.closed.includes("camToggles")}
+            collapsed={panelState.collapsed.includes("camToggles")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.camToggles}
             defaults={(cw, ch) => {
               const w = Math.min(660, cw - 16);
@@ -1808,7 +2059,7 @@ export function SimulatorView({
             maxW={680}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={21}
+            zIndex={resolvePanelZIndex("camToggles", 21, layerOrder)}
             resizable={false}
           >
             <div className="flex flex-wrap items-center justify-center gap-1.5 pl-2 pr-6 py-1.5">
@@ -1895,6 +2146,12 @@ export function SimulatorView({
         {!uiHidden && (
           <FloatingPanel
             id="cluster"
+            panelName="Приборы и управление"
+            hidden={panelState.closed.includes("cluster")}
+            collapsed={panelState.collapsed.includes("cluster")}
+            onToggleCollapse={togglePanelCollapse}
+            onClose={closePanel}
+            onBringToFront={bringPanelToFront}
             layout={layout.cluster}
             defaults={(cw, ch) => {
               const w = Math.min(620, cw - 16);
@@ -1904,7 +2161,7 @@ export function SimulatorView({
             maxW={880}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={22}
+            zIndex={resolvePanelZIndex("cluster", 22, layerOrder)}
           >
             <div className="px-3 py-2 flex flex-wrap items-center justify-center gap-2 sm:gap-3 pr-7">
               {/* Левый поворотник */}
@@ -2081,11 +2338,17 @@ export function SimulatorView({
           const width = gas ? 76 : 84;
           return (
             <FloatingPanel key={id} id={id} activation="grip" resizable={false}
+              panelName={gas ? "Педаль газа" : "Педаль тормоза"}
+              hidden={panelState.closed.includes(id)}
+              collapsed={panelState.collapsed.includes(id)}
+              onToggleCollapse={togglePanelCollapse}
+              onClose={closePanel}
+              onBringToFront={bringPanelToFront}
               gripLabel={gas ? "Переместить педаль газа" : "Переместить педаль тормоза"}
               layout={layout[id]} defaults={(cw, ch) => ({
                 x: Math.max(0, cw - 12 - width - (gas ? 0 : 86)), y: Math.max(0, ch - 98), w: width,
               })}
-              minW={width} maxW={width} onChange={handleLayoutChange} containerRef={containerRef} zIndex={27}>
+              minW={width} maxW={width} onChange={handleLayoutChange} containerRef={containerRef} zIndex={resolvePanelZIndex(id, 27, layerOrder)}>
               <button type="button" {...bindPedal(which)} aria-label={gas ? "Газ" : "Тормоз"}
                 aria-pressed={pedalVisual[which]} title={gas ? "Газ: удерживайте кнопку или W" : "Тормоз: удерживайте кнопку или S"}
                 className={`pedal-face ${gas ? "pedal-gas" : "pedal-brake"}`}>
@@ -2096,7 +2359,7 @@ export function SimulatorView({
           );
         })}
 
-        {/* В режиме H на экране остаются только зеркала. Вернуть HUD — клавиша H. */}
+        {/* В режиме V на экране остаются только зеркала. Вернуть HUD — клавиша V. */}
       </div>
 
       {/* Компактная нижняя строка метаданных: габариты, версия правил, обязательная атрибуция ODbL */}
