@@ -52,6 +52,7 @@ const CAL_STORAGE = "cdt.calibration.v1";
 const STUDENT_STORAGE = "cdt.activeStudent.v1";
 const INSTRUCTOR_STORAGE = "cdt.instructorName.v1";
 const BLIND_STORAGE = "cdt.blindReview.v1";
+const SCENARIO_SECTION_STORAGE = "cdt.scenarioSection.v1";
 /** Синтетические заезды из кнопки «Демо-попытка» не приписываются реальному ученику. */
 const DEMO_STUDENT = "Демо (синтетика)";
 
@@ -100,7 +101,9 @@ function errorText(err: unknown): string {
 
 export default function App() {
   const [tab, setTab] = useState<TabId>("sim");
-  const [scenarioSection, setScenarioSection] = useState<"editor" | "routes">("editor");
+  const [scenarioSection, setScenarioSection] = useState<"editor" | "routes">(() =>
+    readText(SCENARIO_SECTION_STORAGE) === "routes" ? "routes" : "editor"
+  );
   const [scenarioId, setScenarioId] = useState<ScenarioId>("bay_90");
   const [ruleSet, setRuleSet] = useState<RuleSet>(loadStoredRules);
   const [calibration, setCalibration] = useState<CalibrationConfig>(loadStoredCalibration);
@@ -167,6 +170,7 @@ export default function App() {
   useEffect(() => writeText(STUDENT_STORAGE, activeStudent), [activeStudent]);
   useEffect(() => writeText(INSTRUCTOR_STORAGE, instructorName), [instructorName]);
   useEffect(() => writeText(BLIND_STORAGE, blindReview ? "1" : "0"), [blindReview]);
+  useEffect(() => writeText(SCENARIO_SECTION_STORAGE, scenarioSection), [scenarioSection]);
 
   // Открытие хранилища и перенос журнала прежней версии
   useEffect(() => {
