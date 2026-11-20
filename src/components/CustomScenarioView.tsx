@@ -282,6 +282,29 @@ function isEditableElement(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
+
+function EditorPanelFrame({ id, title, collapsed, onToggle, onClose, children }: {
+  id: string;
+  title: string;
+  collapsed: boolean;
+  onToggle: (id: string) => void;
+  onClose: (id: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div data-editor-panel={id} className="space-y-2">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-[#101b25] px-3 py-1.5">
+        <span className="mono text-[10px] font-bold text-[#9bafbc]">{title}</span>
+        <div className="flex items-center gap-1">
+          <button type="button" className="btn btn-mini px-2 py-0.5" aria-label={collapsed ? "Развернуть " + title : "Свернуть " + title} onClick={() => onToggle(id)}>{collapsed ? "+" : "−"}</button>
+          <button type="button" className="btn btn-mini px-2 py-0.5" aria-label={"Закрыть " + title} onClick={() => onClose(id)}>×</button>
+        </div>
+      </div>
+      {!collapsed && children}
+    </div>
+  );
+}
+
 export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulator, onNotify }: Props) {
   const importRef = useRef<HTMLInputElement | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
@@ -306,8 +329,15 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   // История отмен и фильтр реестра объектов
   const [history, setHistory] = useState(() => createEditorHistory<CustomScenarioDef>());
   const [listFilter, setListFilter] = useState<ListFilter>("all");
+  const [editorPanelState, setEditorPanelState] = useState<{ collapsed: string[]; closed: string[] }>(() => {
+    try { const raw = JSON.parse(localStorage.getItem("cdt.editorPanelState.v1") || "null") as { collapsed?: unknown; closed?: unknown } | null; return { collapsed: Array.isArray(raw?.collapsed) ? raw!.collapsed.filter((x): x is string => typeof x === "string") : [], closed: Array.isArray(raw?.closed) ? raw!.closed.filter((x): x is string => typeof x === "string") : [] }; } catch { return { collapsed: [], closed: [] }; }
+  });
   const [showOsmHelp, setShowOsmHelp] = useState(false);
 
+  useEffect(() => { try { localStorage.setItem("cdt.editorPanelState.v1", JSON.stringify(editorPanelState)); } catch { /* storage blocked */ } }, [editorPanelState]);
+  const toggleEditorCollapse = useCallback((id: string) => setEditorPanelState((prev) => ({ ...prev, collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((x) => x !== id) : [...prev.collapsed, id] })), []);
+  const closeEditorPanel = useCallback((id: string) => setEditorPanelState((prev) => ({ ...prev, closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id] })), []);
+  const restoreEditorPanel = useCallback((id: string) => setEditorPanelState((prev) => ({ ...prev, closed: prev.closed.filter((x) => x !== id) })), []);
   const validation = useMemo(() => validateCustomScenario(def), [def]);
   const blocked = validation.errors.length > 0;
   // Imported OSM geometry may contain editor-only validation warnings (e.g. large
