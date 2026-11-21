@@ -104,6 +104,7 @@ export type PerfMetrics = {
   triangles: number;
   geometries: number;
   textures: number;
+  textureBytesEstimate: number;
 };
 
 // === [SEC:render-textures] Процедурные Canvas-текстуры (офлайн, без внешних ассетов) ===
@@ -162,6 +163,8 @@ export class SceneController {
   }>();
   private useInstancedBuildings = false;
   private totalBuildingCount = 0;
+  private cachedTextureBytesEstimate = 0;
+  private lastTextureEstimateAt = 0;
   private readonly signalVisuals: SignalVisual[] = [];
   private readonly pedVisuals: PedestrianVisual[] = [];
   private readonly checkpointMeshes: Array<{ id: string; mesh: THREE.Object3D }> = [];
@@ -1540,8 +1543,55 @@ export class SceneController {
     this.camera.lookAt(this.camLookTarget);
   }
 
+  // Оценка памяти текстур, реально связанных с материалами текущей сцены.
+  // Это оценка RGBA/форматного объёма с mip-chain, а не показание физического VRAM-драйвера.
+  private estimateSceneTextureBytes(): number {
+    const textures = new Set<THREE.Texture>();
+    const addTexture = (value: unknown) => {
+      if (value instanceof THREE.Texture) textures.add(value);
+    };
+    addTexture(this.scene.background);
+    addTexture(this.scene.environment);
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.material) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        for (const value of Object.values(material)) addTexture(value);
+        const uniforms = (material as THREE.ShaderMaterial).uniforms;
+        if (uniforms) {
+          for (const uniform of Object.values(uniforms)) addTexture(uniform.value);
+        }
+      }
+    });
+
+    let bytes = 0;
+    for (const texture of textures) {
+      const image = texture.image as {
+        width?: number; height?: number; naturalWidth?: number; naturalHeight?: number;
+        videoWidth?: number; videoHeight?: number; data?: { width?: number; height?: number };
+      } | undefined;
+      const width = Number(image?.width ?? image?.naturalWidth ?? image?.videoWidth ?? image?.data?.width ?? 0);
+      const height = Number(image?.height ?? image?.naturalHeight ?? image?.videoHeight ?? image?.data?.height ?? 0);
+      if (!(width > 0 && height > 0)) continue;
+      const channels = texture.format === THREE.RedFormat || texture.format === THREE.RedIntegerFormat ? 1
+        : texture.format === THREE.RGFormat || texture.format === THREE.RGIntegerFormat ? 2
+        : texture.format === THREE.RGBFormat || texture.format === THREE.RGBIntegerFormat ? 3 : 4;
+      const channelBytes = texture.type === THREE.FloatType ? 4
+        : texture.type === THREE.HalfFloatType ? 2 : 1;
+      const mipFactor = texture.generateMipmaps ? 4 / 3 : 1;
+      bytes += width * height * channels * channelBytes * mipFactor;
+    }
+    return Math.round(bytes);
+  }
+
   // === [SEC:render-dispose] Метрики FPS и освобождение GPU-ресурсов ===
   getPerfMetrics(): PerfMetrics {
+    const now = performance.now();
+    if (now - this.lastTextureEstimateAt >= 1000) {
+      this.cachedTextureBytesEstimate = this.estimateSceneTextureBytes();
+      this.lastTextureEstimateAt = now;
+    }
     if (this.frameTimes.length === 0) {
       return {
         fps: 60,
@@ -1552,6 +1602,8 @@ export class SceneController {
         triangles: this.renderer.info.render.triangles,
         geometries: this.renderer.info.memory.geometries,
         textures: this.renderer.info.memory.textures,
+      textureBytesEstimate: this.cachedTextureBytesEstimate,
+        textureBytesEstimate: this.cachedTextureBytesEstimate,
       };
     }
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -1566,6 +1618,7 @@ export class SceneController {
       triangles: this.renderer.info.render.triangles,
       geometries: this.renderer.info.memory.geometries,
       textures: this.renderer.info.memory.textures,
+      textureBytesEstimate: this.cachedTextureBytesEstimate,
     };
   }
 
