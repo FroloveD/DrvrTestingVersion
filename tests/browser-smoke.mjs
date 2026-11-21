@@ -1144,6 +1144,7 @@ try {
 
   // Обновляем ту же OSM-выгрузку через режим слияния: ручной знак должен остаться.
   const mergeManualSignsBefore = await page.locator('[data-testid^="map-sign-sign-give_way"]').count();
+  const manualSignIdsBefore = await page.locator('[data-testid^="map-sign-sign-give_way"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
   await page.getByTestId("editor-merge-import-input").setInputFiles({
     name: "uchebnaya-refresh.osm",
     mimeType: "application/xml",
@@ -1152,7 +1153,6 @@ try {
   await sleep(450);
   const mergeManualSignsAfter = await page.locator('[data-testid^="map-sign-sign-give_way"]').count();
   const mergeAllSignsAfter = await page.locator('[data-testid^="map-sign-"]').count();
-  const manualSignIdsBefore = await page.locator('[data-testid^="map-sign-sign-give_way"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
   const manualSignIdsAfter = await page.locator('[data-testid^="map-sign-sign-give_way"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
   check("O4b обновление OSM сохраняет ручной знак и импортированные знаки",
     mergeManualSignsBefore === 1 && mergeManualSignsAfter === 1 && mergeAllSignsAfter >= 2,
