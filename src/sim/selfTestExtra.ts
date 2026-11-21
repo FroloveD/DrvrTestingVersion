@@ -1151,10 +1151,10 @@ export const extraCases: SelfTestCase[] = [
     suite: "route",
     name: "Автоисправление маршрута: границы, ID и радиусы контрольных точек",
     fn: () => {
-      const base = defaultCustomScenario();
+      const base = emptyCustomScenario();
       const malformed = {
         ...base,
-        start: { x: 0, z: 0, h: 0 },
+        start: { x: 0, z: -12, h: 0 },
         bounds: { minX: -50, maxX: 50, minZ: -50, maxZ: 50 },
         boundaryPolygon: undefined,
         roads: [],
