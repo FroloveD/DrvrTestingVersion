@@ -3,11 +3,11 @@
  * @layer pure-core
  * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут, автоисправление маршрута, слияние обновлённой OSM-карты с ручными объектами, генерация коридора/оболочки и обрезка карты, Undo/Redo.
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
- * @tests T29, T39–T41
+ * @tests T29, T39–T42
  */
 import { boundsToPolygon, boundingBoxOfPolygon, buildConvexHullPolygon, buildPresetBoundaryPolygon, buildRouteCorridorPolygon, clampPointToWorldBoundary, clipPolylineToPolygon, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
 import { buildRouteFromRoads, findRoadNetworkPath, nearestRoadPoint } from "../maps/route";
-import { placeSignPostClearOfRoads, reprojectBetweenOrigins, RoadCorridorIndex } from "../maps/osmDeconflict";
+import { clipPolylineOutsideRoads, deconflictPointObstacle, placeSignPostClearOfRoads, retractObstacleFromRoads, reprojectBetweenOrigins, RoadCorridorIndex } from "../maps/osmDeconflict";
 import { SpatialGrid } from "../sim/spatialGrid";
 import type {
   CalibrationConfig,
@@ -1301,6 +1301,100 @@ export function autoFixScenarioRoute(def: CustomScenarioDef): { def: CustomScena
  * снимает наложение площадки автодрома на улицы OSM, ужимает здания от проезжей части,
  * прорезает проезды в заборах/бордюрах, выносит деревья/столбы/стойки знаков на обочину и чинит маршрут.
  */
+export function deconflictScenarioWithRoads(def: CustomScenarioDef): {
+  def: CustomScenarioDef;
+  fixes: string[];
+  changedCount: number;
+} {
+  const roads = (def.roads ?? []).filter((road) => road.id !== "custom-lot" && road.points.length >= 2);
+  if (roads.length === 0) return { def, fixes: [], changedCount: 0 };
+
+  const roadIndex = new RoadCorridorIndex(roads, true);
+  const fixes: string[] = [];
+  let changedCount = 0;
+
+  let useLotSurface = def.useLotSurface;
+  if (useLotSurface !== false && (def.mapMeta || (roads.length >= 2 && def.bays.length === 0))) {
+    useLotSurface = false;
+    changedCount += 1;
+    fixes.push("Отключена подложка площадки поверх реальной дорожной сети.");
+  }
+
+  const obstacles: CustomScenarioDef["obstacles"] = [];
+  let adjustedBuildings = 0;
+  let openedBarriers = 0;
+  let movedPointObjects = 0;
+
+  for (const obstacle of def.obstacles) {
+    if (obstacle.kind === "building") {
+      const result = retractObstacleFromRoads(obstacle, roadIndex, 0.45, 2.0);
+      if (result.changed) {
+        adjustedBuildings += 1;
+        changedCount += 1;
+      }
+      if (result.obstacle) obstacles.push(result.obstacle);
+    } else if (obstacle.kind === "fence" || obstacle.kind === "curb") {
+      const fx = Math.sin(obstacle.h);
+      const fz = Math.cos(obstacle.h);
+      const a: Vec2 = { x: obstacle.cx - fx * obstacle.halfZ, z: obstacle.cz - fz * obstacle.halfZ };
+      const b: Vec2 = { x: obstacle.cx + fx * obstacle.halfZ, z: obstacle.cz + fz * obstacle.halfZ };
+      const margin = obstacle.kind === "curb" ? 0.25 : 0.55;
+      const clipped = clipPolylineOutsideRoads([a, b], roadIndex, { roadClearanceM: margin, minPieceLenM: 0.9 });
+      if (clipped.cutCount === 0) {
+        obstacles.push(obstacle);
+      } else {
+        openedBarriers += 1;
+        changedCount += 1;
+        clipped.pieces.forEach((piece, index) => {
+          const p0 = piece[0];
+          const p1 = piece[piece.length - 1];
+          const length = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+          if (length < 0.9) return;
+          obstacles.push({
+            ...obstacle,
+            id: index === 0 ? obstacle.id : `${obstacle.id}-s${index + 1}`,
+            cx: round2((p0.x + p1.x) * 0.5),
+            cz: round2((p0.z + p1.z) * 0.5),
+            halfZ: round2(length * 0.5),
+          });
+        });
+      }
+    } else if (obstacle.kind === "tree" || obstacle.kind === "pole" || obstacle.kind === "cone" || obstacle.kind === "island") {
+      const result = deconflictPointObstacle(obstacle, roadIndex);
+      if (result.changed) {
+        movedPointObjects += 1;
+        changedCount += 1;
+      }
+      if (result.obstacle) obstacles.push(result.obstacle);
+    } else {
+      obstacles.push(obstacle);
+    }
+  }
+
+  if (adjustedBuildings > 0) fixes.push(`Ужато/убрано зданий с проезжей части: ${adjustedBuildings}.`);
+  if (openedBarriers > 0) fixes.push(`Открыто проездов в ограждениях и бордюрах: ${openedBarriers}.`);
+  if (movedPointObjects > 0) fixes.push(`Вынесено объектов с полос на обочину: ${movedPointObjects}.`);
+
+  let movedSigns = 0;
+  const signs = (def.signs ?? []).map((sign) => {
+    const result = placeSignPostClearOfRoads(sign, roadIndex);
+    if (result.shifted) {
+      movedSigns += 1;
+      changedCount += 1;
+    }
+    return result.sign;
+  });
+  if (movedSigns > 0) fixes.push(`Вынесено стоек знаков на обочину: ${movedSigns}.`);
+
+  const base: CustomScenarioDef = { ...def, useLotSurface, obstacles, signs };
+  const routeFix = autoFixScenarioRoute(base);
+  if (routeFix.fixes.length > 0) {
+    changedCount += routeFix.fixes.length;
+    fixes.push(...routeFix.fixes);
+  }
+
+  return { def: routeFix.def, fixes, changedCount };
+}
 
 export function fitBoundsToContent(def: CustomScenarioDef, pad = 12): CustomScenarioDef {
   let minX = def.start.x;
