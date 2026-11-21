@@ -317,3 +317,12 @@
 - Добавлен core-тест `T41` и Browser Smoke O1b2 для наличия инструментов в интерфейсе.
 - Рабочая ветка: `arena/exam-routes-v1-integration`; исходные `arena/exam-routes`, `Arena_v1` и `main` не изменялись.
 - CI для актуального HEAD должен подтвердить TypeScript, core-тесты, сборку и Browser Smoke.
+
+## 2026-11-21 — Автоматическое устранение конфликтов объектов с дорожной сетью
+
+- Выборочно перенесена операция `deconflictScenarioWithRoads` из `Arena_v1`; геометрические расчёты используют уже существующие `RoadCorridorIndex`, `retractObstacleFromRoads`, `clipPolylineOutsideRoads`, `deconflictPointObstacle` и `placeSignPostClearOfRoads` в интеграционной OSM-архитектуре.
+- Команда отключает стартовую подложку автодрома поверх реальной дорожной сети, отводит здания/точечные объекты от полос, прорезает проезды в заборах и бордюрах, выносит стойки знаков на обочину и повторно проверяет старт/маршрут.
+- В редактор добавлена кнопка «Исправить конфликты с дорогами». Изменения выполняются через `commitChange` и доступны в Undo/Redo.
+- Добавлен core-тест `T42` и Browser Smoke `O1b3` для наличия команды.
+- Рабочая ветка: `arena/exam-routes-v1-integration`; исходные `arena/exam-routes`, `Arena_v1` и `main` не изменялись.
+- CI для нового HEAD требуется проверить; успешность не заявляется до завершения Browser Smoke.
