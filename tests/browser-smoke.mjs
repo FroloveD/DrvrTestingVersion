@@ -981,6 +981,20 @@ try {
   check("O0c закрытую панель можно восстановить после перезагрузки",
     await page.getByTestId("editor-vehicle-radio-panel").count() === 1);
 
+  await page.getByTestId("editor-panel-close-palette").click();
+  const paletteClosed = await page.getByTestId("editor-panel-palette").count() === 0;
+  await page.getByTestId("editor-panel-restore-palette").click();
+  const paletteRestored = await page.getByTestId("editor-tool-select").count() === 1;
+  check("O0d палитра инструментов закрывается и восстанавливается", paletteClosed && paletteRestored);
+
+  await page.getByTestId("editor-panel-close-inspector").click();
+  const inspectorClosed = await page.getByTestId("editor-inspector").count() === 0;
+  const canvasAvailable = await page.getByTestId("map-editor-canvas").count() === 1;
+  await page.getByTestId("editor-panel-restore-inspector").click();
+  const inspectorRestored = await page.getByTestId("editor-inspector").count() === 1;
+  check("O0e инспектор можно закрыть без скрытия карты и восстановить",
+    inspectorClosed && canvasAvailable && inspectorRestored);
+
   const lotSurface = page.getByTestId("editor-lot-surface-toggle");
   const lotInitiallyEnabled = await lotSurface.isChecked();
   await lotSurface.uncheck();
