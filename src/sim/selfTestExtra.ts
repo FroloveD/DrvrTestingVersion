@@ -1202,9 +1202,9 @@ export const extraCases: SelfTestCase[] = [
       };
       const merged = mergeUserObjectsOntoOsmMap(previous, imported);
       assert(merged.keptBays === 1 && merged.def.bays[0].id === 901, "Пользовательский бокс внутри новой карты должен сохраниться");
-      assert(merged.keptSigns === 1 && merged.def.signs?.some((s) => s.id === "manual-stop"), "Ручной знак должен сохраниться рядом с импортированными знаками");
+      assert(merged.keptSigns === 1 && Boolean(merged.def.signs?.some((s) => s.id === "manual-stop")), "Ручной знак должен сохраниться рядом с импортированными знаками");
       assert(merged.keptCheckpoints === 1 && merged.def.checkpoints[0].id === "manual-cp", "Ручная КТ на дорожной сети должна сохраниться");
-      assert(merged.def.signs?.some((s) => s.id === "sign-way-1"), "Импортированный OSM-знак должен остаться в новой карте");
+      assert(Boolean(merged.def.signs?.some((s) => s.id === "sign-way-1")), "Импортированный OSM-знак должен остаться в новой карте");
       assert(merged.def.roads?.[0].id === "osm-road-1", "Новая дорожная сеть должна быть взята из обновлённой карты");
       return "Бокс: 1 · ручной знак: 1 · КТ: 1 · OSM-знак и новая дорога сохранены";
     },
