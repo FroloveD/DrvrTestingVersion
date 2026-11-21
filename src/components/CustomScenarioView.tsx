@@ -35,6 +35,7 @@ import {
   applyRouteCorridorBoundary,
   clearBoundaryPolygon,
   cropScenarioToBoundary,
+  deconflictScenarioWithRoads,
   setCustomBoundaryPolygon,
   attachCheckpointToSign,
   createEditorHistory,
@@ -611,6 +612,17 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     setSelection({ kind: "start" }); setDraftBoundary([]);
     setFitSignal((n) => n + 1);
     onNotify(`Обрезка по границе: дорог удалено ${result.removedRoads}, добавлено сегментов ${result.splitRoads}, объектов удалено ${result.removedObjects}, КТ сохранено ${result.keptCheckpoints}.`);
+  };
+  const handleDeconflictRoads = () => {
+    const result = deconflictScenarioWithRoads(def);
+    if (result.changedCount === 0) {
+      onNotify(result.fixes.length > 0 ? result.fixes.join(" ") : "Конфликтов объектов с дорожной сетью не найдено.");
+      return;
+    }
+    commitChange(result.def, def);
+    setSelection({ kind: "start" });
+    setFitSignal((n) => n + 1);
+    onNotify(`Устранение конфликтов: изменено ${result.changedCount}. ${result.fixes.join(" ")}`);
   };
 
   const handleCancelBoundary = () => { setDraftBoundary([]); setTool("select"); };
@@ -2460,6 +2472,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                 <button type="button" data-testid="editor-boundary-route" className="btn btn-mini" title="Построить границу-коридор вдоль активного маршрута" onClick={handleRouteBoundary}>Коридор маршрута</button>
                 <button type="button" data-testid="editor-boundary-hull" className="btn btn-mini" title="Построить выпуклую оболочку по дорогам и объектам карты" onClick={handleHullBoundary}>Оболочка карты</button>
                 <button type="button" data-testid="editor-boundary-crop" className="btn btn-mini text-[#ffb8a8]" title="Удалить дороги и объекты вне текущей границы; действие можно отменить через Ctrl+Z" onClick={handleCropBoundary}>Обрезать по границе</button>
+                <button type="button" data-testid="editor-road-deconflict" className="btn btn-mini" title="Убрать конфликты зданий, ограждений, деревьев и стоек знаков с дорожной сетью; действие можно отменить через Ctrl+Z" onClick={handleDeconflictRoads}>Исправить конфликты с дорогами</button>
               </div>
               {tool === "boundary" && <div className="text-[10px] text-[#9bafbc]">Кликайте по карте, чтобы добавить вершины. Двойной клик или клик рядом с первой точкой замыкает контур. Enter — применить, Esc — отменить.</div>}
               {draftBoundary.length > 0 && <div className="flex items-center justify-between text-[11px]"><span>Черновик: {draftBoundary.length} точек</span><div className="flex gap-1"><button type="button" className="btn btn-mini" onClick={() => setDraftBoundary(v => v.slice(0,-1))}>Назад</button><button type="button" className="btn btn-mini" disabled={draftBoundary.length < 3} onClick={() => handleFinishBoundary(draftBoundary)}>Применить</button><button type="button" className="btn btn-mini" onClick={handleCancelBoundary}>Отмена</button></div></div>}
