@@ -1435,7 +1435,25 @@ try {
     const savedTrack = tracks[0];
     check("Q4 десятиминутный WAV сохранён в IndexedDB", Array.isArray(tracks) && tracks.length >= 1 && savedTrack.seconds === 600, JSON.stringify({ count: tracks.length, seconds: savedTrack?.seconds }));
     check("Q4a трек содержит метаданные названия, исполнителя, альбома и тегов", Boolean(savedTrack?.metadata?.title && savedTrack.metadata.artist && savedTrack.metadata.album && savedTrack.metadata.tags?.includes("offline")));
-    check("Q4b размер WAV соответствует десятиминутному PCM", savedTrack?.blob?.size >= 600 * 22050 * 2, String(savedTrack?.blob?.size));
+    // Blob нельзя надёжно сериализовать из page.evaluate в Node; измеряем его внутри страницы.
+    const audioBlobInfo = await page.evaluate(() => new Promise((resolve, reject) => {
+      const request = indexedDB.open("cdt-audio", 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction("tracks", "readonly");
+        const all = tx.objectStore("tracks").getAll();
+        tx.oncomplete = () => {
+          const item = all.result[0];
+          resolve({ blobSize: item?.blob instanceof Blob ? item.blob.size : null, storedSize: item?.size ?? null });
+          db.close();
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+    }));
+    check("Q4b размер WAV соответствует десятиминутному PCM",
+      audioBlobInfo.blobSize >= 600 * 22050 * 2 && audioBlobInfo.storedSize === audioBlobInfo.blobSize,
+      JSON.stringify(audioBlobInfo));
 
     await page.getByTestId("hud-panels-menu").click();
     const cluster = page.locator('[data-hud-panel="cluster"]');
