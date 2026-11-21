@@ -9,8 +9,11 @@
 const DB_NAME = "cdt-audio";
 const DB_VERSION = 1;
 const TRACKS = "tracks";
+const MAX_MEMORY_FALLBACK_BYTES = 8 * 1024 * 1024;
 
-/** Метаданные сохранённого трека (без самого аудио — оно в поле `blob`). */
+import type { OfflineTrackMetadata } from "./radioCatalog";
+
+/** Метаданные сохранённого трека (без самого аудио — оно в поле blob). */
 export type SavedTrack = {
   key: string;
   stationId: string;
@@ -19,10 +22,12 @@ export type SavedTrack = {
   seconds: number;
   savedAt: string;
   size: number;
+  metadata: OfflineTrackMetadata;
   blob: Blob;
 };
 
 export type TrackBackend = "indexeddb" | "memory";
+export type TrackSaveResult = { backend: TrackBackend | "rejected"; reason?: string };
 
 let backend: TrackBackend = "indexeddb";
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -75,6 +80,17 @@ function done<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
+function normalizeMetadata(track: Partial<SavedTrack>): OfflineTrackMetadata {
+  return track.metadata ?? {
+    title: `${track.stationName ?? "Радио"} · сохранённый фрагмент`,
+    artist: "Неизвестен",
+    album: "Legacy radio cache",
+    genre: "",
+    tags: ["legacy-cache"],
+    source: "synthetic",
+  };
+}
+
 /** Текущий бэкенд кэша: IndexedDB или память (если браузер запретил хранилище). */
 export function trackBackend(): TrackBackend {
   return backend;
@@ -84,13 +100,23 @@ export function trackBackend(): TrackBackend {
  * Сохраняет радиотрек в кэш (IndexedDB, при недоступности — в память вкладки).
  * @returns `true`, если трек записан в постоянное хранилище IndexedDB.
  */
-export async function saveTrack(track: Omit<SavedTrack, "savedAt" | "size">): Promise<boolean> {
+export async function saveTrack(
+  track: Omit<SavedTrack, "savedAt" | "size">
+): Promise<TrackSaveResult> {
   const entry: SavedTrack = {
     ...track,
+    metadata: normalizeMetadata(track),
     savedAt: new Date().toISOString(),
     size: track.blob.size,
   };
   try {
+    if (typeof navigator !== "undefined" && navigator.storage?.estimate) {
+      const estimate = await navigator.storage.estimate();
+      if (typeof estimate.quota === "number" && typeof estimate.usage === "number") {
+        const available = Math.max(0, estimate.quota - estimate.usage);
+        if (available < entry.size * 1.1) throw new Error("Недостаточно свободной квоты браузерного хранилища");
+      }
+    }
     const db = await getDb();
     const tx = db.transaction(TRACKS, "readwrite");
     tx.objectStore(TRACKS).put(entry);
@@ -100,11 +126,16 @@ export async function saveTrack(track: Omit<SavedTrack, "savedAt" | "size">): Pr
       tx.onabort = () => reject(tx.error ?? new Error("Запись cdt-audio прервана"));
     });
     backend = "indexeddb";
-    return true;
-  } catch {
+    return { backend: "indexeddb" };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Браузер не разрешил сохранить аудио";
+    if (entry.size <= MAX_MEMORY_FALLBACK_BYTES) {
+      backend = "memory";
+      memory.set(entry.key, entry);
+      return { backend: "memory", reason };
+    }
     backend = "memory";
-    memory.set(entry.key, entry);
-    return false;
+    return { backend: "rejected", reason: `${reason}. Большой файл не помещён в память вкладки.` };
   }
 }
 
@@ -118,6 +149,7 @@ export async function listTracks(): Promise<Array<Omit<SavedTrack, "blob">>> {
     seconds: t.seconds,
     savedAt: t.savedAt,
     size: t.size,
+    metadata: normalizeMetadata(t),
   });
   try {
     const db = await getDb();
@@ -136,7 +168,7 @@ export async function loadTrack(key: string): Promise<SavedTrack | null> {
     const hit = (await done(
       db.transaction(TRACKS, "readonly").objectStore(TRACKS).get(key)
     )) as SavedTrack | undefined;
-    return hit ?? null;
+    return hit ? { ...hit, metadata: normalizeMetadata(hit) } : null;
   } catch {
     backend = "memory";
     return memory.get(key) ?? null;
