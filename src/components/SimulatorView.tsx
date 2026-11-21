@@ -2053,7 +2053,9 @@ export function SimulatorView({
             layout={layout.camToggles}
             defaults={(cw, ch) => {
               const w = Math.min(660, cw - 16);
-              return { x: (cw - w) / 2, y: ch - (cw < 720 ? 266 : cw < 960 ? 216 : 133), w };
+              // Оставляем вертикальный зазор над приборной панелью: при переносе
+              // панели cluster камера не должна перекрывать нижний ряд кнопок.
+              return { x: (cw - w) / 2, y: ch - (cw < 720 ? 314 : cw < 960 ? 264 : 181), w };
             }}
             minW={250}
             maxW={680}
