@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42), разворот направления дороги (T43), строгая проверка связности OSM-маршрутов (T45).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42), разворот направления дороги (T43), строгая проверка связности OSM-маршрутов (T45–T46).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
@@ -1399,6 +1399,38 @@ export const extraCases: SelfTestCase[] = [
         issue.severity === "error" && issue.message.includes("не связан единой дорогой OSM")),
         "Разрыв дорожной сети должен быть блокирующей ошибкой");
       return "Разрыв OSM-сети обнаружен; статус маршрута errors; offroad не принят за проходимый участок";
+    },
+  },
+
+  {
+    id: "T46",
+    suite: "maps",
+    name: "Граф OSM не соединяет дороги на разных уровнях layer",
+    fn: () => {
+      const groundRoad = {
+        ...createDefaultRoad("grade-ground", 0, 0, 0),
+        points: [{ x: -30, z: 0 }, { x: 30, z: 0 }],
+        width: 8,
+        layer: 0,
+      };
+      const bridgeRoad = {
+        ...createDefaultRoad("grade-bridge", 0, 0, 0),
+        points: [{ x: 0, z: 0 }, { x: 0, z: 30 }],
+        width: 8,
+        layer: 1,
+      };
+      const start = { x: -20, z: 0 };
+      const destination = { x: 0, z: 20 };
+      const separated = findRoadNetworkPath([groundRoad, bridgeRoad], start, destination);
+      assert(!separated.connected,
+        "Пересечение дорог в одной координате не должно создавать связь между layer=0 и layer=1");
+
+      const atGradeRoad = { ...bridgeRoad, layer: 0 };
+      const connected = findRoadNetworkPath([groundRoad, atGradeRoad], start, destination);
+      assert(connected.connected,
+        "Концевое примыкание на одном уровне должно оставаться связным");
+
+      return "Разные уровни layer разделены; одноуровневое Т-примыкание соединяется";
     },
   },
 
