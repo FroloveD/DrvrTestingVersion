@@ -872,7 +872,7 @@ try {
   // одну ногу/один палец между кнопками.
   await touch("touchStart", [fingerGas]);
   const gasInitiallyPressed = (await gas.getAttribute("aria-pressed")) === "true";
-  await touch("touchStart", [fingerBrake]);
+  await touch("touchStart", [fingerGas, fingerBrake]);
   const gasAfterBrake = (await gas.getAttribute("aria-pressed")) === "true";
   const brakeAfterBrake = (await brake.getAttribute("aria-pressed")) === "true";
   check("M1 нажатие тормоза автоматически отпускает газ",
@@ -882,7 +882,8 @@ try {
   // Отпускание тормоза не должно самопроизвольно возвращать ранее отменённый газ.
   await touch("touchEnd", [fingerGas]);
   check("M2 отпускание тормоза не восстанавливает газ",
-    (await gas.getAttribute("aria-pressed")) === "false" && (await brake.getAttribute("aria-pressed")) === "false");
+    (await gas.getAttribute("aria-pressed")) === "false" && (await brake.getAttribute("aria-pressed")) === "false",
+    `gas=${await gas.getAttribute("aria-pressed")}, brake=${await brake.getAttribute("aria-pressed")}`);
   await touch("touchCancel", []);
   check("M3 отмена касания не оставляет зажатые педали",
     (await gas.getAttribute("aria-pressed")) === "false" && (await brake.getAttribute("aria-pressed")) === "false");
@@ -1096,7 +1097,7 @@ try {
   const signPlacement = await canvas.evaluate((svg) => {
     const road = svg.querySelector('[data-testid^="map-road-"]');
     const line = road?.querySelector("polyline");
-    const raw = line?.getAttribute("points")?.trim().split(/\\s+/) ?? [];
+    const raw = line?.getAttribute("points")?.trim().split(/\s+/) ?? [];
     if (raw.length < 2) return null;
     const parse = (value) => value.split(",").map(Number);
     const a = parse(raw[0]), b = parse(raw[1]);
