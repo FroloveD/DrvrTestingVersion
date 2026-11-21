@@ -4,7 +4,7 @@
  * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
-import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, radioStationsFor, renderTrackWav, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
+import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
 import { summarizeAgreement, wilsonInterval } from "../analytics/calibration";
 import { analyticsToMarkdown, summarizeAttempts } from "../analytics/summary";
 import {
@@ -1086,12 +1086,18 @@ export const extraCases: SelfTestCase[] = [
       assert(clampVolume(1.4) === 1 && clampVolume(-0.3) === 0, "Громкость ограничивается диапазоном 0..1");
       assert(trackCacheKey("record", 32) === "radio:record:32s", "Формат ключа кэша");
       assert(formatTrackDuration(125) === "02:05", "Формат длительности мм:сс");
-      const wav = renderTrackWav(INTERNET_RADIO_STATIONS[0], 2);
+      assert(OFFLINE_TRACK_SECONDS === 600 && formatTrackDuration(OFFLINE_TRACK_SECONDS) === "10:00", "Целевая офлайн-сессия длится не менее 10 минут");
+      const station = INTERNET_RADIO_STATIONS[0];
+      const metadata = stationTrackMetadata(station);
+      const wav = renderTrackWav(station, 2, metadata);
       const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
       const ascii = (offset: number, length: number) => String.fromCharCode(...wav.slice(offset, offset + length));
       assert(ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE" && ascii(36, 4) === "data", "WAV имеет заголовок RIFF/WAVE");
       assert(view.getUint16(20, true) === 1 && view.getUint16(22, true) === 1, "WAV: PCM mono");
       assert(view.getUint32(24, true) === TRACK_SAMPLE_RATE && view.getUint16(34, true) === 16, "WAV: 22 050 Гц, 16 бит");
+      assert(view.getUint32(4, true) === wav.length - 8, "RIFF size включает аудио и блок метаданных");
+      const info = new TextDecoder().decode(wav.slice(44 + view.getUint32(40, true)));
+      assert(info.includes("LIST") && info.includes("INFO") && info.includes(metadata.title) && info.includes(metadata.artist), "WAV LIST/INFO содержит название и исполнителя");
       let peak = 0;
       for (let offset = 44; offset < wav.length; offset += 2) peak = Math.max(peak, Math.abs(view.getInt16(offset, true)));
       assert(peak > 3000, "Офлайн-рендер не должен быть тишиной");
