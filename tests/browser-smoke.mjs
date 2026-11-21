@@ -1451,7 +1451,12 @@ try {
                 ...route,
                 id: route.id + "-shared-test",
                 title: "Маршрут P · общий snapshot",
-                scenarioSnapshot: { ...map.scenarioSnapshot, title: "Маршрут P · общий snapshot" },
+                scenarioSnapshot: {
+                  ...map.scenarioSnapshot,
+                  title: "Маршрут P · общий snapshot",
+                  playerCarId: "rio",
+                  radioStationIds: ["europa-plus"],
+                },
               } : null);
               db.close();
             };
@@ -1479,6 +1484,11 @@ try {
                 routes: routeRequest.result.length,
                 maps: mapRequest.result.length,
                 embeddedSnapshots: routeRequest.result.filter((route) => Boolean(route.scenarioSnapshot)).length,
+                routeSettings: routeRequest.result.map((route) => ({
+                  title: route.title,
+                  playerCarId: route.snapshotMeta?.playerCarId ?? null,
+                  radioStationIds: route.snapshotMeta?.radioStationIds ?? null,
+                })),
               });
               db.close();
             };
@@ -1488,11 +1498,27 @@ try {
         check("P18 два маршрута одной карты используют один общий snapshot",
           storageStats.routes === 2 && storageStats.maps === 1 && storageStats.embeddedSnapshots === 0,
           JSON.stringify(storageStats));
+        const originalRouteSettings = storageStats.routeSettings.find((route) => route.title === "Маршрут P · редакция");
+        const sharedRouteSettings = storageStats.routeSettings.find((route) => route.title === "Маршрут P · общий snapshot");
+        check("P18a настройки автомобиля и радио хранятся отдельно для каждого маршрута",
+          originalRouteSettings?.playerCarId === null && originalRouteSettings?.radioStationIds === null &&
+          sharedRouteSettings?.playerCarId === "rio" &&
+          JSON.stringify(sharedRouteSettings?.radioStationIds) === JSON.stringify(["europa-plus"]),
+          JSON.stringify(storageStats.routeSettings));
         await page.reload();
         await tab(page, "Каталог маршрутов");
         await page.getByTestId("route-card").first().waitFor({ timeout: 5000 });
         check("P19 общий snapshot и оба маршрута переживают перезагрузку",
           await page.getByTestId("route-card").count() === 2);
+        const sharedRouteCard = page.getByTestId("route-card").filter({ hasText: "Маршрут P · общий snapshot" });
+        await sharedRouteCard.getByRole("button", { name: /Открыть/ }).click();
+        const restoredVehicle = await until(async () => {
+          const selector = page.locator('select[aria-label="Выбор автомобиля"]');
+          return await selector.count() ? await selector.inputValue() : "";
+        }, 7000, 100);
+        check("P19a после загрузки общего snapshot восстанавливается автомобиль конкретного маршрута",
+          restoredVehicle === "rio", restoredVehicle);
+        await tab(page, "Каталог маршрутов");
       }
     }
     // Recreate a legacy v1 database from one valid v2 record, then let the app upgrade it.
