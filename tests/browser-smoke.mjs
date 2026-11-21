@@ -852,62 +852,57 @@ try {
   check("L сценарий выполнен без исключений",false,String(e.message).slice(-460));
 }
 
-// ───────── M. Два пальца: газ удерживается независимо от перемещения тормоза ─────────
+// ───────── M. Педали взаимоисключающие: одна нога / один палец ─────────
 try {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const { page, errors } = await open(ctx, httpUrl);
   const gas = page.getByRole("button", { name: "Газ", exact: true });
   const brake = page.getByRole("button", { name: "Тормоз", exact: true });
-  const grip = page.getByRole("button", { name: "Переместить педаль тормоза", exact: true });
   await gas.scrollIntoViewIfNeeded();
-  const g = await gas.boundingBox(), h = await grip.boundingBox();
-  const finger1 = { x: g.x + g.width / 2, y: g.y + g.height / 2, id: 1 };
-  const finger2 = { x: h.x + h.width / 2, y: h.y + h.height / 2, id: 2 };
-  const moved2 = { ...finger2, x: finger2.x - 45, y: finger2.y - 80 };
+  const g = await gas.boundingBox(), b = await brake.boundingBox();
+  const fingerGas = { x: g.x + g.width / 2, y: g.y + g.height / 2, id: 1 };
+  const fingerBrake = { x: b.x + b.width / 2, y: b.y + b.height / 2, id: 2 };
   const cdp = await ctx.newCDPSession(page);
-  const pointerTrace = await page.evaluate(() => {
-    window.__pedalPointerTrace = [];
-    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) {
-      document.addEventListener(type, (event) => {
-        const target = event.target instanceof Element ? event.target.closest("button") : null;
-        if (target && (target.getAttribute("aria-label") === "Газ" || target.getAttribute("aria-label") === "Тормоз"
-          || target.getAttribute("aria-label") === "Переместить педаль тормоза")) {
-          window.__pedalPointerTrace.push({ type, label: target.getAttribute("aria-label"), id: event.pointerId,
-            pointerType: event.pointerType, button: event.button });
-        }
-      }, true);
-    }
-    return true;
-  });
   const touch = async (type, touchPoints) => {
     await cdp.send("Input.dispatchTouchEvent", { type, touchPoints }); await sleep(100);
   };
-  // CDP принимает в touchStart только новый контакт; активные контакты
-  // передаются вместе при перемещении. Это проверяет добавление второго пальца
-  // без повторного старта уже удерживаемого газа.
-  await touch("touchStart", [finger1]);
-  await touch("touchStart", [finger2]);
-  await touch("touchMove", [finger1, moved2]);
-  const gasPressed = (await gas.getAttribute("aria-pressed")) === "true";
-  const brakePressed = (await brake.getAttribute("aria-pressed")) === "true";
-  const movedGripBox = await grip.boundingBox();
-  const movedGasBox = await gas.boundingBox();
-  const m1Details = { gasPressed, brakePressed, gripDeltaY: movedGripBox ? Math.round(movedGripBox.y - h.y) : null, gasDeltaY: movedGasBox ? Math.round(movedGasBox.y - g.y) : null };
-  check("M1 второй палец переносит только тормоз, не включая его и не отпуская газ",
-    gasPressed && !brakePressed && Math.abs((movedGripBox?.y ?? h.y) - h.y) > 50 && Math.abs((movedGasBox?.y ?? g.y) - g.y) < 1,
-    JSON.stringify({ ...m1Details, pointerEvents: await page.evaluate(() => window.__pedalPointerTrace ?? []) }));
-  // После touchEnd остаётся только первый контакт на газе; второй палец отпускает ручку.
-  await touch("touchEnd", [finger1]);
-  check("M2 отпускание ручки второго пальца не сбрасывает газ",(await gas.getAttribute("aria-pressed")) === "true");
+
+  // Даже при искусственном конфликте двух контактов вторая педаль должна
+  // немедленно отпустить первую. В обычном управлении водитель переключает
+  // одну ногу/один палец между кнопками.
+  await touch("touchStart", [fingerGas]);
+  const gasInitiallyPressed = (await gas.getAttribute("aria-pressed")) === "true";
+  await touch("touchStart", [fingerBrake]);
+  const gasAfterBrake = (await gas.getAttribute("aria-pressed")) === "true";
+  const brakeAfterBrake = (await brake.getAttribute("aria-pressed")) === "true";
+  check("M1 нажатие тормоза автоматически отпускает газ",
+    gasInitiallyPressed && !gasAfterBrake && brakeAfterBrake,
+    `gas initially=${gasInitiallyPressed}, gas after brake=${gasAfterBrake}, brake=${brakeAfterBrake}`);
+
+  // Отпускание тормоза не должно самопроизвольно возвращать ранее отменённый газ.
+  await touch("touchEnd", [fingerGas]);
+  check("M2 отпускание тормоза не восстанавливает газ",
+    (await gas.getAttribute("aria-pressed")) === "false" && (await brake.getAttribute("aria-pressed")) === "false");
   await touch("touchCancel", []);
-  check("M3 отмена касания не оставляет зажатую педаль",(await gas.getAttribute("aria-pressed")) === "false");
+  check("M3 отмена касания не оставляет зажатые педали",
+    (await gas.getAttribute("aria-pressed")) === "false" && (await brake.getAttribute("aria-pressed")) === "false");
+
+  // Проверка штатного переключения одной точкой касания: газ -> отпускание -> тормоз.
+  await touch("touchStart", [fingerGas]);
+  const gasSingle = (await gas.getAttribute("aria-pressed")) === "true";
+  await touch("touchEnd", []);
+  await touch("touchStart", [fingerBrake]);
+  const brakeSingle = (await brake.getAttribute("aria-pressed")) === "true";
+  check("M4 один палец последовательно нажимает газ и тормоз",
+    gasSingle && brakeSingle && (await gas.getAttribute("aria-pressed")) === "false");
+  await touch("touchEnd", []);
   await page.getByRole("button", { name: "Управление", exact: true }).click();
   await page.getByRole("button", { name: "Сбросить раскладку" }).click();
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("cdt.layout.v1") || "{}"));
-  check("M4 общий сброс раскладки возвращает обе педали", !stored.pedalBrake && !stored.pedalGas);
+  check("M5 общий сброс раскладки возвращает обе педали", !stored.pedalBrake && !stored.pedalGas);
   await page.getByRole("button",{name:"Закрыть настройки управления"}).click();
   await page.screenshot({ path: `${shotDir}/mobile-pedals.png` });
-  check("M5 ошибок в консоли нет",errors.length===0,errors.slice(0,3).join(" | "));
+  check("M6 ошибок в консоли нет",errors.length===0,errors.slice(0,3).join(" | "));
   await ctx.close();
 } catch (e) {
   check("M сценарий выполнен без исключений",false,String(e.message).slice(-460));
