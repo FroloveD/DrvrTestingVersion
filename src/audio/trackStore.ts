@@ -1,3 +1,5 @@
+import type { OfflineTrackMetadata } from "./radioCatalog";
+
 /**
  * @module audio/trackStore
  * @layer three-render
@@ -10,8 +12,6 @@ const DB_NAME = "cdt-audio";
 const DB_VERSION = 1;
 const TRACKS = "tracks";
 const MAX_MEMORY_FALLBACK_BYTES = 8 * 1024 * 1024;
-
-import type { OfflineTrackMetadata } from "./radioCatalog";
 
 /** Метаданные сохранённого трека (без самого аудио — оно в поле blob). */
 export type SavedTrack = {
