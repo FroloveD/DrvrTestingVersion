@@ -1602,7 +1602,6 @@ export class SceneController {
         triangles: this.renderer.info.render.triangles,
         geometries: this.renderer.info.memory.geometries,
         textures: this.renderer.info.memory.textures,
-      textureBytesEstimate: this.cachedTextureBytesEstimate,
         textureBytesEstimate: this.cachedTextureBytesEstimate,
       };
     }
