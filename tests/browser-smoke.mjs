@@ -1412,7 +1412,7 @@ try {
     await page.getByRole("button", { name: /Управление/ }).click();
     const settings = page.getByTestId("head-unit-settings");
     await settings.waitFor({ timeout: 5000 });
-    await settings.getByRole("button", { name: "FM" }).click();
+    await settings.getByRole("button", { name: "РАДИО" }).click();
     await page.getByTestId("radio-save-track").click();
     const saved = await until(async () => await settings.getByText("СОХРАНЁННЫЕ ТРЕКИ").count() > 0, 7000, 150);
     check("Q3 ШГУ создаёт 10-минутную офлайн-сессию и показывает список сохранённых треков", saved);
@@ -1448,6 +1448,27 @@ try {
     await page.screenshot({ path: `${shotDir}/v1-audio-cockpit-panels.png` });
   } catch (e) {
     check("Q сценарий выполнен без исключений", false, String(e.message).slice(-500));
+  } finally {
+    await ctx.close();
+  }
+}
+
+
+ // ───────── R. Диагностика связности экзаменационного маршрута ─────────
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  try {
+    await tab(page, "Свой сценарий");
+    const panel = page.getByTestId("route-check-panel");
+    await panel.waitFor({ timeout: 5000 });
+    const summary = await page.getByTestId("route-check-summary").innerText();
+    check("R1 редактор показывает панель проверки маршрута", await panel.isVisible());
+    check("R2 диагностика содержит сводку маршрута", summary.trim().length > 0, summary);
+    check("R3 панель диагностики не создаёт ошибок JavaScript", errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.screenshot({ path: `${shotDir}/v1-route-check.png` });
+  } catch (e) {
+    check("R сценарий выполнен без исключений", false, String(e.message).slice(-500));
   } finally {
     await ctx.close();
   }
