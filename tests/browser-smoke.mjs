@@ -954,6 +954,33 @@ try {
   await tab(page, "Свой сценарий");
   await sleep(400);
 
+  // Внутренние панели редактора сворачиваются, закрываются и восстанавливаются
+  // с сохранением состояния между перезагрузками.
+  const carEditorFrame = page.getByTestId("editor-panel-carRadio");
+  await page.getByTestId("editor-panel-collapse-carRadio").click();
+  const carPanelCollapsed = await page.getByTestId("editor-vehicle-radio-panel").count() === 0;
+  await page.getByTestId("editor-panel-collapse-carRadio").click();
+  const carPanelExpanded = await page.getByTestId("editor-vehicle-radio-panel").count() === 1;
+  check("O0a панель автомобиля и радио сворачивается и разворачивается",
+    carPanelCollapsed && carPanelExpanded, `collapsed=${carPanelCollapsed}, expanded=${carPanelExpanded}`);
+
+  await page.getByTestId("editor-panel-close-carRadio").click();
+  await carEditorFrame.waitFor({ state: "detached", timeout: 3000 });
+  const closePersisted = await until(async () => await page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem("cdt.editorPanelState.v1") || "{}");
+    return Array.isArray(state.closed) && state.closed.includes("carRadio");
+  }), 3000, 100);
+  await page.reload();
+  await tab(page, "Свой сценарий");
+  const restoreCarPanel = page.getByTestId("editor-panel-restore-carRadio");
+  await restoreCarPanel.waitFor({ state: "visible", timeout: 5000 });
+  check("O0b закрытая панель остаётся закрытой после перезагрузки", closePersisted
+    && await page.getByTestId("editor-panel-carRadio").count() === 0);
+  await restoreCarPanel.click();
+  await page.getByTestId("editor-panel-carRadio").waitFor({ state: "visible", timeout: 3000 });
+  check("O0c закрытую панель можно восстановить после перезагрузки",
+    await page.getByTestId("editor-vehicle-radio-panel").count() === 1);
+
   const lotSurface = page.getByTestId("editor-lot-surface-toggle");
   const lotInitiallyEnabled = await lotSurface.isChecked();
   await lotSurface.uncheck();
