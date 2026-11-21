@@ -31,12 +31,12 @@ export const STRATEGY_PHASES: StrategyPhase[] = [
     done: [
       "Монолит v8 разделён на модули sim / scoring / maps / scenarios / analytics / storage / strategy / render / input",
       "Фиксированный шаг 1/60 с и воспроизводимый RLE-реплей",
-      "33 автотеста ядра T01–T33 и браузерный Playwright smoke A–P",
+      "43 автотеста ядра T01–T44 (T35 зарезервирован) и браузерный Playwright smoke A–R",
       "Самодостаточный dist/index.html без runtime-запросов к внешним CDN",
-      "GitHub Actions: TypeScript, core tests, документация, offline bundle и HTTP/file:// browser smoke",
+      "GitHub Actions: TypeScript, 43 core tests, документация, offline bundle и HTTP/file:// browser smoke A–R",
     ],
     remaining: [],
-    metric: "33/33 тестов ядра, A–P, TypeScript, production build и offline gate проходят в CI",
+    metric: "43/43 теста ядра, Browser Smoke A–R, TypeScript, production build и offline gate проходят в CI",
   },
   {
     id: "ph1",
@@ -134,11 +134,13 @@ export const STRATEGY_PHASES: StrategyPhase[] = [
       "Редактор названия и заданий КТ: инструкции, радиусы, указатели, остановка и удаление промежуточных точек",
       "Перетаскивание контрольных точек по 2D-схеме OSM с проверкой границ и близости к пути",
       "Локальный поиск и фильтры по названию, карте-источнику, длине и числу манёвров",
+      "Общий IndexedDB store maps для повторного использования OSM snapshot несколькими маршрутами",
+      "Автоматическая миграция каталога IndexedDB v1 → v2 в upgrade-транзакции без потери сохранённых маршрутов; Browser Smoke P20–P22 проверяет схему, записи и отсутствие вложенных snapshot",
     ],
     remaining: [
-      "Дождаться полного Playwright A–P и устранить возможные регрессии",
+      
       "Проверить маршрутизацию, перенос КТ и фильтры на нескольких реальных OSM-выгрузках",
-      "Завершить разделение общих OSM snapshot и записей маршрутов с миграцией IndexedDB v1 → v2",
+      "Разделение общих OSM snapshot и записей маршрутов с миграцией IndexedDB v1 → v2 реализовано; автоматическая миграция подтверждена Browser Smoke P20–P22 и CI",
       "Проверить сложные перекрёстки, развязки, мосты/тоннели, разрывы сети и границы импорта",
       "Добавить контролируемое обновление карты без перезаписи уже сохранённых маршрутов",
     ],
