@@ -149,6 +149,12 @@ try {
   check("A2e окно подсказки и быстрого старта закрывается", await page.getByTestId("quick-start-button").count() === 0);
   await page.getByRole("button", { name: /^Сброс$/ }).click();
   check("A2f сброс нового заезда возвращает окно быстрого старта", await page.getByTestId("quick-start-button").count() === 1);
+  const quickStartTopmost = await page.getByTestId("quick-start-button").evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return Boolean(top && (top === el || el.contains(top)));
+  });
+  check("A2f1 кнопка быстрого старта не перекрыта другой панелью HUD", quickStartTopmost);
   await page.getByTestId("quick-start-button").click();
   await sleep(300);
   check("A2g быстрый старт нельзя повторно включить в том же заезде", await page.getByTestId("quick-start-button").count() === 0);
