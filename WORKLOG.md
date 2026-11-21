@@ -370,3 +370,11 @@
 - Добавлен pure-core helper `resolveExclusivePedals` и тест T44; Browser Smoke M переписан на проверку взаимоисключения и последовательного управления одним касанием.
 - Правило внесено в ADR-032, `src/strategy/plan.ts`, `src/handoff.ts`, `HANDOFF.md` и `docs/ARCHITECTURE.md`.
 - Рабочая ветка: `arena/exam-routes-v1-integration`; требуется проверить полный CI на актуальном HEAD.
+
+
+## 2026-11-21 — Исправление Browser Smoke M2
+
+- В CI на commit `9d96389` тест M2 завершал не тот touch-контакт: для CDP `touchEnd` передавался `fingerGas`, то есть тест отпускал газовый контакт, оставляя тормозной активным.
+- Исправлено на `touchEnd` с `fingerBrake`; production-обработка педалей не менялась, поскольку причина была в последовательности событий тестовой обвязки.
+- OSM-сценарий O и остальные проверки A–R прошли; после исправления M2 требуется повторный полный CI.
+- Рабочая ветка: `arena/exam-routes-v1-integration`.
