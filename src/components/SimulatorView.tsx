@@ -32,7 +32,7 @@ import { SceneController, type PerfMetrics } from "../render/sceneController";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import type { CustomScenarioDef } from "../scenarios/custom";
 import { evaluateAttempt, type EvaluationResult, type RuleSet } from "../scoring/rules";
-import { applyShifterTarget, checkEngineToggle, checkGearChange, stepGearSequential, stepShifterGate, type ShifterTarget } from "../sim/controls";
+import { applyShifterTarget, checkEngineToggle, checkGearChange, resolveExclusivePedals, stepGearSequential, stepShifterGate, type ShifterTarget } from "../sim/controls";
 import { AttemptRecorder, quantizeInput, type RecordedAttempt } from "../sim/recorder";
 import { SpatialGrid } from "../sim/spatialGrid";
 import { createInitialInput, createInitialState, createReadyInput, defaultGearForWorld, stepSimulation } from "../sim/step";
@@ -791,8 +791,12 @@ export function SimulatorView({
       while (accumulator >= FIXED_DT) {
         const gasPressed = Boolean(keys.KeyW || keys.ArrowUp || touchPedalRef.current.gas);
         const brakePressed = Boolean(keys.KeyS || keys.ArrowDown || touchPedalRef.current.brake);
-        inp.throttle = Math.max(gasPressed ? 1 : 0, pad.throttle);
-        inp.brake = Math.max(brakePressed ? 1 : 0, pad.brake);
+        const exclusivePedals = resolveExclusivePedals(
+          Math.max(gasPressed ? 1 : 0, pad.throttle),
+          Math.max(brakePressed ? 1 : 0, pad.brake)
+        );
+        inp.throttle = exclusivePedals.throttle;
+        inp.brake = exclusivePedals.brake;
         inp.horn = Boolean(keys.KeyJ || pad.buttons.horn || hornPressedRef.current);
         inp.shiftBoost = Boolean((keys.ShiftLeft || keys.ShiftRight) && inp.brake > 0.01);
         const boostTarget = (keys.ShiftLeft || keys.ShiftRight) && inp.throttle > 0 ? 2 : 1;
@@ -972,6 +976,14 @@ export function SimulatorView({
         e.preventDefault();
       }
       keysRef.current[code] = true;
+      // Клавиатурные педали тоже взаимоисключающие: новое нажатие сбрасывает противоположное.
+      if (code === "KeyW" || code === "ArrowUp") {
+        keysRef.current.KeyS = false;
+        keysRef.current.ArrowDown = false;
+      } else if (code === "KeyS" || code === "ArrowDown") {
+        keysRef.current.KeyW = false;
+        keysRef.current.ArrowUp = false;
+      }
       if (e.repeat) return;
 
       const inp = inputRef.current;
@@ -1115,6 +1127,10 @@ export function SimulatorView({
 
   const pressPedal = (which: "gas" | "brake", owner: number) => {
     if (pedalOwner.current[which] !== null) return;
+    // Одна нога/один палец: нажатие новой педали немедленно отпускает противоположную.
+    const other = which === "gas" ? "brake" : "gas";
+    pedalOwner.current[other] = null;
+    touchPedalRef.current[other] = false;
     pedalOwner.current[which] = owner;
     touchPedalRef.current[which] = true;
     setPedalVisual({ ...touchPedalRef.current });
