@@ -19,7 +19,11 @@ type RouteSnapshotMeta = Pick<CustomScenarioDef,
   "version" | "title" | "subtitle" | "brief" | "start" | "defaultSpeedLimitKmh" |
   "lotHalfX" | "lotHalfZ" | "lotCenterX" | "lotCenterZ" | "useLotSurface" |
   "bays" | "checkpoints" | "perimeterCurb"
->;
+> & {
+  /** null explicitly clears a route option inherited from the shared map snapshot. */
+  radioStationIds: string[] | null;
+  playerCarId: NonNullable<CustomScenarioDef["playerCarId"]> | null;
+};
 type StoredRoute = Omit<ExamRouteRecord, "scenarioSnapshot"> & {
   /** Небольшие поля, которые отличаются между маршрутами одной карты. */
   snapshotMeta?: RouteSnapshotMeta;
@@ -131,6 +135,10 @@ function snapshotMeta(snapshot: CustomScenarioDef): RouteSnapshotMeta {
     bays: snapshot.bays.map((bay) => ({ ...bay })),
     checkpoints: snapshot.checkpoints.map((point) => ({ ...point })),
     ...(snapshot.perimeterCurb !== undefined ? { perimeterCurb: snapshot.perimeterCurb } : {}),
+    // Explicit null preserves the meaning of an omitted optional field when a shared
+    // map snapshot belongs to another route with different vehicle/radio settings.
+    radioStationIds: snapshot.radioStationIds ? [...snapshot.radioStationIds] : null,
+    playerCarId: snapshot.playerCarId ?? null,
   };
 }
 
@@ -155,7 +163,19 @@ export async function loadRouteCatalog(): Promise<RouteCatalogLoad> {
     for (const stored of storedRoutes) {
       const sharedSnapshot = snapshots.get(stored.mapFingerprint);
       const snapshot = stored.scenarioSnapshot ?? (sharedSnapshot && stored.snapshotMeta
-        ? { ...sharedSnapshot, ...stored.snapshotMeta, mapMeta: stored.mapMeta }
+        ? {
+            ...sharedSnapshot,
+            ...stored.snapshotMeta,
+            // Older v2 records did not store these fields; preserve their shared
+            // snapshot values when the metadata keys are genuinely absent.
+            radioStationIds: Object.prototype.hasOwnProperty.call(stored.snapshotMeta, "radioStationIds")
+              ? stored.snapshotMeta.radioStationIds ?? undefined
+              : sharedSnapshot.radioStationIds,
+            playerCarId: Object.prototype.hasOwnProperty.call(stored.snapshotMeta, "playerCarId")
+              ? stored.snapshotMeta.playerCarId ?? undefined
+              : sharedSnapshot.playerCarId,
+            mapMeta: stored.mapMeta,
+          }
         : sharedSnapshot);
       if (!snapshot) continue;
       const record = { ...stored, scenarioSnapshot: snapshot } as ExamRouteRecord;
