@@ -1261,7 +1261,6 @@ export const extraCases: SelfTestCase[] = [
       return "Бокс: 1 · ручной знак: 1 · КТ: 1 · OSM-знак и новая дорога сохранены";
     },
   },
-,
 
   {
     id: "T42",
