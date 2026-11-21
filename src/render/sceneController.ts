@@ -650,6 +650,8 @@ export class SceneController {
   // === [SEC:render-world] Построение 3D-мира сценария, препятствий и светофоров ===
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
+    this.lastTextureEstimateAt = 0;
+    this.cachedTextureBytesEstimate = 0;
     const requestedCarId = world.playerCarId ?? "ceed";
     if (requestedCarId !== this.playerCarId) this.rebuildPlayerRig(requestedCarId);
     const osmBuildingCount = world.scenarioId === "city_osm"
@@ -1588,7 +1590,7 @@ export class SceneController {
   // === [SEC:render-dispose] Метрики FPS и освобождение GPU-ресурсов ===
   getPerfMetrics(): PerfMetrics {
     const now = performance.now();
-    if (now - this.lastTextureEstimateAt >= 1000) {
+    if (this.lastTextureEstimateAt === 0) {
       this.cachedTextureBytesEstimate = this.estimateSceneTextureBytes();
       this.lastTextureEstimateAt = now;
     }
