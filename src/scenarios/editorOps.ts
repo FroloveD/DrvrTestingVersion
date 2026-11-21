@@ -1022,14 +1022,12 @@ export function mergeUserObjectsOntoOsmMap(
       z: round2(p.z),
       ...(zone ? { zoneX: round2(zone.x), zoneZ: round2(zone.z) } : {}),
     };
+    // Ручной знак — самостоятельный объект пользователя. Даже если после обновления
+    // OSM появился знак того же класса рядом или в той же точке, не удаляем ручной:
+    // совпадение координат не доказывает, что это один и тот же объект.
     const clean = placeSignPostClearOfRoads(relocated, roadIndex).sign;
-    const duplicate = mergedSigns.some(
-      (other) => other.kind === clean.kind && Math.hypot(other.x - clean.x, other.z - clean.z) < 5
-    );
-    if (!duplicate) {
-      mergedSigns.push(clean);
-      keptSigns += 1;
-    }
+    mergedSigns.push(clean);
+    keptSigns += 1;
   }
 
   const candidateCheckpoints: RouteCheckpoint[] = [];
