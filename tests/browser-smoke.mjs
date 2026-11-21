@@ -1607,7 +1607,19 @@ try {
     await page.getByTestId("panel-restore-cluster").click();
     await cluster.waitFor({ state: "visible", timeout: 3000 });
     check("Q7 закрытую HUD-панель можно восстановить", await cluster.count() === 1);
-    check("Q8 ошибок JavaScript в новых функциях нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+
+    // Z-order должен переключаться по взаимодействию, а не зависеть от порядка JSX.
+    const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
+    await scorePanel.waitFor({ state: "visible", timeout: 3000 });
+    await scorePanel.click({ position: { x: 18, y: 12 } });
+    const scoreFront = await scorePanel.evaluate((el) => el.style.zIndex);
+    const clusterBehind = await cluster.evaluate((el) => el.style.zIndex);
+    await cluster.click({ position: { x: 18, y: 12 } });
+    const clusterFront = await cluster.evaluate((el) => el.style.zIndex);
+    check("Q8 активная HUD-панель поднимается над соседними окнами",
+      scoreFront === "250" && clusterBehind !== "250" && clusterFront === "250",
+      JSON.stringify({ scoreFront, clusterBehind, clusterFront }));
+    check("Q9 ошибок JavaScript в новых функциях нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/v1-audio-cockpit-panels.png` });
   } catch (e) {
     check("Q сценарий выполнен без исключений", false, String(e.message).slice(-500));
