@@ -39,6 +39,7 @@ import {
   duplicateSelected,
   fitBoundsToContent,
   getSelectionAnchor,
+  mergeUserObjectsOntoOsmMap,
   primarySelection,
   pushEditorHistory,
   rebuildRouteFromEditorRoads,
