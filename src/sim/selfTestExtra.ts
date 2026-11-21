@@ -21,6 +21,7 @@ import { cropOsmPackToPolygon, parseMapFileText, parseOsmXml } from "../maps/osm
 import { isInsideWorldBoundary, isValidBoundaryPolygon } from "../maps/boundary";
 import { findRoadNetworkPath, roadGeometryPoints } from "../maps/route";
 import { buildExamRouteRecord, fingerprintOsmScenario, isExamRouteRecord, reviseExamRouteRecord } from "../maps/routeCatalog";
+import { checkScenarioRoute } from "../maps/routeCheck";
 import { buildScenarioWorld } from "../scenarios/catalog";
 import {
   buildCustomWorld,
@@ -1120,4 +1121,28 @@ export const extraCases: SelfTestCase[] = [
       return "Kia Rio · RECORD FM · неверные ID отфильтрованы";
     },
   },
+  {
+    id: "T38",
+    suite: "route",
+    name: "Проверка маршрута: связность, границы и проходимость контрольных точек",
+    fn: () => {
+      const input = {
+        start: { x: 0, z: 0, h: 0 },
+        roads: [],
+        checkpoints: [{ id: "cp-1", x: 30, z: 0, radius: 4, instruction: "Доехать до контрольной точки" }],
+        bays: [],
+        obstacles: [],
+        bounds: { minX: -50, maxX: 50, minZ: -50, maxZ: 50 },
+      };
+      const valid = checkScenarioRoute(input);
+      assert(valid.ok && valid.status === "valid", `Прямой участок должен быть валиден: ${valid.summary}`);
+      assert(valid.legs.length === 1 && valid.legs[0].status === "ok", "Отчёт должен содержать проходимый участок Старт → КТ #1");
+      assert(valid.totalLengthM === 30 && valid.connectedLegsCount === 1, "Длина и число связанных участков должны рассчитываться");
+      const outside = checkScenarioRoute({ ...input, checkpoints: [{ ...input.checkpoints[0], x: 70 }] });
+      assert(!outside.ok && outside.status === "errors", "Контрольная точка за границей должна давать ошибку");
+      assert(outside.issues.some((issue) => issue.target?.kind === "checkpoint"), "Ошибка должна ссылаться на контрольную точку");
+      return `Участков: ${valid.legs.length} · длина: ${valid.totalLengthM} м · выход за границу обнаружен`;
+    },
+  },
+
 ];
