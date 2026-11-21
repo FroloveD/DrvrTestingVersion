@@ -3,7 +3,7 @@
  * @layer pure-core
  * @role Комплексная проверка маршрута после импорта OSM и в редакторе: связность по дорожной сети, попадание в произвольную границу, проходимость КТ и старта.
  * @invariants #1 (координаты +Z север, +X лево), #7 (чистое ядро без DOM и three), #8 (офлайн).
- * @tests T38, Browser Smoke R
+ * @tests T38 + Browser Smoke R
  */
 import { isCarInsideBay, SpatialGrid } from "../sim/spatialGrid";
 import type {
