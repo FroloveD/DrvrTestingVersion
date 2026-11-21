@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42), разворот направления дороги (T43).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42), разворот направления дороги (T43), строгая проверка связности OSM-маршрутов (T45).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
@@ -1357,6 +1357,48 @@ export const extraCases: SelfTestCase[] = [
       assert(clamped.throttle === 1 && clamped.brake === 0,
         "Значения педалей должны ограничиваться диапазоном 0..1");
       return "Газ/тормоз взаимоисключающие; тормоз имеет приоритет при конфликте источников";
+    },
+  },
+
+
+  {
+    id: "T45",
+    suite: "route",
+    name: "Несвязный участок OSM не считается проходимым экзаменационным маршрутом",
+    fn: () => {
+      const northRoad = {
+        ...createDefaultRoad("north-road", 0, 0, 0),
+        points: [{ x: 0, z: -20 }, { x: 0, z: 20 }],
+        width: 8,
+      };
+      const eastRoad = {
+        ...createDefaultRoad("east-road", 100, 0, 0),
+        points: [{ x: 100, z: -20 }, { x: 100, z: 20 }],
+        width: 8,
+      };
+      const report = checkScenarioRoute({
+        start: { x: 0, z: -10, h: 0 },
+        roads: [northRoad, eastRoad],
+        checkpoints: [{
+          id: "disconnected-cp",
+          x: 100,
+          z: 10,
+          radius: 5,
+          instruction: "Следовать по дорожной сети до контрольной точки",
+        }],
+        bays: [],
+        obstacles: [],
+        bounds: { minX: -50, maxX: 150, minZ: -50, maxZ: 50 },
+        useLotSurface: false,
+      });
+      assert(!report.ok && report.status === "errors",
+        "Маршрут с разрывом OSM-сети не должен считаться проходимым");
+      assert(report.legs.length === 1 && report.legs[0].status === "offroad" && !report.legs[0].connectedOnRoads,
+        "Отчёт должен явно пометить несвязный участок как offroad");
+      assert(report.issues.some((issue) =>
+        issue.severity === "error" && issue.message.includes("не связан единой дорогой OSM")),
+        "Разрыв дорожной сети должен быть блокирующей ошибкой");
+      return "Разрыв OSM-сети обнаружен; статус маршрута errors; offroad не принят за проходимый участок";
     },
   },
 
