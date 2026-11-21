@@ -1415,7 +1415,7 @@ try {
     await settings.getByRole("button", { name: "FM" }).click();
     await page.getByTestId("radio-save-track").click();
     const saved = await until(async () => await settings.getByText("СОХРАНЁННЫЕ ТРЕКИ").count() > 0, 7000, 150);
-    check("Q3 ШГУ создаёт офлайн WAV и показывает список сохранённых треков", saved);
+    check("Q3 ШГУ создаёт 10-минутную офлайн-сессию и показывает список сохранённых треков", saved);
     const tracks = await page.evaluate(() => new Promise((resolve, reject) => {
       const request = indexedDB.open("cdt-audio", 1);
       request.onerror = () => reject(request.error);
@@ -1423,11 +1423,14 @@ try {
         const db = request.result;
         const tx = db.transaction("tracks", "readonly");
         const all = tx.objectStore("tracks").getAll();
-        tx.oncomplete = () => { resolve(all.result.length); db.close(); };
+        tx.oncomplete = () => { resolve(all.result); db.close(); };
         tx.onerror = () => reject(tx.error);
       };
     }));
-    check("Q4 WAV-трек сохранён в IndexedDB", Number(tracks) >= 1, String(tracks));
+    const savedTrack = tracks[0];
+    check("Q4 десятиминутный WAV сохранён в IndexedDB", Array.isArray(tracks) && tracks.length >= 1 && savedTrack.seconds === 600, JSON.stringify({ count: tracks.length, seconds: savedTrack?.seconds }));
+    check("Q4a трек содержит метаданные названия, исполнителя, альбома и тегов", Boolean(savedTrack?.metadata?.title && savedTrack.metadata.artist && savedTrack.metadata.album && savedTrack.metadata.tags?.includes("offline")));
+    check("Q4b размер WAV соответствует десятиминутному PCM", savedTrack?.blob?.size >= 600 * 22050 * 2, String(savedTrack?.blob?.size));
 
     await page.getByTestId("hud-panels-menu").click();
     const cluster = page.locator('[data-hud-panel="cluster"]');
