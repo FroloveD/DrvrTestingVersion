@@ -498,7 +498,7 @@ export function SimulatorView({
     speedLimit: world.defaultSpeedLimitKmh,
     gridChecks: 0,
     totalObstacles: world.obstacles.length,
-    perf: { fps: 60, p95FrameMs: 16.6, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0 },
+    perf: { fps: 60, p95FrameMs: 16.6, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0, textureBytesEstimate: 0 },
     nextSignal: null,
     latestViolation: null,
   }));
@@ -932,7 +932,7 @@ export function SimulatorView({
           totalObstacles: w.obstacles.length,
           perf: sceneCtrlRef.current
             ? sceneCtrlRef.current.getPerfMetrics()
-            : { fps: 60, p95FrameMs: 16, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0 },
+            : { fps: 60, p95FrameMs: 16, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0, textureBytesEstimate: 0 },
           nextSignal,
           latestViolation: viol,
         });
@@ -1770,7 +1770,19 @@ export function SimulatorView({
             >
               {hud.speedLimit}
             </div>
-            <div className="hidden sm:block rounded-xl bg-[#091017]/84 backdrop-blur-md border hairline px-2.5 py-1.5 mono text-[10px] text-[#9bafbc] leading-tight">
+            <div
+              data-testid="sim-perf-metrics"
+              data-fps={hud.perf.fps}
+              data-p95-frame-ms={hud.perf.p95FrameMs}
+              data-draw-calls={hud.perf.drawCalls}
+              data-triangles={hud.perf.triangles}
+              data-geometries={hud.perf.geometries}
+              data-textures={hud.perf.textures}
+              data-texture-bytes-estimate={hud.perf.textureBytesEstimate}
+              data-visible-buildings={hud.perf.visibleBuildings}
+              data-total-buildings={hud.perf.totalBuildings}
+              className="hidden sm:block rounded-xl bg-[#091017]/84 backdrop-blur-md border hairline px-2.5 py-1.5 mono text-[10px] text-[#9bafbc] leading-tight"
+            >
               <div>
                 <b className={hud.perf.fps >= 30 ? "text-[#52d6bd]" : "text-[#ff6b6b]"}>{hud.perf.fps}</b> FPS · p95{" "}
                 {hud.perf.p95FrameMs}мс
