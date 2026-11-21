@@ -23,6 +23,16 @@ export const DIRECTION_SWITCH_MAX_SPEED_MS = 0.5;
  */
 export const SHIFT_LOCK_MIN_BRAKE = 0.1;
 
+/**
+ * Разрешает только одну активную педаль: рабочий тормоз имеет приоритет над газом.
+ * Это сохраняет физический инвариант «одна нога — одна педаль» для любых источников ввода.
+ */
+export function resolveExclusivePedals(throttle: number, brake: number): { throttle: number; brake: number } {
+  const gas = clamp(throttle, 0, 1);
+  const stop = clamp(brake, 0, 1);
+  return stop > 0 ? { throttle: 0, brake: stop } : { throttle: gas, brake: 0 };
+}
+
 /** Входные параметры проверки переключения КПП (передача, ДВС и нажатие педали тормоза). */
 export type GearCheckInput = Pick<InputState, "gear" | "engineOn"> & { brake?: number };
 
