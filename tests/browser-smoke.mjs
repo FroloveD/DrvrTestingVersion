@@ -987,6 +987,10 @@ try {
   <node id="4" lat="55.7505" lon="37.6098"><tag k="natural" v="tree"/></node>
   <node id="5" lat="55.7502" lon="37.6102"/>
   <node id="6" lat="55.7506" lon="37.6102"/>
+  <node id="7" lat="55.7502" lon="37.6103"/>
+  <node id="8" lat="55.7502" lon="37.6105"/>
+  <node id="9" lat="55.7504" lon="37.6105"/>
+  <node id="10" lat="55.7504" lon="37.6103"/>
   <way id="50">
     <nd ref="1"/><nd ref="2"/>
     <tag k="highway" v="residential"/>
@@ -994,6 +998,11 @@ try {
     <tag k="maxspeed" v="40"/>
   </way>
   <way id="51"><nd ref="5"/><nd ref="6"/><tag k="barrier" v="fence"/></way>
+  <way id="52">
+    <nd ref="7"/><nd ref="8"/><nd ref="9"/><nd ref="10"/><nd ref="7"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="4"/>
+  </way>
 </osm>`;
   await page.getByTestId("editor-import-input").setInputFiles({
     name: "uchebnaya.osm",
@@ -1115,7 +1124,7 @@ try {
   await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
   await sleep(1200);
   const simLow = await low(page);
-  check("O5 отредактированная OSM-карта со знаками, объектами и ODbL открывается в 3D",
+  check("O5 отредактированная OSM-карта со знаками, объектами, текстурированным зданием и ODbL открывается в 3D",
     simLow.includes("импорт osm: дорог 1") && simLow.includes("знаков")
       && simLow.includes("openstreetmap") && simLow.includes("odbl"),
     simLow.slice(0, 140));
