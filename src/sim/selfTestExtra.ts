@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42), разворот направления дороги (T43).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
@@ -54,6 +54,7 @@ import {
   pushEditorHistory,
   redoEditorHistory,
   rotateSelected,
+  reverseRoadDirection,
   undoEditorHistory,
 } from "../scenarios/editorOps";
 import { createDefaultObstacle, createDefaultRoad, createDefaultSign, OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
@@ -1308,6 +1309,32 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(fixedSign) && Math.hypot(fixedSign!.x, fixedSign!.z) > 1, "Стойка знака должна быть вынесена на обочину");
       assert(result.fixes.length > 0, "Операция должна вернуть отчёт о выполненных исправлениях");
       return `Изменено: ${result.changedCount} · частей ограждения: ${fencePieces.length} · отчёт: ${result.fixes.length}`;
+    },
+  },
+,
+
+  {
+    id: "T43",
+    suite: "scenario",
+    name: "Разворот направления дорожного сегмента",
+    fn: () => {
+      const base = defaultCustomScenario();
+      const road = {
+        ...createDefaultRoad("direction-road", 0, 0, 0),
+        points: [{ x: 2, z: 3 }, { x: 8, z: 13 }, { x: 15, z: 21 }],
+      };
+      const untouched = createDefaultRoad("untouched-road", 40, 40, 0);
+      const input = { ...base, roads: [road, untouched] };
+      const reversed = reverseRoadDirection(input, road.id);
+      assert(reversed.roads[0].points[0].x === 15 && reversed.roads[0].points[0].z === 21,
+        "Первым узлом должен стать последний узел исходной дороги");
+      assert(reversed.roads[0].points[2].x === 2 && reversed.roads[0].points[2].z === 3,
+        "Последним узлом должен стать первый узел исходной дороги");
+      assert(reversed.roads[1] === untouched, "Остальные дороги не должны изменяться");
+      assert(input.roads[0].points[0].x === 2, "Исходный сценарий должен оставаться неизменным");
+      assert(reverseRoadDirection(input, "missing-road") === input,
+        "Неизвестный ID не должен создавать ложные изменения");
+      return "3 узла развёрнуты; соседняя дорога и исходный сценарий сохранены";
     },
   },
 
