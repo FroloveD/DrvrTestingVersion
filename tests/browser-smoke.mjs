@@ -868,7 +868,7 @@ try {
   const touch = async (type, touchPoints) => {
     await cdp.send("Input.dispatchTouchEvent", { type, touchPoints }); await sleep(100);
   };
-  await touch("touchStart", [finger1]);
+  // Оба контакта стартуют в одном CDP-событии: Chromium получает согласованный список активных пальцев.
   await touch("touchStart", [finger1, finger2]);
   await touch("touchMove", [finger1, moved2]);
   const gasPressed = (await gas.getAttribute("aria-pressed")) === "true";
@@ -879,8 +879,8 @@ try {
   check("M1 второй палец переносит только тормоз, не включая его и не отпуская газ",
     gasPressed && !brakePressed && Math.abs((movedGripBox?.y ?? h.y) - h.y) > 50 && Math.abs((movedGasBox?.y ?? g.y) - g.y) < 1,
     JSON.stringify(m1Details));
-  // Здесь указан отпускаемый палец (id:2), а не остающийся на экране (id:1).
-  await touch("touchEnd", [moved2]);
+  // После touchEnd остаётся только первый контакт на газе; второй палец отпускает ручку.
+  await touch("touchEnd", [finger1]);
   check("M2 отпускание ручки второго пальца не сбрасывает газ",(await gas.getAttribute("aria-pressed")) === "true");
   await touch("touchCancel", []);
   check("M3 отмена касания не оставляет зажатую педаль",(await gas.getAttribute("aria-pressed")) === "false");
