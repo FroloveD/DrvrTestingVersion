@@ -91,6 +91,8 @@ async function runScenario(browser, buildingCount) {
         geometries: number("geometries"),
         textures: number("textures"),
         textureBytesEstimate: number("texture-bytes-estimate"),
+        geometryBytesEstimate: number("geometry-bytes-estimate"),
+        gpuResourceBytesEstimate: number("gpu-resource-bytes-estimate"),
         visibleBuildings: number("visible-buildings"),
         totalBuildings: number("total-buildings"),
       };
@@ -121,6 +123,8 @@ async function runScenario(browser, buildingCount) {
     geometriesMedian: median(samples.map((x) => x.geometries)),
     texturesMedian: median(samples.map((x) => x.textures)),
     textureBytesEstimate: median(samples.map((x) => x.textureBytesEstimate)),
+    geometryBytesEstimate: median(samples.map((x) => x.geometryBytesEstimate)),
+    gpuResourceBytesEstimate: median(samples.map((x) => x.gpuResourceBytesEstimate)),
     webgl,
     errors: errors.slice(0, 10),
   };
