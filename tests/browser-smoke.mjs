@@ -880,7 +880,7 @@ try {
     `gas initially=${gasInitiallyPressed}, gas after brake=${gasAfterBrake}, brake=${brakeAfterBrake}`);
 
   // Отпускание тормоза не должно самопроизвольно возвращать ранее отменённый газ.
-  await touch("touchEnd", [fingerGas]);
+  await touch("touchEnd", [fingerBrake]);
   check("M2 отпускание тормоза не восстанавливает газ",
     (await gas.getAttribute("aria-pressed")) === "false" && (await brake.getAttribute("aria-pressed")) === "false",
     `gas=${await gas.getAttribute("aria-pressed")}, brake=${await brake.getAttribute("aria-pressed")}`);
