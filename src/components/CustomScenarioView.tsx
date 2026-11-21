@@ -29,6 +29,7 @@ import {
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  autoFixScenarioRoute,
   applyPresetBoundaryShape,
   clearBoundaryPolygon,
   setCustomBoundaryPolygon,
@@ -859,6 +860,25 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           <span>Переходы: {routeCheck.crosswalksOnRoute}</span>
           <span>Знаки: {routeCheck.signsOnRoute}</span>
         </div>
+        <button
+          type="button"
+          data-testid="route-auto-fix"
+          onClick={() => {
+            const result = autoFixScenarioRoute(def);
+            if (result.fixes.length === 0) {
+              onNotify("Проверка пройдена: автоматические исправления не требуются");
+              return;
+            }
+            commitChange(result.def, def);
+            setShowRouteCheck(true);
+            setFitSignal((n) => n + 1);
+            onNotify("Исправлено (" + result.fixes.length + "): " + result.fixes[0]);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#4b8e82]/40 bg-[#173a35] px-3 py-1.5 text-[11px] font-bold text-[#b7f0d9] hover:bg-[#205047]"
+        >
+          <Icon name="wand-sparkles" size={13} />
+          Автоисправить маршрут
+        </button>
         {routeCheck.issues.length > 0 && (
           <ul className="space-y-1" data-testid="route-check-issues">
             {routeCheck.issues.slice(0, 8).map((issue, index) => (
