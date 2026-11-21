@@ -3,9 +3,9 @@
  * @layer pure-core
  * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут, автоисправление маршрута, слияние обновлённой OSM-карты с ручными объектами и Undo/Redo.
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
- * @tests T29, T39, T40
+ * @tests T29, T39–T41
  */
-import { boundsToPolygon, boundingBoxOfPolygon, buildPresetBoundaryPolygon, clampPointToWorldBoundary, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
+import { boundsToPolygon, boundingBoxOfPolygon, buildConvexHullPolygon, buildPresetBoundaryPolygon, buildRouteCorridorPolygon, clampPointToWorldBoundary, clipPolylineToPolygon, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
 import { buildRouteFromRoads, findRoadNetworkPath, nearestRoadPoint } from "../maps/route";
 import { placeSignPostClearOfRoads, reprojectBetweenOrigins, RoadCorridorIndex } from "../maps/osmDeconflict";
 import { SpatialGrid } from "../sim/spatialGrid";
@@ -15,6 +15,7 @@ import type {
   ParkedModelKey,
   ParkingBay,
   ParkingBayKind,
+  RoadSegment,
   RoadSignKind,
   RouteCheckpoint,
   Vec2,
@@ -67,6 +68,14 @@ export type EditorSelection =
   | { kind: "obstacle"; id: string }
   | { kind: "checkpoint"; id: string }
   | { kind: "boundary_point"; index: number };
+
+export type CropSummary = {
+  def: CustomScenarioDef;
+  removedRoads: number;
+  splitRoads: number;
+  removedObjects: number;
+  keptCheckpoints: number;
+};
 
 export type PlaceOptions = {
   signKind: RoadSignKind;
@@ -750,6 +759,179 @@ export function attachCheckpointToSign(
   return {
     def: { ...def, bounds, checkpoints: [...def.checkpoints, cp] },
     checkpointId,
+  };
+}
+
+/** Собирает опорную ломаную маршрута по дорожной сети от старта через все КТ. */
+function collectActiveRouteSpine(def: CustomScenarioDef): Vec2[] {
+  const roads = def.roads ?? [];
+  const spine: Vec2[] = [];
+  if (def.checkpoints.length > 0) {
+    let prev: Vec2 = { x: def.start.x, z: def.start.z };
+    spine.push(prev);
+    for (const checkpoint of def.checkpoints) {
+      const next: Vec2 = { x: checkpoint.x, z: checkpoint.z };
+      const network = roads.length > 0 ? findRoadNetworkPath(roads, prev, next) : null;
+      const points = network?.connected ? network.path : [prev, next];
+      for (const point of points) {
+        const last = spine[spine.length - 1];
+        if (!last || Math.hypot(point.x - last.x, point.z - last.z) > 0.5) spine.push(point);
+      }
+      prev = next;
+    }
+    if (spine.length >= 2) return spine;
+  }
+  if (roads.length > 0) {
+    const built = buildRouteFromRoads(roads, { obstacles: def.obstacles });
+    if (built.spine.length >= 2) return built.spine;
+    return roads[0].points;
+  }
+  return [{ x: def.start.x, z: def.start.z }, ...def.bays.map((bay) => ({ x: bay.cx, z: bay.cz }))];
+}
+
+/** Строит узкую неквадратную границу-коридор вдоль активного экзаменационного маршрута. */
+export function applyRouteCorridorBoundary(
+  def: CustomScenarioDef,
+  bufferM = 28
+): { def: CustomScenarioDef; vertices: number; ok: boolean } {
+  const spine = collectActiveRouteSpine(def);
+  const polygon = buildRouteCorridorPolygon(spine, Math.max(12, Math.min(180, bufferM)));
+  if (polygon.length < 3) return { def, vertices: 0, ok: false };
+  return {
+    ok: true,
+    vertices: polygon.length,
+    def: {
+      ...def,
+      useLotSurface: (def.roads ?? []).length > 0 ? false : def.useLotSurface,
+      boundaryPolygon: polygon,
+      bounds: boundingBoxOfPolygon(polygon, 0),
+    },
+  };
+}
+
+/** Строит выпуклую границу по дорогам и объектам карты с заданным отступом. */
+export function applyConvexHullBoundary(
+  def: CustomScenarioDef,
+  padM = 16
+): { def: CustomScenarioDef; vertices: number; ok: boolean } {
+  const points: Vec2[] = [{ x: def.start.x, z: def.start.z }];
+  for (const road of def.roads ?? []) points.push(...road.points);
+  for (const checkpoint of def.checkpoints) points.push({ x: checkpoint.x, z: checkpoint.z });
+  for (const bay of def.bays) points.push({ x: bay.cx, z: bay.cz });
+  for (const sign of def.signs ?? []) points.push({ x: sign.x, z: sign.z });
+  for (const signal of def.signals ?? []) points.push({ x: signal.x, z: signal.z });
+  for (const crosswalk of def.crosswalks ?? []) points.push({ x: crosswalk.cx, z: crosswalk.cz });
+  if ((def.roads ?? []).length === 0 || points.length < 3) {
+    for (const obstacle of def.obstacles) points.push({ x: obstacle.cx, z: obstacle.cz });
+  }
+  const polygon = buildConvexHullPolygon(points, Math.max(8, Math.min(120, padM)));
+  if (polygon.length < 3) return { def, vertices: 0, ok: false };
+  return {
+    ok: true,
+    vertices: polygon.length,
+    def: { ...def, boundaryPolygon: polygon, bounds: boundingBoxOfPolygon(polygon, 0) },
+  };
+}
+
+/**
+ * Обрезает дорожную сеть и объекты по текущей границе. Изменение уменьшает импортированный участок карты
+ * и может быть отменено через историю редактора.
+ */
+export function cropScenarioToBoundary(def: CustomScenarioDef): CropSummary {
+  const polygon = isValidBoundaryPolygon(def.boundaryPolygon)
+    ? def.boundaryPolygon
+    : boundsToPolygon(def.bounds);
+  const nextBounds = boundingBoxOfPolygon(polygon, 0);
+  const inside = (x: number, z: number) => isInsideWorldBoundary(x, z, nextBounds, polygon);
+  const nextRoads: RoadSegment[] = [];
+  let removedRoads = 0;
+  let splitRoads = 0;
+
+  for (const road of def.roads ?? []) {
+    const pieces = clipPolylineToPolygon(road.points, polygon);
+    if (pieces.length === 0) {
+      removedRoads += 1;
+      continue;
+    }
+    if (pieces.length > 1) splitRoads += pieces.length - 1;
+    pieces.forEach((points, index) => nextRoads.push({
+      ...road,
+      id: index === 0 ? road.id : `${road.id}-c${index + 1}`,
+      points,
+    }));
+  }
+
+  const nextObstacles = def.obstacles.filter((o) => inside(o.cx, o.cz));
+  const nextSigns = (def.signs ?? []).filter((sign) => inside(sign.x, sign.z));
+  const nextSignals = (def.signals ?? []).filter((signal) =>
+    inside(signal.x, signal.z) && inside(signal.stopLineX, signal.stopLineZ)
+  );
+  const nextCrosswalks = (def.crosswalks ?? []).filter((crosswalk) => inside(crosswalk.cx, crosswalk.cz));
+  const nextBays = def.bays.filter((bay) => inside(bay.cx, bay.cz));
+  const removedObjects =
+    def.obstacles.length - nextObstacles.length +
+    ((def.signs ?? []).length - nextSigns.length) +
+    ((def.signals ?? []).length - nextSignals.length) +
+    ((def.crosswalks ?? []).length - nextCrosswalks.length) +
+    (def.bays.length - nextBays.length);
+
+  let nextCheckpoints = def.checkpoints.filter((checkpoint) => inside(checkpoint.x, checkpoint.z));
+  let nextStart = { ...def.start };
+  let nextBrief = def.brief;
+  if (nextRoads.length > 0 && (nextCheckpoints.length === 0 || !inside(nextStart.x, nextStart.z))) {
+    const rebuilt = buildRouteFromRoads(nextRoads, { boundaryPolygon: polygon, obstacles: nextObstacles });
+    if (nextCheckpoints.length === 0 && rebuilt.checkpoints.length > 0) {
+      nextCheckpoints = rebuilt.checkpoints;
+      if (rebuilt.roadName) {
+        nextBrief = `Учебный маршрут по «${rebuilt.roadName}» (${rebuilt.checkpoints.length} КТ): соблюдайте знаки, светофоры и указатели поворота (Q/E).`;
+      }
+    }
+    if (!inside(nextStart.x, nextStart.z)) {
+      if (rebuilt.startPose && inside(rebuilt.startPose.x, rebuilt.startPose.z)) {
+        nextStart = rebuilt.startPose;
+      } else {
+        const clamped = clampPointToWorldBoundary(nextStart.x, nextStart.z, nextBounds, polygon);
+        const snap = nearestRoadPoint(clamped.x, clamped.z, nextRoads);
+        nextStart = snap && inside(snap.x, snap.z)
+          ? { x: snap.x, z: snap.z, h: snap.h }
+          : { ...nextStart, x: clamped.x, z: clamped.z };
+      }
+    }
+  } else if (!inside(nextStart.x, nextStart.z)) {
+    const clamped = clampPointToWorldBoundary(nextStart.x, nextStart.z, nextBounds, polygon);
+    nextStart = { ...nextStart, x: clamped.x, z: clamped.z };
+  }
+
+  const mapMeta = def.mapMeta
+    ? {
+        ...def.mapMeta,
+        roadsCount: nextRoads.length,
+        buildingsCount: nextObstacles.filter((o) => o.kind === "building").length,
+        signalsCount: nextSignals.length,
+        signsCount: nextSigns.length,
+      }
+    : undefined;
+  return {
+    removedRoads,
+    splitRoads,
+    removedObjects,
+    keptCheckpoints: nextCheckpoints.length,
+    def: {
+      ...def,
+      brief: nextBrief,
+      start: nextStart,
+      useLotSurface: nextRoads.length > 0 ? false : def.useLotSurface,
+      roads: nextRoads,
+      bays: nextBays,
+      obstacles: nextObstacles,
+      signs: nextSigns,
+      signals: nextSignals,
+      crosswalks: nextCrosswalks,
+      checkpoints: nextCheckpoints,
+      ...(mapMeta ? { mapMeta } : {}),
+      bounds: nextBounds,
+      ...(isValidBoundaryPolygon(def.boundaryPolygon) ? { boundaryPolygon: polygon.map((p) => ({ ...p })) } : {}),
+    },
   };
 }
 
