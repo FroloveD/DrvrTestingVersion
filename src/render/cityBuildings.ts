@@ -134,13 +134,11 @@ export function createCityEnvironmentPack(): CityEnvironmentPack {
       map: facadeTexture,
       color: 0xffffff,
       roughness: 0.86,
-      vertexColors: true,
     }),
     roofMat: new THREE.MeshStandardMaterial({
       map: roofTexture,
       color: 0xffffff,
       roughness: 0.94,
-      vertexColors: true,
     }),
     apronMat: new THREE.MeshStandardMaterial({ color: 0x4b535c, roughness: 0.92 }),
     barkMat: new THREE.MeshStandardMaterial({ color: 0x533c28, roughness: 0.94 }),
