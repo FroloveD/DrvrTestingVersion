@@ -1639,8 +1639,6 @@ export class SceneController {
         geometries: this.renderer.info.memory.geometries,
         textures: this.renderer.info.memory.textures,
         textureBytesEstimate: this.cachedTextureBytesEstimate,
-      geometryBytesEstimate: this.cachedGeometryBytesEstimate,
-      gpuResourceBytesEstimate: this.cachedTextureBytesEstimate + this.cachedGeometryBytesEstimate,
         geometryBytesEstimate: this.cachedGeometryBytesEstimate,
         gpuResourceBytesEstimate: this.cachedTextureBytesEstimate + this.cachedGeometryBytesEstimate,
       };
