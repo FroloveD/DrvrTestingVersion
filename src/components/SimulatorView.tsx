@@ -1607,6 +1607,7 @@ export function SimulatorView({
         {!immersive && !webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorLeft" {...panelProps("mirrorLeft", "Левое зеркало")}
+            title=""
             layout={layout.mirrorLeft}
             defaults={(_cw, ch) => ({ x: 12, y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -1621,6 +1622,7 @@ export function SimulatorView({
         {!webglFallback && showMirrors && (
           <FloatingPanel
             id="mirrorRight" {...panelProps("mirrorRight", "Правое зеркало")}
+            title=""
             layout={layout.mirrorRight}
             defaults={(cw, ch) => ({ x: Math.max(0, cw - 182), y: Math.max(120, ch - 470), w: 170 })}
             minW={100}
@@ -2062,7 +2064,7 @@ export function SimulatorView({
               const w = Math.min(660, cw - 16);
               // Оставляем вертикальный зазор над приборной панелью: при переносе
               // панели cluster камера не должна перекрывать нижний ряд кнопок.
-              return { x: (cw - w) / 2, y: ch - (cw < 720 ? 314 : cw < 960 ? 264 : 181), w };
+              return { x: (cw - w) / 2, y: ch - (cw < 720 ? 360 : cw < 960 ? 310 : 240), w };
             }}
             minW={250}
             maxW={680}
