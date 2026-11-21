@@ -49,7 +49,7 @@ L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
 L.push("| Тесты ядра | 45 автотестов ядра (T01–T46; T35 зарезервирован), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
-L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–R, >120 проверок (Playwright + headless Chromium, автозапуск в CI) |");
+L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–S, >124 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
 L.push("| Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |");
@@ -120,7 +120,7 @@ L.push("| `src/sim/step.ts` | единственный шаг физики, де
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
 L.push("| `src/audio/radioCatalog.ts` | каталог HTTPS-радио, фильтр станций сценария, WAV-рендер и форматирование треков |");
 L.push("| `src/audio/trackStore.ts` | офлайн-кэш WAV в IndexedDB с fallback в память вкладки |");
-L.push("| `src/audio/engineSound.ts` | процедурный WebAudio-синтез двигателя, шин, клаксона и реле |");
+L.push("| `src/audio/engineSound.ts` | процедурный WebAudio-синтез двигателя, шин, клаксона и реле с независимыми сохраняемыми слоями |");
 L.push("| `src/render/cockpitDisplays.ts` | живые CanvasTexture приборов Supervision, ШГУ и камеры заднего вида |");
 L.push("| `src/input/keyBindings.ts`, `KeyBindingsEditor.tsx` | конфликтно-безопасное переназначение клавиш и сохранение раскладки |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
@@ -152,7 +152,7 @@ L.push("| `src/components/RouteCatalogView.tsx` | выбор начала/кон
 L.push("| `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |");
 L.push("| `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |");
 L.push("| `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |");
-L.push("| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–R |");
+L.push("| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–S |");
 L.push("| `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |");
 L.push("");
 
