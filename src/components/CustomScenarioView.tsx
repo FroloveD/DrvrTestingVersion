@@ -286,6 +286,7 @@ function isEditableElement(target: EventTarget | null): boolean {
 
 export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulator, onNotify }: Props) {
   const importRef = useRef<HTMLInputElement | null>(null);
+  const mergeImportRef = useRef<HTMLInputElement | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
   const [selection, setSelection] = useState<EditorSelection | null>({ kind: "start" });
   const [snapStep, setSnapStep] = useState<number>(0.5);
@@ -525,6 +526,35 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     if (file) await readAndImportFile(file);
   };
 
+  const readAndMergeFile = async (file: File) => {
+    if (file.size > 30 * 1024 * 1024) {
+      onNotify("Файл больше 30 МБ — выберите меньший участок карты OSM");
+      return;
+    }
+    try {
+      const text = await file.text();
+      const { def: imported, summary } = importEditorFileText(text, file.name);
+      if (!imported.mapMeta || !(imported.roads?.length)) {
+        onNotify("Объединение доступно для новой OSM/GeoJSON-карты с дорожной сетью.");
+        return;
+      }
+      const result = mergeUserObjectsOntoOsmMap(def, imported);
+      const locationNote = result.reprojected ? " Координаты перепроецированы по WGS84." : "";
+      applyImportedScenario(
+        result.def,
+        `Карта обновлена: сохранено боксов ${result.keptBays}, ручных знаков ${result.keptSigns}, контрольных точек ${result.keptCheckpoints}.${locationNote} ${summary}`
+      );
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : "Не удалось объединить OSM-карту с объектами сценария");
+    }
+  };
+
+  const handleMergeImportInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) await readAndMergeFile(file);
+  };
+
   const handleAutoRoute = () => {
     const res = rebuildRouteFromEditorRoads(def);
     if (res.count === 0) {
@@ -655,6 +685,23 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             onClick={() => importRef.current?.click()}
           >
             <Icon name="upload" size={13} /> Импорт OSM / GeoJSON / JSON
+          </button>
+          <input
+            ref={mergeImportRef}
+            data-testid="editor-merge-import-input"
+            type="file"
+            accept=".osm,.xml,.json,.geojson,application/json,application/xml,text/xml"
+            className="hidden"
+            onChange={handleMergeImportInput}
+          />
+          <button
+            type="button"
+            data-testid="editor-merge-import"
+            className="btn btn-mini"
+            title="Загрузить обновлённую OSM/GeoJSON-карту, сохранив пользовательские боксы, ручные знаки и контрольные точки"
+            onClick={() => mergeImportRef.current?.click()}
+          >
+            <Icon name="layers" size={13} /> Обновить OSM, сохранив объекты
           </button>
           <button
             type="button"
