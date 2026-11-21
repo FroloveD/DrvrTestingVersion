@@ -1793,7 +1793,8 @@ export function SimulatorView({
             maxW={820}
             onChange={handleLayoutChange}
             containerRef={containerRef}
-            zIndex={20}
+            // Подготовка к старту должна оставаться кликабельной поверх приборной панели.
+            zIndex={needsPrep && !s.finished && showQuickStartPrompt && !quickStartUsed ? 251 : 20}
           >
             <div className="px-8 py-1.5">
             <div
