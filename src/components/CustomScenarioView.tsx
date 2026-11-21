@@ -49,6 +49,7 @@ import {
   rebuildRouteFromEditorRoads,
   redoEditorHistory,
   rotateSelected,
+  reverseRoadDirection,
   setSelectedHeading,
   undoEditorHistory,
   type EditorSelection,
@@ -1842,6 +1843,20 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
                     + Продлить узел
                   </button>
                 </div>
+                <button
+                  type="button"
+                  data-testid="editor-road-reverse"
+                  className="btn btn-mini w-full"
+                  title="Развернуть порядок узлов дороги; действие можно отменить через Ctrl+Z"
+                  onClick={() => {
+                    const next = reverseRoadDirection(def, selectedRoad.id);
+                    commitChange(next, def);
+                    setSelection({ kind: "road", id: selectedRoad.id });
+                    onNotify("Направление дороги развёрнуто. Порядок узлов изменён.");
+                  }}
+                >
+                  Развернуть направление дороги
+                </button>
               </div>
             )}
 
