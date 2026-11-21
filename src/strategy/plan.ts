@@ -31,12 +31,12 @@ export const STRATEGY_PHASES: StrategyPhase[] = [
     done: [
       "Монолит v8 разделён на модули sim / scoring / maps / scenarios / analytics / storage / strategy / render / input",
       "Фиксированный шаг 1/60 с и воспроизводимый RLE-реплей",
-      "43 автотеста ядра T01–T44 (T35 зарезервирован) и браузерный Playwright smoke A–R",
+      "44 автотеста ядра T01–T45 (T35 зарезервирован) и браузерный Playwright smoke A–R",
       "Самодостаточный dist/index.html без runtime-запросов к внешним CDN",
       "GitHub Actions: TypeScript, 43 core tests, документация, offline bundle и HTTP/file:// browser smoke A–R",
     ],
     remaining: [],
-    metric: "43/43 теста ядра, Browser Smoke A–R, TypeScript, production build и offline gate проходят в CI",
+    metric: "44/44 теста ядра, Browser Smoke A–R, TypeScript, production build и offline gate проходят в CI",
   },
   {
     id: "ph1",
@@ -136,6 +136,7 @@ export const STRATEGY_PHASES: StrategyPhase[] = [
       "Локальный поиск и фильтры по названию, карте-источнику, длине и числу манёвров",
       "Общий IndexedDB store maps для повторного использования OSM snapshot несколькими маршрутами",
       "Автоматическая миграция каталога IndexedDB v1 → v2 в upgrade-транзакции без потери сохранённых маршрутов; Browser Smoke P20–P22 проверяет схему, записи и отсутствие вложенных snapshot",
+      "В режиме OSM несвязный участок дорожного графа блокирует маршрут; регрессия покрыта core-тестом T45",
     ],
     remaining: [
       "Проверить маршрутизацию, перенос КТ и фильтры на нескольких реальных OSM-выгрузках",
