@@ -48,7 +48,7 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 37 автотестов ядра (T01–T38), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Тесты ядра | 38 автотестов ядра (T01–T39), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
 L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–R, >120 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
@@ -125,7 +125,7 @@ L.push("| `src/render/cockpitDisplays.ts` | живые CanvasTexture прибо�
 L.push("| `src/input/keyBindings.ts`, `KeyBindingsEditor.tsx` | конфликтно-безопасное переназначение клавиш и сохранение раскладки |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 38 автотестов ядра (T01–T38) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 38 автотестов ядра (T01–T39) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |");
 L.push("| `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |");
@@ -135,7 +135,7 @@ L.push("| `src/maps/routeCheck.ts` | диагностика экзаменаци
 L.push("| `src/maps/routeCatalog.ts` | построение/проверка OSM-маршрута, безопасный старт, повороты, редактирование КТ, fingerprint и снимок карты |");
 L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `bay_90`, `parallel_v2`, `city_osm` |");
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
-L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, Undo/Redo) |");
+L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, автоисправление маршрута, Undo/Redo) |");
 L.push("| `src/render/sceneController.ts` | OSM-сцена (логика не менялась), PBR IBL с software fallback, физические зеркала, живые дисплеи салона, инерция взгляда и raycast органов управления |");
 L.push("| `src/render/cityBuildings.ts` | процедурные фасады зданий РФ/СНГ, деревья и облачное небо |");
 L.push("| `src/render/roadInfra.ts`, `src/render/roadTextures.ts` | PBR-дороги, тротуары, бордюры, разметка, знаки, светофоры и уличная инфраструктура ГОСТ |");
