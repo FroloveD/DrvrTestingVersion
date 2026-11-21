@@ -1454,7 +1454,81 @@ try {
           await page.getByTestId("route-card").count() === 2);
       }
     }
-    check("P20 ошибок JavaScript в полном цикле каталога маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
+    // Recreate a legacy v1 database from one valid v2 record, then let the app upgrade it.
+    const migrationSeeded = await page.evaluate(async () => {
+      const current = await new Promise((resolve, reject) => {
+        const request = indexedDB.open("cdt-route-catalog", 2);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const tx = db.transaction(["routes", "maps"], "readonly");
+          const routesRequest = tx.objectStore("routes").getAll();
+          const mapsRequest = tx.objectStore("maps").getAll();
+          tx.oncomplete = () => {
+            const route = routesRequest.result[0];
+            const map = mapsRequest.result.find((item) => item.fingerprint === route?.mapFingerprint);
+            if (!route || !map) {
+              db.close();
+              reject(new Error("Не найдена исходная запись и общий OSM snapshot"));
+              return;
+            }
+            const legacy = { ...route, scenarioSnapshot: { ...map.scenarioSnapshot, ...(route.snapshotMeta ?? {}), mapMeta: route.mapMeta } };
+            delete legacy.snapshotMeta;
+            db.close();
+            resolve(legacy);
+          };
+          tx.onerror = () => reject(tx.error);
+        };
+      });
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.deleteDatabase("cdt-route-catalog");
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => {};
+      });
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.open("cdt-route-catalog", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("routes", { keyPath: "id" });
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const tx = db.transaction("routes", "readwrite");
+          tx.objectStore("routes").put(current);
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = () => reject(tx.error);
+        };
+      });
+      return true;
+    });
+    check("P20 подготовлена legacy IndexedDB v1 с полным OSM snapshot", migrationSeeded);
+    await page.reload();
+    await tab(page, "Каталог маршрутов");
+    const migrated = await until(async () => await page.getByTestId("route-card").count() === 1, 7000, 100);
+    const migrationStats = await page.evaluate(() => new Promise((resolve, reject) => {
+      const request = indexedDB.open("cdt-route-catalog", 2);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction(["routes", "maps"], "readonly");
+        const routesRequest = tx.objectStore("routes").getAll();
+        const mapsRequest = tx.objectStore("maps").getAll();
+        tx.oncomplete = () => {
+          resolve({
+            version: db.version,
+            routes: routesRequest.result.length,
+            maps: mapsRequest.result.length,
+            embeddedSnapshots: routesRequest.result.filter((route) => Boolean(route.scenarioSnapshot)).length,
+          });
+          db.close();
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+    }));
+    check("P21 миграция v1 → v2 сохраняет маршрут и выносит snapshot в общий store",
+      migrated && migrationStats.version === 2 && migrationStats.routes === 1 &&
+      migrationStats.maps === 1 && migrationStats.embeddedSnapshots === 0,
+      JSON.stringify(migrationStats));
+    check("P22 ошибок JavaScript в полном цикле каталога маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
   } catch (e) {
     check("P сценарий выполнен без исключений", false, String(e.message).slice(-460));
