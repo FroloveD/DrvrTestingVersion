@@ -1030,6 +1030,8 @@ try {
     await page.getByTestId("editor-boundary-route").count() === 1
       && await page.getByTestId("editor-boundary-hull").count() === 1
       && await page.getByTestId("editor-boundary-crop").count() === 1);
+  check("O1b3 редактор показывает автоматическое устранение конфликтов объектов с дорогами",
+    await page.getByTestId("editor-road-deconflict").count() === 1);
 
   // Рисуем собственную дорогу последовательными точками; Enter завершает построение.
   const roadCountBefore = await page.locator('[data-testid^="map-road-"]').count();
