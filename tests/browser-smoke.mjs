@@ -1471,6 +1471,11 @@ try {
     check("R1 редактор показывает панель проверки маршрута", await panel.isVisible());
     check("R2 диагностика содержит сводку маршрута", summary.trim().length > 0, summary);
     check("R3 панель диагностики не создаёт ошибок JavaScript", errors.length === 0, errors.slice(0, 3).join(" | "));
+    const autoFix = page.getByTestId("route-auto-fix");
+    check("R4 доступна команда автоматического исправления маршрута", await autoFix.isVisible());
+    await autoFix.click();
+    await page.waitForTimeout(100);
+    check("R5 команда автоисправления не создаёт ошибок JavaScript", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/v1-route-check.png` });
   } catch (e) {
     check("R сценарий выполнен без исключений", false, String(e.message).slice(-500));
