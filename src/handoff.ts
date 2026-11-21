@@ -125,7 +125,7 @@ L.push("| `src/render/cockpitDisplays.ts` | живые CanvasTexture прибо�
 L.push("| `src/input/keyBindings.ts`, `KeyBindingsEditor.tsx` | конфликтно-безопасное переназначение клавиш и сохранение раскладки |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 42 автотеста ядра (T01–T43) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 43 автотеста ядра (T01–T44; T35 зарезервирован) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |");
 L.push("| `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |");
