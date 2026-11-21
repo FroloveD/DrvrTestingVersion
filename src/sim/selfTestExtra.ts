@@ -36,6 +36,9 @@ import {
 import {
   appendRoadPoint,
   autoFixScenarioRoute,
+  applyConvexHullBoundary,
+  applyRouteCorridorBoundary,
+  cropScenarioToBoundary,
   mergeUserObjectsOntoOsmMap,
   applyPresetBoundaryShape,
   clearBoundaryPolygon,
@@ -1171,6 +1174,54 @@ export const extraCases: SelfTestCase[] = [
       assert(result.def.checkpoints[1].x <= 50 && result.def.checkpoints[1].x >= -50, "Контрольная точка должна вернуться внутрь границ");
       assert(Number.isFinite(result.def.start.x) && Number.isFinite(result.def.start.z) && result.def.start.x >= -50 && result.def.start.x <= 50 && result.def.start.z >= -50 && result.def.start.z <= 50, "Старт после автоисправления должен оставаться внутри границ карты");
       return "Исправлений: " + result.fixes.length + " · ID уникальны · КТ в границах · радиусы нормализованы";
+    },
+  },
+
+  {
+    id: "T41",
+    suite: "scenario",
+    name: "Границы карты: коридор маршрута, оболочка и обрезка данных",
+    fn: () => {
+      const base = defaultCustomScenario();
+      const road = createDefaultRoad("road-crop", 0, 0, 0);
+      const routed = {
+        ...base,
+        start: { x: 0, z: -10, h: 0 },
+        roads: [road],
+        useLotSurface: false,
+        bays: [],
+        obstacles: [],
+        signs: [],
+        signals: [],
+        crosswalks: [],
+        checkpoints: [{ id: "route-cp-1", x: 0, z: 10, radius: 5.5, instruction: "Доехать до КТ" }],
+      };
+      const corridor = applyRouteCorridorBoundary(routed, 14);
+      assert(corridor.ok && corridor.vertices >= 4, "Коридор должен построиться вдоль маршрута");
+      assert(isValidBoundaryPolygon(corridor.def.boundaryPolygon), "Коридор должен быть валидным полигоном");
+      const hull = applyConvexHullBoundary(routed, 10);
+      assert(hull.ok && hull.vertices >= 4, "Выпуклая оболочка должна учитывать дорожную сеть");
+
+      const cropInput = {
+        ...routed,
+        start: { x: 0, z: -5, h: 0 },
+        bounds: { minX: -10, maxX: 10, minZ: -10, maxZ: 10 },
+        boundaryPolygon: [
+          { x: -10, z: -10 }, { x: 10, z: -10 },
+          { x: 10, z: 10 }, { x: -10, z: 10 },
+        ],
+        roads: [{ ...road, points: [{ x: 0, z: -20 }, { x: 0, z: 20 }] }],
+        obstacles: [
+          { ...base.obstacles[0], id: "inside-object", cx: 0, cz: 0 },
+          { ...base.obstacles[0], id: "outside-object", cx: 30, cz: 30 },
+        ],
+        checkpoints: [{ id: "inside-cp", x: 0, z: 5, radius: 5.5, instruction: "Остаться внутри" }],
+      };
+      const cropped = cropScenarioToBoundary(cropInput);
+      assert(cropped.removedObjects === 1, "Объект за границей должен быть удалён, внутренний — сохранён");
+      assert(cropped.def.roads?.length === 1 && cropped.def.roads[0].points.every((p) => p.z >= -10 && p.z <= 10), "Дорога должна быть обрезана по полигону");
+      assert(cropped.keptCheckpoints === 1 && cropped.def.checkpoints[0].id === "inside-cp", "Контрольная точка внутри границы должна сохраниться");
+      return `Коридор: ${corridor.vertices} вершин · оболочка: ${hull.vertices} · удалён объект: ${cropped.removedObjects}`;
     },
   },
 
