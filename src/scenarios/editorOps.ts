@@ -1,9 +1,9 @@
 /**
  * @module scenarios/editorOps
  * @layer pure-core
- * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут и Undo/Redo.
+ * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут, автоисправление маршрута и Undo/Redo.
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
- * @tests T29, T39, T39
+ * @tests T29, T39
  */
 import { boundsToPolygon, boundingBoxOfPolygon, buildPresetBoundaryPolygon, clampPointToWorldBoundary, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
 import { buildRouteFromRoads, findRoadNetworkPath, nearestRoadPoint } from "../maps/route";
