@@ -30,8 +30,11 @@ import {
 import {
   appendRoadPoint,
   autoFixScenarioRoute,
+  applyConvexHullBoundary,
   applyPresetBoundaryShape,
+  applyRouteCorridorBoundary,
   clearBoundaryPolygon,
+  cropScenarioToBoundary,
   setCustomBoundaryPolygon,
   attachCheckpointToSign,
   createEditorHistory,
@@ -586,6 +589,30 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     commitChange(clearBoundaryPolygon(def), def); setSelection({ kind: "start" }); setDraftBoundary([]);
     setFitSignal((n) => n + 1); onNotify("Произвольный контур сброшен");
   };
+  const handleRouteBoundary = () => {
+    const result = applyRouteCorridorBoundary(def);
+    if (!result.ok) { onNotify("Не удалось построить коридор: добавьте маршрут или дорожную сеть."); return; }
+    commitChange(result.def, def);
+    setTool("boundary"); setSelection({ kind: "boundary_point", index: 0 }); setDraftBoundary([]);
+    setFitSignal((n) => n + 1);
+    onNotify(`Построен коридор маршрута: ${result.vertices} вершин.`);
+  };
+  const handleHullBoundary = () => {
+    const result = applyConvexHullBoundary(def);
+    if (!result.ok) { onNotify("Недостаточно объектов для построения оболочки карты."); return; }
+    commitChange(result.def, def);
+    setTool("boundary"); setSelection({ kind: "boundary_point", index: 0 }); setDraftBoundary([]);
+    setFitSignal((n) => n + 1);
+    onNotify(`Построена оболочка карты: ${result.vertices} вершин.`);
+  };
+  const handleCropBoundary = () => {
+    const result = cropScenarioToBoundary(def);
+    commitChange(result.def, def);
+    setSelection({ kind: "start" }); setDraftBoundary([]);
+    setFitSignal((n) => n + 1);
+    onNotify(`Обрезка по границе: дорог удалено ${result.removedRoads}, добавлено сегментов ${result.splitRoads}, объектов удалено ${result.removedObjects}, КТ сохранено ${result.keptCheckpoints}.`);
+  };
+
   const handleCancelBoundary = () => { setDraftBoundary([]); setTool("select"); };
 
   useEffect(() => {
@@ -2429,6 +2456,11 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               <div className="flex flex-wrap items-center justify-between gap-2"><span className="mono text-[10px] text-[#f5d78a]">ФОРМА ПЛОЩАДКИ / ГРАНИЦА МИРА</span><span className="mono text-[10px] text-[#9bafbc]">{def.boundaryPolygon ? `${def.boundaryPolygon.length} вершин · ${Math.round(polygonArea(def.boundaryPolygon))} м²` : "прямоугольные границы"}</span></div>
               <div className="flex flex-wrap gap-1">{BOUNDARY_SHAPE_PRESETS.map(p => <button key={p.id} type="button" className="btn btn-mini" title={p.hint} onClick={() => handlePresetBoundary(p.id)}>{p.label}</button>)}</div>
               <div className="flex flex-wrap items-center gap-2 text-xs"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={Boolean(def.perimeterCurb)} onChange={e => patchDef({ perimeterCurb: e.target.checked || undefined })} className="accent-[#f5b942]" />3D-бордюр по контуру</label><button type="button" className="btn btn-mini" onClick={() => { setTool("boundary"); setDraftBoundary([]); }}>Нарисовать контур</button>{def.boundaryPolygon && <button type="button" className="btn btn-mini text-[#ff9494]" onClick={handleResetBoundary}>Сбросить контур</button>}</div>
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" data-testid="editor-boundary-route" className="btn btn-mini" title="Построить границу-коридор вдоль активного маршрута" onClick={handleRouteBoundary}>Коридор маршрута</button>
+                <button type="button" data-testid="editor-boundary-hull" className="btn btn-mini" title="Построить выпуклую оболочку по дорогам и объектам карты" onClick={handleHullBoundary}>Оболочка карты</button>
+                <button type="button" data-testid="editor-boundary-crop" className="btn btn-mini text-[#ffb8a8]" title="Удалить дороги и объекты вне текущей границы; действие можно отменить через Ctrl+Z" onClick={handleCropBoundary}>Обрезать по границе</button>
+              </div>
               {tool === "boundary" && <div className="text-[10px] text-[#9bafbc]">Кликайте по карте, чтобы добавить вершины. Двойной клик или клик рядом с первой точкой замыкает контур. Enter — применить, Esc — отменить.</div>}
               {draftBoundary.length > 0 && <div className="flex items-center justify-between text-[11px]"><span>Черновик: {draftBoundary.length} точек</span><div className="flex gap-1"><button type="button" className="btn btn-mini" onClick={() => setDraftBoundary(v => v.slice(0,-1))}>Назад</button><button type="button" className="btn btn-mini" disabled={draftBoundary.length < 3} onClick={() => handleFinishBoundary(draftBoundary)}>Применить</button><button type="button" className="btn btn-mini" onClick={handleCancelBoundary}>Отмена</button></div></div>}
             </div>
