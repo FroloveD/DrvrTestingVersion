@@ -21,7 +21,7 @@ import { carGeometry } from "../sim/vehicle";
 import {
   buildRealisticTree,
   buildOsmTreeInstances,
-  buildRussianBuilding,
+  buildTexturedBuilding,
   createCityEnvironmentPack,
   makeCloudySkyTexture,
   type CityEnvironmentPack,
@@ -875,7 +875,14 @@ export class SceneController {
         const centerZ = (gz + 0.5) * 96;
         const mesh = new THREE.InstancedMesh(
           unitBox,
-          new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, vertexColors: true }),
+          [
+            cityEnv.facadeMat,
+            cityEnv.facadeMat,
+            cityEnv.roofMat,
+            cityEnv.roofMat,
+            cityEnv.facadeMat,
+            cityEnv.facadeMat,
+          ],
           bucket.length
         );
         mesh.position.set(centerX, 0, centerZ);
@@ -1074,7 +1081,7 @@ export class SceneController {
         }
         return;
       }
-      const bld = buildRussianBuilding(obs, cityEnv);
+      const bld = buildTexturedBuilding(obs, cityEnv);
       this.worldGroup.add(bld);
       this.buildingMeshes.push(bld);
       return;
