@@ -1026,6 +1026,10 @@ try {
   check("O1b сетка скрывается по «Выкл», шаг привязки меняется, визуальная сетка адаптивна",
     gridOff && step2 !== null && step05 !== null && snap2 === "2" && snap05 === "0.5" && lines2 > 0 && lines05 > 0,
     `off=${gridOff}, snap 2 м=${snap2}, visual=${step2}/${lines2}; snap 0,5 м=${snap05}, visual=${step05}/${lines05}`);
+  check("O1b2 редактор показывает построение коридора, оболочки и обрезку границы",
+    await page.getByTestId("editor-boundary-route").count() === 1
+      && await page.getByTestId("editor-boundary-hull").count() === 1
+      && await page.getByTestId("editor-boundary-crop").count() === 1);
 
   // Рисуем собственную дорогу последовательными точками; Enter завершает построение.
   const roadCountBefore = await page.locator('[data-testid^="map-road-"]').count();
