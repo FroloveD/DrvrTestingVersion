@@ -1,7 +1,7 @@
 /**
  * @module sim/selfTestExtra
  * @layer pure-core
- * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41).
+ * @role Расширенный набор автотестов ядра: USB-руль (T17), журнал и ДИ Уилсона (T19), реплей (T22, T24), выворот (T23), АКПП/аварийка (T25), Markdown (T26), OSM XML и редактор карт (T27–T29), каталог OSM-маршрутов и масштабируемый граф (T32–T33), автопарк Kia (T34), слияние пользовательских объектов с обновлённой OSM-картой (T40), построение коридора/оболочки и обрезка карты (T41), устранение конфликтов объектов с дорогами (T42).
  * @invariants #7 (чистое ядро без DOM и Three.js).
  */
 import { clampVolume, describeStation, formatTrackDuration, INTERNET_RADIO_STATIONS, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, TRACK_SAMPLE_RATE } from "../audio/radioCatalog";
@@ -39,6 +39,7 @@ import {
   applyConvexHullBoundary,
   applyRouteCorridorBoundary,
   cropScenarioToBoundary,
+  deconflictScenarioWithRoads,
   mergeUserObjectsOntoOsmMap,
   applyPresetBoundaryShape,
   clearBoundaryPolygon,
@@ -55,7 +56,7 @@ import {
   rotateSelected,
   undoEditorHistory,
 } from "../scenarios/editorOps";
-import { createDefaultRoad, createDefaultSign, OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
+import { createDefaultObstacle, createDefaultRoad, createDefaultSign, OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
 import { applyShifterTarget, checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
@@ -1258,6 +1259,56 @@ export const extraCases: SelfTestCase[] = [
       assert(Boolean(merged.def.signs?.some((s) => s.id === "sign-way-1")), "Импортированный OSM-знак должен остаться в новой карте");
       assert(merged.def.roads?.[0].id === "osm-road-1", "Новая дорожная сеть должна быть взята из обновлённой карты");
       return "Бокс: 1 · ручной знак: 1 · КТ: 1 · OSM-знак и новая дорога сохранены";
+    },
+  },
+,
+
+  {
+    id: "T42",
+    suite: "scenario",
+    name: "Устранение конфликтов объектов сценария с дорожной сетью",
+    fn: () => {
+      const base = defaultCustomScenario();
+      const mainRoad = {
+        ...createDefaultRoad("osm-main", 0, 0, 0),
+        points: [{ x: 0, z: -30 }, { x: 0, z: 30 }],
+        width: 8,
+      };
+      const secondRoad = {
+        ...createDefaultRoad("osm-secondary", 100, 0, 0),
+        points: [{ x: 100, z: -30 }, { x: 100, z: 30 }],
+        width: 8,
+      };
+      const tree = createDefaultObstacle("tree-on-road", "tree", 0, 0, 0);
+      const fence = {
+        ...createDefaultObstacle("fence-on-road", "fence", 0, 0, Math.PI / 2),
+        halfZ: 20,
+      };
+      const sign = createDefaultSign("manual-stop-on-road", "stop", 0, 0, 0);
+      const input = {
+        ...base,
+        roads: [mainRoad, secondRoad],
+        useLotSurface: true,
+        bays: [],
+        obstacles: [tree, fence],
+        signs: [sign],
+        checkpoints: [{ id: "route-cp", x: 0, z: -20, radius: 5.5, instruction: "Следовать по улице" }],
+      };
+
+      const result = deconflictScenarioWithRoads(input);
+      const fixedTree = result.def.obstacles.find((obstacle) => obstacle.id === "tree-on-road");
+      const fencePieces = result.def.obstacles.filter((obstacle) =>
+        obstacle.id === "fence-on-road" || obstacle.id.startsWith("fence-on-road-s")
+      );
+      const fixedSign = result.def.signs?.find((item) => item.id === "manual-stop-on-road");
+
+      assert(result.changedCount >= 3, "Должны быть учтены отключение площадки, перенос объектов и корректировка знака/ограждения");
+      assert(result.def.useLotSurface === false, "Подложка автодрома должна отключаться поверх реальной сети улиц");
+      assert(Boolean(fixedTree) && Math.hypot(fixedTree!.cx, fixedTree!.cz) > 1, "Дерево должно быть вынесено с проезжей части");
+      assert(fencePieces.length >= 2, "Ограждение должно быть разрезано на части с проездом по дорожной сети");
+      assert(Boolean(fixedSign) && Math.hypot(fixedSign!.x, fixedSign!.z) > 1, "Стойка знака должна быть вынесена на обочину");
+      assert(result.fixes.length > 0, "Операция должна вернуть отчёт о выполненных исправлениях");
+      return `Изменено: ${result.changedCount} · частей ограждения: ${fencePieces.length} · отчёт: ${result.fixes.length}`;
     },
   },
 
