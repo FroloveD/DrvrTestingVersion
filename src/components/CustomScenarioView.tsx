@@ -870,7 +870,6 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               return;
             }
             commitChange(result.def, def);
-            setShowRouteCheck(true);
             setFitSignal((n) => n + 1);
             onNotify("Исправлено (" + result.fixes.length + "): " + result.fixes[0]);
           }}
