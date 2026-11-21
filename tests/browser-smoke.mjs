@@ -871,9 +871,14 @@ try {
   await touch("touchStart", [finger1]);
   await touch("touchStart", [finger1, finger2]);
   await touch("touchMove", [finger1, moved2]);
+  const gasPressed = (await gas.getAttribute("aria-pressed")) === "true";
+  const brakePressed = (await brake.getAttribute("aria-pressed")) === "true";
+  const movedGripBox = await grip.boundingBox();
+  const movedGasBox = await gas.boundingBox();
+  const m1Details = { gasPressed, brakePressed, gripDeltaY: movedGripBox ? Math.round(movedGripBox.y - h.y) : null, gasDeltaY: movedGasBox ? Math.round(movedGasBox.y - g.y) : null };
   check("M1 второй палец переносит только тормоз, не включая его и не отпуская газ",
-    (await gas.getAttribute("aria-pressed")) === "true" && (await brake.getAttribute("aria-pressed")) === "false"
-      && Math.abs((await grip.boundingBox()).y - h.y) > 50 && Math.abs((await gas.boundingBox()).y - g.y) < 1);
+    gasPressed && !brakePressed && Math.abs((movedGripBox?.y ?? h.y) - h.y) > 50 && Math.abs((movedGasBox?.y ?? g.y) - g.y) < 1,
+    JSON.stringify(m1Details));
   // Здесь указан отпускаемый палец (id:2), а не остающийся на экране (id:1).
   await touch("touchEnd", [moved2]);
   check("M2 отпускание ручки второго пальца не сбрасывает газ",(await gas.getAttribute("aria-pressed")) === "true");
