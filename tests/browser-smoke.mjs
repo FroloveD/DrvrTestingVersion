@@ -1642,6 +1642,42 @@ try {
   }
 }
 
+// ───────── S. Независимые слои процедурного звука ─────────
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const { page, errors } = await open(ctx, httpUrl);
+  try {
+    await tab(page, "3D-Тренажёр");
+    await page.getByRole("button", { name: /Управление/ }).click();
+    const layers = ["engine", "horn", "indicator"];
+    const controls = layers.map((id) => page.getByTestId(`sound-layer-${id}`));
+    await controls[0].waitFor({ timeout: 5000 });
+    const initial = await Promise.all(controls.map((control) => control.isChecked()));
+    for (const control of controls) await control.uncheck();
+    const disabled = await Promise.all(controls.map((control) => control.isChecked()));
+    check("S1 отдельные слои ДВС, клаксона и реле отключаются независимо", initial.every(Boolean) && disabled.every((value) => !value),
+      JSON.stringify({ initial, disabled }));
+
+    await page.reload();
+    await tab(page, "3D-Тренажёр");
+    await page.getByRole("button", { name: /Управление/ }).click();
+    const restored = await Promise.all(layers.map((id) => page.getByTestId(`sound-layer-${id}`).isChecked()));
+    check("S2 настройки звуковых слоёв сохраняются после перезагрузки", restored.every((value) => !value),
+      JSON.stringify(restored));
+
+    for (const id of layers) await page.getByTestId(`sound-layer-${id}`).check();
+    const reenabled = await Promise.all(layers.map((id) => page.getByTestId(`sound-layer-${id}`).isChecked()));
+    check("S3 каждый звуковой слой можно включить повторно", reenabled.every(Boolean), JSON.stringify(reenabled));
+    check("S4 управление слоями звука не создаёт ошибок JavaScript", errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.screenshot({ path: `${shotDir}/sound-layer-controls.png` });
+  } catch (e) {
+    check("S сценарий слоёв звука выполнен без исключений", false, String(e.message).slice(-500));
+  } finally {
+    await ctx.close();
+  }
+}
+
+
 await browser.close();
 console.log(failed === 0 ? "SMOKE: все проверки пройдены" : `SMOKE: не пройдено ${failed}`);
 process.exit(failed === 0 ? 0 : 1);
