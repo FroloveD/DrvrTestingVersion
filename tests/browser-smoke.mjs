@@ -868,7 +868,10 @@ try {
   const touch = async (type, touchPoints) => {
     await cdp.send("Input.dispatchTouchEvent", { type, touchPoints }); await sleep(100);
   };
-  // Оба контакта стартуют в одном CDP-событии: Chromium получает согласованный список активных пальцев.
+  // Сначала активируем газ, затем добавляем второй контакт, сохраняя первый
+  // в списке активных точек. Это моделирует реальное последовательное касание
+  // и гарантирует отдельный pointerdown для ручки тормоза.
+  await touch("touchStart", [finger1]);
   await touch("touchStart", [finger1, finger2]);
   await touch("touchMove", [finger1, moved2]);
   const gasPressed = (await gas.getAttribute("aria-pressed")) === "true";
