@@ -1311,7 +1311,6 @@ export const extraCases: SelfTestCase[] = [
       return `Изменено: ${result.changedCount} · частей ограждения: ${fencePieces.length} · отчёт: ${result.fixes.length}`;
     },
   },
-,
 
   {
     id: "T43",
@@ -1326,11 +1325,12 @@ export const extraCases: SelfTestCase[] = [
       const untouched = createDefaultRoad("untouched-road", 40, 40, 0);
       const input = { ...base, roads: [road, untouched] };
       const reversed = reverseRoadDirection(input, road.id);
-      assert(reversed.roads[0].points[0].x === 15 && reversed.roads[0].points[0].z === 21,
+      const reversedRoads = reversed.roads ?? [];
+      assert(reversedRoads[0]?.points[0].x === 15 && reversedRoads[0]?.points[0].z === 21,
         "Первым узлом должен стать последний узел исходной дороги");
-      assert(reversed.roads[0].points[2].x === 2 && reversed.roads[0].points[2].z === 3,
+      assert(reversedRoads[0]?.points[2].x === 2 && reversedRoads[0]?.points[2].z === 3,
         "Последним узлом должен стать первый узел исходной дороги");
-      assert(reversed.roads[1] === untouched, "Остальные дороги не должны изменяться");
+      assert(reversedRoads[1] === untouched, "Остальные дороги не должны изменяться");
       assert(input.roads[0].points[0].x === 2, "Исходный сценарий должен оставаться неизменным");
       assert(reverseRoadDirection(input, "missing-road") === input,
         "Неизвестный ID не должен создавать ложные изменения");
