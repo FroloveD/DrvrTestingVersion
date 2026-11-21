@@ -157,7 +157,9 @@ export function FloatingPanel({
   }, [id, layout, minW, maxW, containerRef, clampPos, onChange]);
 
   const beginDrag = (kind: "move" | "resize") => (e: React.PointerEvent<HTMLElement>) => {
-    if (e.button !== 0 || dragRef.current) return;
+    // Touch pointers may report button=-1 when another contact is already active.
+    // Only mouse input needs the left-button filter; each touch keeps its own pointerId.
+    if ((e.pointerType === "mouse" && e.button !== 0) || dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
     onBringToFront?.(id);
