@@ -3,10 +3,11 @@
  * @layer pure-core
  * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут и Undo/Redo.
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
- * @tests T29
+ * @tests T29, T39
  */
-import { boundsToPolygon, boundingBoxOfPolygon, buildPresetBoundaryPolygon, clampPointToWorldBoundary, insertBoundaryVertex, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
-import { buildRouteFromRoads } from "../maps/route";
+import { boundsToPolygon, boundingBoxOfPolygon, buildPresetBoundaryPolygon, clampPointToWorldBoundary, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
+import { buildRouteFromRoads, findRoadNetworkPath, nearestRoadPoint } from "../maps/route";
+import { SpatialGrid } from "../sim/spatialGrid";
 import type {
   CalibrationConfig,
   ObstacleKind,
@@ -14,9 +15,11 @@ import type {
   ParkingBay,
   ParkingBayKind,
   RoadSignKind,
+  RouteCheckpoint,
   Vec2,
 } from "../sim/types";
 import {
+  buildCustomWorld,
   nextBayId,
   nextCheckpointId,
   nextCrosswalkId,
@@ -769,6 +772,243 @@ export function rebuildRouteFromEditorRoads(
 }
 
 /** Подгоняет границы `bounds` по всем объектам карты с отступом `pad` метров. */
+export function autoFixScenarioRoute(def: CustomScenarioDef): { def: CustomScenarioDef; fixes: string[] } {
+  const fixes: string[] = [];
+  let next: CustomScenarioDef = {
+    ...def,
+    start: { ...def.start },
+    bounds: { ...def.bounds },
+    checkpoints: def.checkpoints.map((c) => ({ ...c })),
+  };
+
+  // 1. Исправляем некорректный полигон границы, если он сломан
+  if (next.boundaryPolygon !== undefined && !isValidBoundaryPolygon(next.boundaryPolygon)) {
+    const cleaned = sanitizeBoundaryPolygon(next.boundaryPolygon);
+    if (cleaned && isSimplePolygon(cleaned)) {
+      next = { ...next, boundaryPolygon: cleaned, bounds: boundingBoxOfPolygon(cleaned, 0) };
+      fixes.push("Выровнен контур границы карты.");
+    } else {
+      next = clearBoundaryPolygon(next);
+      fixes.push("Сброшен самопересекающийся контур границы.");
+    }
+  }
+
+  const poly = isValidBoundaryPolygon(next.boundaryPolygon) ? next.boundaryPolygon : undefined;
+  const bounds = poly ? boundingBoxOfPolygon(poly, 0) : next.bounds;
+  next.bounds = bounds;
+  const inside = (x: number, z: number) => isInsideWorldBoundary(x, z, bounds, poly);
+  const roads = next.roads ?? [];
+  const freeBays = next.bays.filter((b) => !b.occupied);
+
+  // 2. Если КТ нет, но есть дороги — строим маршрут автоматически
+  if (next.checkpoints.length === 0 && roads.length > 0 && freeBays.length === 0) {
+    const rebuilt = rebuildRouteFromEditorRoads(next);
+    if (rebuilt.count > 0) {
+      next = rebuilt.def;
+      fixes.push(`Построен маршрут по «${rebuilt.roadName}» (${rebuilt.count} КТ).`);
+    }
+  }
+
+  // 3. Проверяем каждую КТ: уникальность ID, радиус, нахождение внутри границы и на дороге
+  const seenIds = new Set<string>();
+  const fixedCps: RouteCheckpoint[] = [];
+  for (let i = 0; i < next.checkpoints.length; i++) {
+    const cp = { ...next.checkpoints[i] };
+    if (!cp.id || seenIds.has(cp.id)) {
+      let idx = i + 1;
+      while (seenIds.has(`cp-fix-${idx}`)) idx += 1;
+      cp.id = `cp-fix-${idx}`;
+      fixes.push(`Переименована дублирующаяся КТ #${i + 1} → ${cp.id}.`);
+    }
+    seenIds.add(cp.id);
+
+    if (!(cp.radius >= 2.5 && cp.radius <= 20)) {
+      cp.radius = Math.max(3.5, Math.min(12, Number.isFinite(cp.radius) ? cp.radius : 5.5));
+      fixes.push(`Скорректирован радиус КТ #${i + 1} (${cp.radius} м).`);
+    }
+
+    if (!inside(cp.x, cp.z)) {
+      const clamped = clampPointToWorldBoundary(cp.x, cp.z, bounds, poly);
+      cp.x = round2(clamped.x);
+      cp.z = round2(clamped.z);
+      fixes.push(`КТ #${i + 1} возвращена внутрь границы карты.`);
+    }
+
+    if (roads.length > 0 && next.useLotSurface === false) {
+      const snap = nearestRoadPoint(cp.x, cp.z, roads);
+      if (snap && snap.dist > snap.road.width * 0.65 + cp.radius * 0.5) {
+        const laneOff = Math.min(2.6, Math.max(0.8, snap.road.width * 0.22));
+        const rx = round2(snap.x - Math.cos(snap.h) * laneOff);
+        const rz = round2(snap.z + Math.sin(snap.h) * laneOff);
+        if (inside(rx, rz)) {
+          cp.x = rx;
+          cp.z = rz;
+          cp.radius = Math.max(cp.radius, Number(Math.min(9.5, snap.road.width * 0.55 + 1.5).toFixed(1)));
+          fixes.push(`КТ #${i + 1} привязана к проезжей части «${snap.road.name || snap.road.id}».`);
+        }
+      }
+    }
+
+    if (cp.isFinalPark && freeBays.length === 0) {
+      cp.isFinalPark = false;
+      fixes.push(`Снят флаг «парковка на финише» у КТ #${i + 1} (на карте нет свободных боксов).`);
+    }
+
+    fixedCps.push(cp);
+  }
+  next = { ...next, checkpoints: fixedCps };
+
+  // 4. Если все КТ лежали на несвязанных с дорогой точках или маршрут разорван — проверяем старт
+  const world = buildCustomWorld(next);
+  const grid = new SpatialGrid(world.obstacles, 10);
+  const isPoseClear = (x: number, z: number, h: number) =>
+    inside(x, z) && grid.queryCarHit(x, z, h).hit === null;
+
+  let startChanged = false;
+  if (!inside(next.start.x, next.start.z)) {
+    const c = clampPointToWorldBoundary(next.start.x, next.start.z, bounds, poly);
+    next.start = { ...next.start, x: round2(c.x), z: round2(c.z) };
+    startChanged = true;
+    fixes.push("Старт автомобиля возвращён внутрь границы карты.");
+  }
+
+  // Привязка старта к дороге и проверка направления на односторонней улице OSM
+  if (roads.length > 0 && next.useLotSurface === false) {
+    const snap = nearestRoadPoint(next.start.x, next.start.z, roads);
+    if (snap && snap.dist > snap.road.width * 0.65 + 2.5) {
+      const laneOff = snap.road.lanes >= 2 && snap.road.width >= 5.5 ? snap.road.width * 0.23 : 0;
+      const sx = round2(snap.x - Math.cos(snap.h) * laneOff);
+      const sz = round2(snap.z + Math.sin(snap.h) * laneOff);
+      if (inside(sx, sz)) {
+        next.start = { x: sx, z: sz, h: round2(snap.h) };
+        startChanged = true;
+        fixes.push(`Старт перенесён на улицу «${snap.road.name || snap.road.id}».`);
+      }
+    } else if (snap && snap.road.oneway && snap.dist <= snap.road.width * 0.65 + 1) {
+      let owDiff = snap.h - next.start.h;
+      while (owDiff > Math.PI) owDiff -= Math.PI * 2;
+      while (owDiff <= -Math.PI) owDiff += Math.PI * 2;
+      if (Math.abs(owDiff) > (110 * Math.PI) / 180) {
+        next.start = { ...next.start, h: normalizeAngleRad(snap.h) };
+        startChanged = true;
+        fixes.push(`Курс старта развёрнут по одностороннему потоку «${snap.road.name || snap.road.id}».`);
+      }
+    }
+  }
+
+  // Если контрольные точки идут против односторонней улицы — разворачиваем их порядок по потоку
+  if (roads.length > 0 && next.checkpoints.length >= 2) {
+    let wrongWayLegs = 0;
+    for (let i = 0; i < next.checkpoints.length; i++) {
+      const from = i === 0 ? next.start : next.checkpoints[i - 1];
+      const net = findRoadNetworkPath(roads, from, next.checkpoints[i]);
+      if (net.wrongWay) wrongWayLegs += 1;
+    }
+    if (wrongWayLegs > 0) {
+      const revCps = [...next.checkpoints].reverse();
+      const firstSnap = nearestRoadPoint(revCps[0].x, revCps[0].z, roads);
+      if (firstSnap) {
+        const backM = revCps[0].radius + 7;
+        const candStart = {
+          x: round2(revCps[0].x - Math.sin(firstSnap.h) * backM),
+          z: round2(revCps[0].z - Math.cos(firstSnap.h) * backM),
+          h: normalizeAngleRad(firstSnap.h),
+        };
+        const checkFirst = findRoadNetworkPath(roads, revCps[0], revCps[1]);
+        if (checkFirst.connected) {
+          next = {
+            ...next,
+            checkpoints: revCps,
+            ...(inside(candStart.x, candStart.z) ? { start: candStart } : {}),
+          };
+          fixes.push("Порядок КТ развёрнут по разрешённому направлению односторонней улицы.");
+        }
+      }
+    }
+  }
+
+  // Если старт уже внутри радиуса КТ #1 — отодвигаем его назад по полосе
+  const cp0 = next.checkpoints[0];
+  if (cp0) {
+    const distToCp0 = Math.hypot(cp0.x - next.start.x, cp0.z - next.start.z);
+    if (distToCp0 < cp0.radius + 2.0) {
+      const snap = roads.length > 0 ? nearestRoadPoint(cp0.x, cp0.z, roads) : null;
+      const h = snap ? snap.h : next.start.h;
+      const backDist = cp0.radius + 6.5;
+      const candX = round2(cp0.x - Math.sin(h) * backDist);
+      const candZ = round2(cp0.z - Math.cos(h) * backDist);
+      if (isPoseClear(candX, candZ, h)) {
+        next.start = { x: candX, z: candZ, h: round2(h) };
+        fixes.push("Старт отодвинут перед КТ #1, чтобы точка не засчитывалась мгновенно.");
+      }
+    } else {
+      // Выравниваем курс старта в сторону КТ #1, если автомобиль развёрнут задом к маршруту
+      const net = roads.length > 0 ? findRoadNetworkPath(roads, next.start, cp0) : null;
+      const aim =
+        net && net.connected && net.path.length >= 2
+          ? net.path[Math.min(1, net.path.length - 1)]
+          : cp0;
+      const desiredH = Math.atan2(aim.x - next.start.x, aim.z - next.start.z);
+      let dh = desiredH - next.start.h;
+      while (dh > Math.PI) dh -= Math.PI * 2;
+      while (dh <= -Math.PI) dh += Math.PI * 2;
+      if (Math.abs(dh) > (115 * Math.PI) / 180 && isPoseClear(next.start.x, next.start.z, desiredH)) {
+        next.start = { ...next.start, h: normalizeAngleRad(desiredH) };
+        fixes.push("Курс старта развёрнут по направлению к КТ #1.");
+      }
+    }
+  }
+
+  // Если на старте всё ещё коллизия с препятствием — ищем ближайшую свободную точку на дороге/по спирали
+  if (grid.queryCarHit(next.start.x, next.start.z, next.start.h).hit !== null) {
+    let freed = false;
+    const snap = roads.length > 0 ? nearestRoadPoint(next.start.x, next.start.z, roads) : null;
+    if (snap) {
+      const h = snap.h;
+      for (const along of [0, 5, -5, 10, -10, 16, -16]) {
+        for (const lat of [-snap.road.width * 0.22, 0, snap.road.width * 0.22]) {
+          const cx = round2(snap.x + Math.sin(h) * along + Math.cos(h) * lat);
+          const cz = round2(snap.z + Math.cos(h) * along - Math.sin(h) * lat);
+          if (isPoseClear(cx, cz, h)) {
+            next.start = { x: cx, z: cz, h: normalizeAngleRad(h) };
+            freed = true;
+            break;
+          }
+        }
+        if (freed) break;
+      }
+    }
+    if (!freed) {
+      for (const r of [3, 6, 10, 15]) {
+        for (let k = 0; k < 12; k++) {
+          const ang = (k * Math.PI) / 6;
+          const cx = round2(next.start.x + Math.cos(ang) * r);
+          const cz = round2(next.start.z + Math.sin(ang) * r);
+          if (isPoseClear(cx, cz, next.start.h)) {
+            next.start = { ...next.start, x: cx, z: cz };
+            freed = true;
+            break;
+          }
+        }
+        if (freed) break;
+      }
+    }
+    if (freed) {
+      fixes.push("Старт выведен из зоны контакта с препятствием.");
+    } else if (startChanged) {
+      // оставляем перенесённый старт
+    }
+  }
+
+  return { def: next, fixes };
+}
+
+/**
+ * Устраняет конфликты объектов сценария с реальной дорожной сетью карты:
+ * снимает наложение площадки автодрома на улицы OSM, ужимает здания от проезжей части,
+ * прорезает проезды в заборах/бордюрах, выносит деревья/столбы/стойки знаков на обочину и чинит маршрут.
+ */
+
 export function fitBoundsToContent(def: CustomScenarioDef, pad = 12): CustomScenarioDef {
   let minX = def.start.x;
   let maxX = def.start.x;
