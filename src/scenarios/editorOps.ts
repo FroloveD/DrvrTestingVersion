@@ -3,10 +3,11 @@
  * @layer pure-core
  * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут, автоисправление маршрута и Undo/Redo.
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
- * @tests T29, T39
+ * @tests T29, T39, T40
  */
 import { boundsToPolygon, boundingBoxOfPolygon, buildPresetBoundaryPolygon, clampPointToWorldBoundary, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
 import { buildRouteFromRoads, findRoadNetworkPath, nearestRoadPoint } from "../maps/route";
+import { placeSignPostClearOfRoads, reprojectBetweenOrigins, RoadCorridorIndex } from "../maps/osmDeconflict";
 import { SpatialGrid } from "../sim/spatialGrid";
 import type {
   CalibrationConfig,
@@ -768,6 +769,116 @@ export function rebuildRouteFromEditorRoads(
     },
     count: route.checkpoints.length,
     roadName: route.roadName,
+  };
+}
+
+/**
+ * Обновляет OSM-карту, сохраняя пользовательские боксы, ручные знаки и контрольные точки.
+ * Если обе карты имеют WGS84 origin, объекты перепроецируются в систему координат новой выгрузки.
+ */
+export function mergeUserObjectsOntoOsmMap(
+  prevDef: CustomScenarioDef,
+  importedDef: CustomScenarioDef
+): { def: CustomScenarioDef; keptBays: number; keptSigns: number; keptCheckpoints: number; reprojected: boolean } {
+  const fromOrigin = prevDef.mapMeta?.origin;
+  const toOrigin = importedDef.mapMeta?.origin;
+  const canReproject = Boolean(fromOrigin && toOrigin);
+  let reprojected = false;
+
+  const mapPt = (pt: Vec2): Vec2 | null => {
+    if (fromOrigin && toOrigin) {
+      const rp = reprojectBetweenOrigins(pt, fromOrigin, toOrigin);
+      if (!rp) return null;
+      if (Math.hypot(rp.x - pt.x, rp.z - pt.z) > 0.05) reprojected = true;
+      return rp;
+    }
+    return pt;
+  };
+
+  const poly = isValidBoundaryPolygon(importedDef.boundaryPolygon) ? importedDef.boundaryPolygon : undefined;
+  const inside = (p: Vec2) => isInsideWorldBoundary(p.x, p.z, importedDef.bounds, poly);
+  const roads = importedDef.roads ?? [];
+  const roadIndex = new RoadCorridorIndex(roads, true);
+  const buildingGrid = new SpatialGrid(importedDef.obstacles, 10);
+
+  const keptBays: ParkingBay[] = [];
+  for (const bay of prevDef.bays) {
+    const p = mapPt({ x: bay.cx, z: bay.cz });
+    if (!p || !inside(p) || buildingGrid.queryCarHit(p.x, p.z, bay.h).hit) continue;
+    keptBays.push({ ...bay, cx: round2(p.x), cz: round2(p.z) });
+  }
+
+  const mergedSigns = [...(importedDef.signs ?? [])];
+  let keptSigns = 0;
+  for (const sign of prevDef.signs ?? []) {
+    const importedSign =
+      sign.id.startsWith("sign-way-") ||
+      sign.id.startsWith("gj-sign-") ||
+      /^sign-\\d+$/.test(sign.id) ||
+      sign.id.startsWith("sign-gj-");
+    if (importedSign) continue;
+
+    const p = mapPt({ x: sign.x, z: sign.z });
+    if (!p || !inside(p)) continue;
+    const zone = sign.zoneX !== undefined && sign.zoneZ !== undefined
+      ? mapPt({ x: sign.zoneX, z: sign.zoneZ })
+      : undefined;
+    const relocated = {
+      ...sign,
+      x: round2(p.x),
+      z: round2(p.z),
+      ...(zone ? { zoneX: round2(zone.x), zoneZ: round2(zone.z) } : {}),
+    };
+    const clean = placeSignPostClearOfRoads(relocated, roadIndex).sign;
+    const duplicate = mergedSigns.some(
+      (other) => other.kind === clean.kind && Math.hypot(other.x - clean.x, other.z - clean.z) < 5
+    );
+    if (!duplicate) {
+      mergedSigns.push(clean);
+      keptSigns += 1;
+    }
+  }
+
+  const candidateCheckpoints: RouteCheckpoint[] = [];
+  for (const checkpoint of prevDef.checkpoints) {
+    if (checkpoint.id.startsWith("route-") && !canReproject) continue;
+    const p = mapPt({ x: checkpoint.x, z: checkpoint.z });
+    if (!p || !inside(p)) continue;
+    const snap = roads.length > 0 ? nearestRoadPoint(p.x, p.z, roads) : null;
+    if (snap && snap.dist <= snap.road.width * 0.65 + checkpoint.radius + 4) {
+      const onRoad = snap.dist > snap.road.width * 0.55;
+      candidateCheckpoints.push({
+        ...checkpoint,
+        x: round2(onRoad ? snap.x : p.x),
+        z: round2(onRoad ? snap.z : p.z),
+      });
+    }
+  }
+
+  const useKeptRoute = candidateCheckpoints.length > 0;
+  let start = importedDef.start;
+  if (useKeptRoute) {
+    const p = mapPt({ x: prevDef.start.x, z: prevDef.start.z });
+    if (p && inside(p) && !buildingGrid.queryCarHit(p.x, p.z, prevDef.start.h).hit) {
+      start = { x: round2(p.x), z: round2(p.z), h: prevDef.start.h };
+    }
+  }
+
+  const merged: CustomScenarioDef = {
+    ...importedDef,
+    title: prevDef.mapMeta ? prevDef.title : importedDef.title,
+    start,
+    bays: keptBays,
+    signs: mergedSigns,
+    checkpoints: useKeptRoute ? candidateCheckpoints : importedDef.checkpoints,
+  };
+  const fixed = useKeptRoute ? autoFixScenarioRoute(merged).def : merged;
+  return {
+    def: fixed,
+    keptBays: keptBays.length,
+    keptSigns,
+    keptCheckpoints: useKeptRoute ? fixed.checkpoints.length : 0,
+    reprojected,
   };
 }
 
