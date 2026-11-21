@@ -36,6 +36,7 @@ import {
 import {
   appendRoadPoint,
   autoFixScenarioRoute,
+  mergeUserObjectsOntoOsmMap,
   applyPresetBoundaryShape,
   clearBoundaryPolygon,
   setCustomBoundaryPolygon,
@@ -51,7 +52,7 @@ import {
   rotateSelected,
   undoEditorHistory,
 } from "../scenarios/editorOps";
-import { OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
+import { createDefaultRoad, createDefaultSign, OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
 import { applyShifterTarget, checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
@@ -1170,6 +1171,42 @@ export const extraCases: SelfTestCase[] = [
       assert(result.def.checkpoints[1].x <= 50 && result.def.checkpoints[1].x >= -50, "Контрольная точка должна вернуться внутрь границ");
       assert(Number.isFinite(result.def.start.x) && Number.isFinite(result.def.start.z) && result.def.start.x >= -50 && result.def.start.x <= 50 && result.def.start.z >= -50 && result.def.start.z <= 50, "Старт после автоисправления должен оставаться внутри границ карты");
       return "Исправлений: " + result.fixes.length + " · ID уникальны · КТ в границах · радиусы нормализованы";
+    },
+  },
+
+  {
+    id: "T40",
+    suite: "scenario",
+    name: "Обновление OSM сохраняет пользовательские боксы, знаки и маршрут",
+    fn: () => {
+      const base = defaultCustomScenario();
+      const previous = {
+        ...base,
+        start: { x: 0, z: -10, h: 0 },
+        bays: [{ ...base.bays[0], id: 901, cx: 20, cz: 20, occupied: false }],
+        obstacles: [],
+        signs: [createDefaultSign("manual-stop", "stop", 0, 10, 0)],
+        checkpoints: [{ id: "manual-cp", x: 0, z: 0, radius: 5.5, instruction: "Остановитесь у контрольной точки" }],
+      };
+      const imported = {
+        ...base,
+        title: "Обновлённая OSM-карта",
+        start: { x: 0, z: -12, h: 0 },
+        bounds: { minX: -50, maxX: 50, minZ: -50, maxZ: 50 },
+        roads: [createDefaultRoad("osm-road-1", 0, 0, 0)],
+        useLotSurface: false,
+        bays: [],
+        obstacles: [],
+        signs: [createDefaultSign("sign-way-1", "stop", 0, 0, 0)],
+        checkpoints: [],
+      };
+      const merged = mergeUserObjectsOntoOsmMap(previous, imported);
+      assert(merged.keptBays === 1 && merged.def.bays[0].id === 901, "Пользовательский бокс внутри новой карты должен сохраниться");
+      assert(merged.keptSigns === 1 && merged.def.signs?.some((s) => s.id === "manual-stop"), "Ручной знак должен сохраниться рядом с импортированными знаками");
+      assert(merged.keptCheckpoints === 1 && merged.def.checkpoints[0].id === "manual-cp", "Ручная КТ на дорожной сети должна сохраниться");
+      assert(merged.def.signs?.some((s) => s.id === "sign-way-1"), "Импортированный OSM-знак должен остаться в новой карте");
+      assert(merged.def.roads?.[0].id === "osm-road-1", "Новая дорожная сеть должна быть взята из обновлённой карты");
+      return "Бокс: 1 · ручной знак: 1 · КТ: 1 · OSM-знак и новая дорога сохранены";
     },
   },
 
