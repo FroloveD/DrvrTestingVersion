@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
-import { EngineSound } from "../audio/engineSound";
+import { EngineSound, type SoundLayers } from "../audio/engineSound";
 import { clampVolume, formatTrackDuration, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, type RadioStation } from "../audio/radioCatalog";
 import * as trackStore from "../audio/trackStore";
 import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_CLIPS, HEAD_UNIT_MODES, setActiveRadioStations, type HeadUnitState } from "../render/cockpitDisplays";
@@ -252,6 +252,14 @@ export function SimulatorView({
   const bindingsRef = useRef(bindings);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => { try { return localStorage.getItem("cdt.sound.v1") !== "0"; } catch { return true; } });
   const [soundVolume, setSoundVolume] = useState(0.5);
+  const [soundLayers, setSoundLayers] = useState<SoundLayers>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("cdt.soundLayers.v1") || "null") as Partial<SoundLayers> | null;
+      return { engine: saved?.engine !== false, horn: saved?.horn !== false, indicator: saved?.indicator !== false };
+    } catch {
+      return { engine: true, horn: true, indicator: true };
+    }
+  });
   const [radioStations, setRadioStations] = useState<RadioStation[]>(() => radioStationsFor(scenarioId === "custom" ? customDef.radioStationIds : undefined));
   const radioStationsRef = useRef(radioStations);
   const [headUnit, setHeadUnit] = useState<HeadUnitState>(() => {
@@ -427,6 +435,10 @@ export function SimulatorView({
     engineSoundRef.current?.setVolume(soundVolume);
     try { localStorage.setItem("cdt.sound.v1", soundEnabled ? "1" : "0"); } catch { /* storage blocked */ }
   }, [soundEnabled, soundVolume]);
+  useEffect(() => {
+    engineSoundRef.current?.setLayers(soundLayers);
+    try { localStorage.setItem("cdt.soundLayers.v1", JSON.stringify(soundLayers)); } catch { /* storage blocked */ }
+  }, [soundLayers]);
   useEffect(() => {
     bindingsRef.current = bindings;
     keysRef.current = {};
@@ -1939,6 +1951,14 @@ export function SimulatorView({
                 <span className="flex justify-between mb-1"><span>Громкость</span><b className="mono text-[#f5b942]">{Math.round(soundVolume * 100)}%</b></span>
                 <input type="range" min={0} max={1} step={0.05} value={soundVolume} onChange={(e) => setSoundVolume(Number(e.target.value))} className="w-full" />
               </label>
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                {([["engine", "ДВС / шины"], ["horn", "Клаксон"], ["indicator", "Реле"]] as const).map(([layer, label]) => (
+                  <label key={layer} className="flex items-center gap-1 text-[10px] text-[#9bafbc]">
+                    <input type="checkbox" data-testid={`sound-layer-${layer}`} checked={soundLayers[layer]} disabled={!soundEnabled} onChange={() => setSoundLayers((prev) => ({ ...prev, [layer]: !prev[layer] }))} className="accent-[#52d6bd]" />
+                    {label}
+                  </label>
+                ))}
+              </div>
               <p className="text-[10px] text-[#7c909d] mt-1">Звук запускается после первого нажатия клавиши. J — сигнал, H — показать/скрыть интерфейс.</p>
             </div>
             <div className="mb-4 rounded-xl border hairline bg-[#101b25] p-3">
