@@ -814,7 +814,7 @@ export function mergeUserObjectsOntoOsmMap(
     const importedSign =
       sign.id.startsWith("sign-way-") ||
       sign.id.startsWith("gj-sign-") ||
-      /^sign-\\d+$/.test(sign.id) ||
+      /^sign-[0-9]+$/.test(sign.id) ||
       sign.id.startsWith("sign-gj-");
     if (importedSign) continue;
 
