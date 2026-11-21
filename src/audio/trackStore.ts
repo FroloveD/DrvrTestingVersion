@@ -3,7 +3,7 @@ import type { OfflineTrackMetadata } from "./radioCatalog";
 /**
  * @module audio/trackStore
  * @layer three-render
- * @role Офлайн-кэш сохранённых радиотреков в IndexedDB (`cdt-audio`: `tracks` с WAV-блобами) и безопасная деградация в память.
+ * @role Офлайн-кэш сохранённых радиотреков в IndexedDB (`cdt-audio`: `tracks` с WAV-блобами) с проверкой квоты и ограниченным fallback в память для небольших файлов.
  * @invariants #8 (локальное хранение без сервера), #13 (0 сетевых запросов для уже сохранённых треков).
  * @tests Смоук K7e (`tests/browser-smoke.mjs`); чистая логика каталога — T36
  */
@@ -97,8 +97,8 @@ export function trackBackend(): TrackBackend {
 }
 
 /**
- * Сохраняет радиотрек в кэш (IndexedDB, при недоступности — в память вкладки).
- * @returns `true`, если трек записан в постоянное хранилище IndexedDB.
+ * Сохраняет аудиофайл с метаданными в IndexedDB; в память вкладки переносит только небольшие файлы (до 8 МиБ).
+ * @returns backend сохранения; крупные файлы не копируются в RAM при отказе IndexedDB.
  */
 export async function saveTrack(
   track: Omit<SavedTrack, "savedAt" | "size">
