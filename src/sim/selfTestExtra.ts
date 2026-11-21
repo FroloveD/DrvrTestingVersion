@@ -1238,7 +1238,8 @@ export const extraCases: SelfTestCase[] = [
         start: { x: 0, z: -10, h: 0 },
         bays: [{ ...base.bays[0], id: 901, cx: 20, cz: 20, occupied: false }],
         obstacles: [],
-        signs: [createDefaultSign("manual-stop", "stop", 0, 10, 0)],
+        // Совпадает по координатам с импортированным знаком: ручной объект всё равно сохраняется.
+        signs: [createDefaultSign("manual-stop", "stop", 0, 0, 0)],
         checkpoints: [{ id: "manual-cp", x: 0, z: 0, radius: 5.5, instruction: "Остановитесь у контрольной точки" }],
       };
       const imported = {
