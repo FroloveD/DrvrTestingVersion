@@ -1062,7 +1062,11 @@ try {
   check("O1c дорога строится по последовательным точкам, Enter завершает, ширина и скругление применяются",
     draftShown && roadCountAfter === roadCountBefore + 1 && newRoadWidth === "7.5" && newRoadRadius === "8",
     `draft=${draftShown}, roads=${roadCountBefore}->${roadCountAfter}, width=${newRoadWidth}, radius=${newRoadRadius}`);
-  await newRoad.click();
+  // У L-образной дороги геометрический центр bbox не лежит на линии: кликаем по первому сегменту.
+  const newRoadLine = newRoad.locator("polyline").first();
+  const newRoadLineBox = await newRoadLine.boundingBox();
+  await page.mouse.click(newRoadLineBox.x + newRoadLineBox.width * 0.5, newRoadLineBox.y + 1);
+  await page.getByTestId("editor-road-reverse").waitFor({ state: "visible", timeout: 3000 });
   check("O1c2 инспектор выбранной дороги предлагает развернуть направление",
     await page.getByTestId("editor-road-reverse").count() === 1);
   await roadRoundToggle.uncheck();
