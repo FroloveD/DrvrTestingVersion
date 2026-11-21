@@ -119,6 +119,28 @@ export const INTERNET_RADIO_STATIONS: readonly RadioStation[] = [
 
 /** Частота дискретизации офлайн-синтеза треков (моно PCM 16 бит, WAV). */
 export const TRACK_SAMPLE_RATE = 22050;
+/** Минимальная целевая длительность сохранённой офлайн-сессии радио — 10 минут. */
+export const OFFLINE_TRACK_SECONDS = 600;
+
+export type OfflineTrackMetadata = {
+  title: string;
+  artist: string;
+  album: string;
+  genre: string;
+  tags: string[];
+  source: "synthetic";
+};
+
+export function stationTrackMetadata(station: RadioStation): OfflineTrackMetadata {
+  return {
+    title: `${station.name} · офлайн-сессия`,
+    artist: "DrivingSim Radio Generator",
+    album: "DrivingSim Offline Radio",
+    genre: station.genre,
+    tags: ["offline", "synthesized", "radio", station.id],
+    source: "synthetic",
+  };
+}
 
 /** Значение громкости по умолчанию (0..1) и шаг изменения шайбой VOL. */
 export const DEFAULT_VOLUME = 0.7;
@@ -152,74 +174,93 @@ function writeAscii(view: DataView, offset: number, text: string): void {
   for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
 }
 
+/** WAV LIST/INFO: стандартные поля названия, исполнителя, альбома, жанра и комментария. */
+function wavInfoChunk(metadata: OfflineTrackMetadata): Uint8Array<ArrayBuffer> {
+  const encoder = new TextEncoder();
+  const entries: Array<[string, string]> = [
+    ["INAM", metadata.title],
+    ["IART", metadata.artist],
+    ["IPRD", metadata.album],
+    ["IGNR", metadata.genre],
+    ["ICMT", `Источник: ${metadata.source}; теги: ${metadata.tags.join(", ")}; синтезированный звук, не запись интернет-эфира.`],
+  ];
+  const chunks = entries.map(([id, value]) => {
+    const text = encoder.encode(value + "\0");
+    const paddedLength = text.length + (text.length % 2);
+    const chunk = new Uint8Array(new ArrayBuffer(8 + paddedLength));
+    const view = new DataView(chunk.buffer);
+    writeAscii(view, 0, id);
+    view.setUint32(4, text.length, true);
+    chunk.set(text, 8);
+    return chunk;
+  });
+  const bodyLength = 4 + chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(new ArrayBuffer(8 + bodyLength));
+  const view = new DataView(out.buffer);
+  writeAscii(view, 0, "LIST");
+  view.setUint32(4, bodyLength, true);
+  writeAscii(view, 8, "INFO");
+  let offset = 12;
+  for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length; }
+  return out;
+}
+
 /**
- * Синтезирует офлайн-версию эфира станции в WAV (моно, PCM 16 бит, 22 050 Гц).
- *
- * Трек строится детерминированно (без случайности и без DOM): арпеджио по аккордовой сетке
- * `station.notes`, басовая линия `station.bass` и мягкая перкуссия по `station.bpm`.
- * Такой WAV кэшируется в IndexedDB и играет офлайн — в том числе сохранённый «во время поездки».
- *
- * @param station Станция каталога.
- * @param seconds Длительность трека в секундах (`1..120`).
- * @returns Готовый WAV-файл (`Uint8Array` с заголовком RIFF/WAVE).
+ * Синтезирует автономную офлайн-сессию станции в WAV (моно, PCM 16 бит, 22 050 Гц).
+ * Это процедурная музыка по параметрам станции, а не запись или копия её живого эфира.
+ * WAV содержит LIST/INFO-метаданные: название, исполнитель, альбом, жанр и комментарии с тегами.
  */
-export function renderTrackWav(station: RadioStation, seconds = 24): Uint8Array<ArrayBuffer> {
-  const dur = Math.min(120, Math.max(1, Math.round(seconds)));
+export function renderTrackWav(
+  station: RadioStation,
+  seconds = OFFLINE_TRACK_SECONDS,
+  metadata: OfflineTrackMetadata = stationTrackMetadata(station)
+): Uint8Array<ArrayBuffer> {
+  const dur = Math.min(OFFLINE_TRACK_SECONDS, Math.max(1, Math.round(seconds)));
   const sr = TRACK_SAMPLE_RATE;
   const frames = sr * dur;
-  const out = new Uint8Array(new ArrayBuffer(44 + frames * 2));
+  const pcmBytes = frames * 2;
+  const info = wavInfoChunk(metadata);
+  const out = new Uint8Array(new ArrayBuffer(44 + pcmBytes + info.length));
   const view = new DataView(out.buffer);
-
   writeAscii(view, 0, "RIFF");
-  view.setUint32(4, 36 + frames * 2, true);
+  view.setUint32(4, out.length - 8, true);
   writeAscii(view, 8, "WAVE");
   writeAscii(view, 12, "fmt ");
-  view.setUint32(16, 16, true); // размер fmt-блока
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // моно
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
   view.setUint32(24, sr, true);
-  view.setUint32(28, sr * 2, true); // байт/с
-  view.setUint16(32, 2, true); // выравнивание блока
-  view.setUint16(34, 16, true); // бит на сэмпл
+  view.setUint32(28, sr * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   writeAscii(view, 36, "data");
-  view.setUint32(40, frames * 2, true);
-
-  const stepSec = 60 / Math.max(40, station.bpm) / 2; // шаг арпеджио (восьмые)
+  view.setUint32(40, pcmBytes, true);
+  const stepSec = 60 / Math.max(40, station.bpm) / 2;
   const stepLen = Math.max(1, Math.round(stepSec * sr));
   const bassLen = Math.max(1, Math.round(stepSec * 2 * sr));
-
   for (let i = 0; i < frames; i++) {
     const t = i / sr;
     const step = Math.floor(i / stepLen) % station.notes.length;
     const tInStep = (i % stepLen) / sr;
     const tInBass = (i % bassLen) / sr;
-
-    // Арпеджио: затухающий треугольник с мягкой атакой
     const noteFreq = station.notes[step];
     const env = Math.exp(-tInStep * 6.5);
     const lead = Math.sin(2 * Math.PI * noteFreq * t) * 0.32 * env;
     const harm = Math.sin(2 * Math.PI * noteFreq * 2 * t) * 0.08 * env;
-
-    // Бас: синус с октавным удвоением, сглаженная огибающая
     const bassEnv = Math.exp(-tInBass * 1.6);
     const bass = Math.sin(2 * Math.PI * station.bass * t) * 0.26 * bassEnv;
-
-    // Перкуссия: короткий «кик» на каждой четверти и «хай-хэт» на восьмых
     const beatSec = 60 / Math.max(40, station.bpm);
     const inBeat = (t % beatSec) / beatSec;
     const kick = inBeat < 0.16 ? Math.sin(2 * Math.PI * 62 * t) * Math.exp(-inBeat * 30) * 0.32 : 0;
-    // «Хай-хэт» — короткий детерминированный всплеск шума-подобной суммы нечётных гармоник
     const hatEnv = inBeat > 0.5 && inBeat < 0.585 ? Math.exp(-(inBeat - 0.5) * 42) * 0.05 : 0;
     const hat = hatEnv * (Math.sin(2 * Math.PI * 4100 * t) + Math.sin(2 * Math.PI * 6700 * t)) * 0.5;
-
-    // Плавный фейд по краям, чтобы кэш-трек звучал законченно
     const fade = Math.min(1, t / 0.4, (dur - t) / 0.6);
     const sample = Math.max(-1, Math.min(1, (lead + harm + bass + kick + hat) * Math.max(0, fade)));
     view.setInt16(44 + i * 2, Math.round(sample * 32767), true);
   }
+  out.set(info, 44 + pcmBytes);
   return out;
 }
-
 /** Короткое описание трека для списка кэша и подсказок ШГУ. */
 export function describeStation(station: RadioStation): string {
   return `${station.freq} · ${station.name} · ${station.genre}`;
