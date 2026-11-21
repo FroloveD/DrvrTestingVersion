@@ -1125,7 +1125,7 @@ try {
   await sleep(1200);
   const simLow = await low(page);
   check("O5 отредактированная OSM-карта со знаками, объектами, текстурированным зданием и ODbL открывается в 3D",
-    simLow.includes("импорт osm: дорог 1") && simLow.includes("знаков")
+    simLow.includes("импорт osm: дорог 1") && simLow.includes("зданий 1") && simLow.includes("знаков")
       && simLow.includes("openstreetmap") && simLow.includes("odbl"),
     simLow.slice(0, 140));
   await page.screenshot({ path: `${shotDir}/editor-osm-3d.png` });
