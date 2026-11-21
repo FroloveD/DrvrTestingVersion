@@ -208,7 +208,7 @@ requestAnimationFrame(now)
 
 ## 7. Каталог автоматических проверок
 
-### 7.1. Автотесты чистого ядра (`31` кейс, `src/sim/selfTest.ts` + `src/sim/selfTestExtra.ts`)
+### 7.1. Автотесты чистого ядра (`42` кейса, `src/sim/selfTest.ts` + `src/sim/selfTestExtra.ts`)
 
 | ID | Группа | Что гарантирует |
 |---|---|---|
