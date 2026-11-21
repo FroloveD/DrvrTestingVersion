@@ -1,7 +1,7 @@
 /**
  * @module components/CustomScenarioView
  * @layer ui
- * @role Редактор карт и сценариев: офлайн-импорт OSM (.osm XML / Overpass JSON / GeoJSON), обновление OSM с сохранением ручных объектов, палитра знаков и объектов, 2D drag-and-drop, инспектор и Undo/Redo.
+ * @role Редактор карт и сценариев: офлайн-импорт OSM (.osm XML / Overpass JSON / GeoJSON), обновление OSM с сохранением ручных объектов, генерация коридора/оболочки и обрезка границы, палитра знаков и объектов, 2D drag-and-drop, инспектор и Undo/Redo.
  * @invariants #1 (координаты и курс h), #8–#9 (офлайн-импорт + атрибуция ODbL 1.0), #15 (снимок мира в попытке), #16 (без неподписанных штрафов).
  * @tests T16, T27, T28, T29; смоук A, G, O (`tests/browser-smoke.mjs`)
  *
