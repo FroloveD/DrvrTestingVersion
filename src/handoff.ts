@@ -125,7 +125,7 @@ L.push("| `src/render/cockpitDisplays.ts` | живые CanvasTexture прибо�
 L.push("| `src/input/keyBindings.ts`, `KeyBindingsEditor.tsx` | конфликтно-безопасное переназначение клавиш и сохранение раскладки |");
 L.push("| `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |");
 L.push("| `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |");
-L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 40 автотестов ядра (T01–T41) |");
+L.push("| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 42 автотеста ядра (T01–T43) |");
 L.push("| `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |");
 L.push("| `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |");
 L.push("| `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |");
@@ -137,7 +137,7 @@ L.push("| `src/scenarios/catalog.ts` | встроенные сценарии `ba
 L.push("| `src/scenarios/custom.ts` | редактор карт: схема, офлайн-импорт OSM/GeoJSON/JSON, валидация, сборка мира |");
 L.push("| `src/scenarios/signs.ts`, `src/scenarios/editorOps.ts` | 12 классов знаков, 8 классов препятствий, операции 2D-холста (перенос, сетка, поворот, автоисправление маршрута, слияние обновлённой OSM-карты с ручными объектами, генерация коридора/оболочки и обрезка карты, Undo/Redo) |");
 L.push("| `src/render/sceneController.ts` | OSM-сцена (логика не менялась), PBR IBL с software fallback, физические зеркала, живые дисплеи салона, инерция взгляда и raycast органов управления |");
-L.push("| `src/render/cityBuildings.ts` | процедурные фасады зданий РФ/СНГ, деревья и облачное небо |");
+L.push("| `src/render/cityBuildings.ts` | текстурированные коробочные здания со статическими SVG-ассетами, деревья и облачное небо |");
 L.push("| `src/render/roadInfra.ts`, `src/render/roadTextures.ts` | PBR-дороги, тротуары, бордюры, разметка, знаки, светофоры и уличная инфраструктура ГОСТ |");
 L.push("| `src/render/roadSignTextures.ts` | процедурные отражающие текстуры 12 классов дорожных знаков и дополнительные таблички |");
 L.push("| `src/render/vehiclesAndPeds.ts` | пять детализированных Kia, салон, 3D-рычаг Shiftronic и hit-зоны органов управления |");
