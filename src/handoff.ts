@@ -48,7 +48,7 @@ L.push("| Показатель | Значение |");
 L.push("|---|---|");
 L.push("| Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |");
 L.push("| Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |");
-L.push("| Тесты ядра | 42 автотеста ядра (T01–T43), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
+L.push("| Тесты ядра | 43 автотеста ядра (T01–T44; T35 зарезервирован), прогоняются и в Node, и во вкладке «Тесты и Модули» |");
 L.push("| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–R, >120 проверок (Playwright + headless Chromium, автозапуск в CI) |");
 L.push("| Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |");
 L.push("| Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |");
@@ -114,7 +114,7 @@ L.push("| `src/sim/types.ts` | контракты: InputState, SimState, WorldDa
 L.push("| `src/sim/vehicle.ts` | физика пяти Kia, геометрия кузова, Аккерман, 6-ступенчатая АКПП, двигатель и тормоза |");
 L.push("| `src/sim/playerCar.ts` | паспорта Picanto TA, Rio FB, Ceed JD, XCeed CD и Sorento MQ4; индивидуальные габариты и коэффициенты динамики |");
 L.push("| `src/sim/cockpitLayout.ts` | координаты и hit-зоны интерактивных органов салона и селектора Shiftronic |");
-L.push("| `src/sim/controls.ts` | BTSI/Shift Lock, безопасные блокировки, клавиатурное и физическое переключение P/R/N/D/M1–M6 |");
+L.push("| `src/sim/controls.ts` | BTSI/Shift Lock, безопасные блокировки, взаимоисключение педалей и переключение P/R/N/D/M1–M6 |");
 L.push("| `src/sim/spatialGrid.ts` | сетка 10 м, OBB через SAT, insideBay, findBayLineCross, правый борт |");
 L.push("| `src/sim/step.ts` | единственный шаг физики, детекторов и скоростных отрезков до перекрёстков; чистая функция, dt = 1/60 |");
 L.push("| `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |");
