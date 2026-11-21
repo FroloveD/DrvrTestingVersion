@@ -31,7 +31,7 @@
 | Продукт | одностраничное приложение, собирается в единственный `dist/index.html` (vite-plugin-singlefile) |
 | Стек | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind 4.1, Three.js 0.187 (из npm, не CDN) |
 | Тесты ядра | 45 автотестов ядра (T01–T46; T35 зарезервирован), прогоняются и в Node, и во вкладке «Тесты и Модули» |
-| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–R, >120 проверок (Playwright + headless Chromium, автозапуск в CI) |
+| Браузерный смоук | `tests/browser-smoke.mjs`, сценарии A–S, >124 проверок (Playwright + headless Chromium, автозапуск в CI) |
 | Сеть | ноль внешних запросов в рантайме; данные ученика живут в браузере |
 | Вкладки | 3D-Тренажёр · Свой сценарий · Каталог маршрутов · Разбор и Реплей · Статистика · Инструктор и Правила · Тесты и Модули · План и стратегия |
 | Документация | `README.md` · `AGENTS.md` · `HANDOFF.md` · `WORKLOG.md` · `NOTICE` · `docs/ARCHITECTURE.md` · `docs/ADR.md` · `docs/CALIBRATION_GUIDE.md` · `docs/BRANCH_AUDIT.md` |
@@ -100,7 +100,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/sim/recorder.ts` | квантование ввода, RLE-запись, снапшот попытки, replayInputStream |
 | `src/audio/radioCatalog.ts` | каталог HTTPS-радио, фильтр станций сценария, WAV-рендер и форматирование треков |
 | `src/audio/trackStore.ts` | офлайн-кэш WAV в IndexedDB с fallback в память вкладки |
-| `src/audio/engineSound.ts` | процедурный WebAudio-синтез двигателя, шин, клаксона и реле |
+| `src/audio/engineSound.ts` | процедурный WebAudio-синтез двигателя, шин, клаксона и реле с независимыми сохраняемыми слоями |
 | `src/render/cockpitDisplays.ts` | живые CanvasTexture приборов Supervision, ШГУ и камеры заднего вида |
 | `src/input/keyBindings.ts`, `KeyBindingsEditor.tsx` | конфликтно-безопасное переназначение клавиш и сохранение раскладки |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
@@ -132,7 +132,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–R |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–S |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
