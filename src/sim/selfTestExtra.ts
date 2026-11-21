@@ -35,6 +35,7 @@ import {
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
+  autoFixScenarioRoute,
   applyPresetBoundaryShape,
   clearBoundaryPolygon,
   setCustomBoundaryPolygon,
@@ -1142,6 +1143,33 @@ export const extraCases: SelfTestCase[] = [
       assert(!outside.ok && outside.status === "errors", "Контрольная точка за границей должна давать ошибку");
       assert(outside.issues.some((issue) => issue.target?.kind === "checkpoint"), "Ошибка должна ссылаться на контрольную точку");
       return `Участков: ${valid.legs.length} · длина: ${valid.totalLengthM} м · выход за границу обнаружен`;
+    },
+  },
+
+  {
+    id: "T39",
+    suite: "route",
+    name: "Автоисправление маршрута: границы, ID и радиусы контрольных точек",
+    fn: () => {
+      const base = defaultCustomScenario();
+      const malformed = {
+        ...base,
+        start: { x: 0, z: 0, h: 0 },
+        bounds: { minX: -50, maxX: 50, minZ: -50, maxZ: 50 },
+        boundaryPolygon: undefined,
+        roads: [],
+        checkpoints: [
+          { ...base.checkpoints[0], id: "duplicate", x: 12, z: 0, radius: 1 },
+          { ...base.checkpoints[0], id: "duplicate", x: 70, z: 0, radius: 30 },
+        ],
+      };
+      const result = autoFixScenarioRoute(malformed);
+      assert(result.fixes.length >= 3, "Автоисправление должно сообщить о каждой группе найденных проблем");
+      assert(result.def.checkpoints[0].radius >= 2.5 && result.def.checkpoints[0].radius <= 20, "Радиус первой КТ должен быть приведён к допустимому диапазону");
+      assert(result.def.checkpoints[1].id !== result.def.checkpoints[0].id, "ID контрольных точек должны стать уникальными");
+      assert(result.def.checkpoints[1].x <= 50 && result.def.checkpoints[1].x >= -50, "Контрольная точка должна вернуться внутрь границ");
+      assert(result.def.start.x === 0 && result.def.start.z === 0, "Исправление не должно менять корректный старт без необходимости");
+      return "Исправлений: " + result.fixes.length + " · ID уникальны · КТ в границах · радиусы нормализованы";
     },
   },
 
