@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyBindingsEditor } from "./KeyBindingsEditor";
 import { EngineSound } from "../audio/engineSound";
-import { clampVolume, nextStationIndex, radioStationsFor, renderTrackWav, trackCacheKey, type RadioStation } from "../audio/radioCatalog";
+import { clampVolume, formatTrackDuration, nextStationIndex, OFFLINE_TRACK_SECONDS, radioStationsFor, renderTrackWav, stationTrackMetadata, trackCacheKey, type RadioStation } from "../audio/radioCatalog";
 import * as trackStore from "../audio/trackStore";
 import { DEFAULT_HEAD_UNIT_STATE, HEAD_UNIT_CLIPS, HEAD_UNIT_MODES, setActiveRadioStations, type HeadUnitState } from "../render/cockpitDisplays";
 import { loadKeyBindings, logicalKey, type KeyBindings } from "../input/keyBindings";
@@ -1873,18 +1873,25 @@ export function SimulatorView({
                   <input type="range" min={0} max={1} step={0.05} value={headUnit.volume} onChange={(e) => { const volume = clampVolume(Number(e.target.value)); setHeadUnit((prev) => ({ ...prev, volume })); if (radioAudioRef.current) radioAudioRef.current.volume = volume; }} className="w-full" />
                 </label>
                 <button type="button" data-testid="radio-save-track" className="btn btn-mini mt-2 w-full" onClick={async () => {
-                  const station = radioStations[headUnit.stationIndex]; const seconds = 32; const key = trackCacheKey(station.id, seconds);
-                  const wav = renderTrackWav(station, seconds);
-                  const persistent = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, blob: new Blob([wav], { type: "audio/wav" }) });
-                  const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
-                  setRadioMessage(persistent ? "Демо-фрагмент сохранён офлайн" : "Демо-фрагмент сохранён в памяти вкладки");
-                }}>⤓ Сохранить демо-фрагмент (32 с)</button>
-                {savedTracks.length > 0 && <div className="mt-2 space-y-1"><div className="text-[10px] text-[#8fa2ae]">СОХРАНЁННЫЕ ТРЕКИ</div>{savedTracks.map((track) => <div key={track.key} className="flex items-center gap-1 text-[10px]"><button type="button" className="text-left text-[#52d6bd] flex-1 truncate" onClick={async () => {
+                  const station = radioStations[headUnit.stationIndex];
+                  const seconds = OFFLINE_TRACK_SECONDS;
+                  const key = trackCacheKey(station.id, seconds);
+                  const metadata = stationTrackMetadata(station);
+                  try {
+                    const wav = renderTrackWav(station, seconds, metadata);
+                    const result = await trackStore.saveTrack({ key, stationId: station.id, stationName: station.name, freq: station.freq, seconds, metadata, blob: new Blob([wav], { type: "audio/wav" }) });
+                    const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length }));
+                    setRadioMessage(result.backend === "indexeddb" ? "10-минутная офлайн-сессия сохранена с WAV-тегами" : result.backend === "memory" ? "Сессия доступна только до закрытия вкладки: IndexedDB недоступна" : result.reason ?? "Не удалось сохранить офлайн-сессию");
+                  } catch (error) {
+                    setRadioMessage(error instanceof Error ? error.message : "Не удалось создать офлайн-сессию");
+                  }
+                }}>⤓ Сохранить офлайн-сессию (10 мин)</button>
+                {savedTracks.length > 0 && <div className="mt-2 space-y-1"><div className="text-[10px] text-[#8fa2ae]">СОХРАНЁННЫЕ ТРЕКИ</div>{savedTracks.map((track) => <div key={track.key} className="flex items-center gap-1 text-[10px]"><button type="button" className="text-left text-[#52d6bd] flex-1 truncate" title={`${track.metadata.title} · ${track.metadata.artist} · ${track.metadata.album}`} onClick={async () => {
                   const saved = await trackStore.loadTrack(track.key); const audio = radioAudioRef.current; if (!saved || !audio) return;
                   if (savedAudioUrlRef.current) URL.revokeObjectURL(savedAudioUrlRef.current);
                   const url = URL.createObjectURL(saved.blob); savedAudioUrlRef.current = url; audio.src = url; audio.volume = headUnit.volume;
                   try { await audio.play(); setHeadUnit((prev) => ({ ...prev, mode: "radio", radioPlaying: true, source: "saved", savedTrackKey: track.key, streamStatus: "live" })); } catch { setRadioMessage("Не удалось воспроизвести сохранённый трек"); }
-                }}>▶ {track.freq} · {track.stationName}</button><button type="button" className="text-[#ff8585] px-1" aria-label={`Удалить ${track.stationName}`} onClick={async () => { await trackStore.deleteTrack(track.key); const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length })); }}>×</button></div>)}</div>}
+                }}>▶ {track.metadata.title} · {formatTrackDuration(track.seconds)}</button><button type="button" className="text-[#ff8585] px-1" aria-label={`Удалить ${track.stationName}`} onClick={async () => { await trackStore.deleteTrack(track.key); const items = await trackStore.listTracks(); setSavedTracks(items); setHeadUnit((prev) => ({ ...prev, savedCount: items.length })); }}>×</button></div>)}</div>}
                 {radioMessage && <p className="text-[10px] text-[#f5b942] mt-1" role="status">{radioMessage}</p>}
               </>}
               {headUnit.mode === "clip" && <button type="button" className="btn btn-mini w-full" onClick={() => setHeadUnit((prev) => ({ ...prev, clipIndex: (prev.clipIndex + 1) % HEAD_UNIT_CLIPS.length }))}>Следующий клип: {HEAD_UNIT_CLIPS[headUnit.clipIndex]?.title}</button>}
