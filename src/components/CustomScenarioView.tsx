@@ -273,6 +273,60 @@ const SNAP_OPTIONS: Array<{ v: number; l: string; hint: string }> = [
   { v: 5, l: "5 м", hint: "Крупная сетка для улиц, зданий и контура карты" },
 ];
 
+const EDITOR_PANEL_LABELS = {
+  carRadio: "Автомобиль и радио",
+  palette: "Инструменты и 2D-холст",
+  inspector: "Инспектор, объекты и параметры карты",
+} as const;
+
+type EditorPanelId = keyof typeof EDITOR_PANEL_LABELS;
+type EditorPanelState = { collapsed: EditorPanelId[]; closed: EditorPanelId[] };
+
+function loadEditorPanelState(): EditorPanelState {
+  try {
+    const raw = JSON.parse(localStorage.getItem("cdt.editorPanelState.v1") || "null") as
+      | { collapsed?: unknown; closed?: unknown }
+      | null;
+    const validIds = (value: unknown): EditorPanelId[] =>
+      Array.isArray(value)
+        ? value.filter((id): id is EditorPanelId => typeof id === "string" && id in EDITOR_PANEL_LABELS)
+        : [];
+    return { collapsed: validIds(raw?.collapsed), closed: validIds(raw?.closed) };
+  } catch {
+    return { collapsed: [], closed: [] };
+  }
+}
+
+function EditorPanelFrame({
+  id, title, collapsed, onToggle, onClose, children,
+}: {
+  id: EditorPanelId;
+  title: string;
+  collapsed: boolean;
+  onToggle: (id: EditorPanelId) => void;
+  onClose: (id: EditorPanelId) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section data-editor-panel={id} data-testid={`editor-panel-${id}`} className="space-y-2 min-w-0">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-[#101b25] px-3 py-1.5">
+        <span className="mono text-[10px] font-bold text-[#9bafbc]">{title}</span>
+        <div className="flex items-center gap-1">
+          <button type="button" className="btn btn-mini px-2 py-0.5"
+            data-testid={`editor-panel-collapse-${id}`}
+            aria-label={collapsed ? `Развернуть ${title}` : `Свернуть ${title}`}
+            aria-expanded={!collapsed} onClick={() => onToggle(id)}>{collapsed ? "+" : "−"}</button>
+          <button type="button" className="btn btn-mini px-2 py-0.5"
+            data-testid={`editor-panel-close-${id}`}
+            aria-label={`Закрыть ${title}`} title={`Закрыть панель «${title}»`}
+            onClick={() => onClose(id)}>×</button>
+        </div>
+      </div>
+      {!collapsed && children}
+    </section>
+  );
+}
+
 const LAYER_LABELS: Array<{ k: keyof LayerVisibility; l: string }> = [
   { k: "roads", l: "Дороги" },
   { k: "bays", l: "Боксы" },
@@ -315,7 +369,26 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   // История отмен и фильтр реестра объектов
   const [history, setHistory] = useState(() => createEditorHistory<CustomScenarioDef>());
   const [listFilter, setListFilter] = useState<ListFilter>("all");
+  const [editorPanelState, setEditorPanelState] = useState<EditorPanelState>(loadEditorPanelState);
   const [showOsmHelp, setShowOsmHelp] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem("cdt.editorPanelState.v1", JSON.stringify(editorPanelState)); }
+    catch { /* storage blocked or unavailable */ }
+  }, [editorPanelState]);
+
+  const toggleEditorCollapse = useCallback((id: EditorPanelId) => setEditorPanelState((prev) => ({
+    ...prev,
+    collapsed: prev.collapsed.includes(id) ? prev.collapsed.filter((item) => item !== id) : [...prev.collapsed, id],
+  })), []);
+  const closeEditorPanel = useCallback((id: EditorPanelId) => setEditorPanelState((prev) => ({
+    ...prev,
+    closed: prev.closed.includes(id) ? prev.closed : [...prev.closed, id],
+  })), []);
+  const restoreEditorPanel = useCallback((id: EditorPanelId) => setEditorPanelState((prev) => ({
+    ...prev, closed: prev.closed.filter((item) => item !== id),
+  })), []);
+  const closedEditorPanelIds = editorPanelState.closed.filter((id) => id in EDITOR_PANEL_LABELS);
 
   const validation = useMemo(() => validateCustomScenario(def), [def]);
   const routeCheck = useMemo(() => checkScenarioRoute(def), [def]);
@@ -771,6 +844,26 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         </div>
       </div>
 
+      {closedEditorPanelIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-white/10 bg-[#0b141d] p-2"
+          data-testid="editor-panel-restore" aria-label="Восстановление панелей редактора">
+          <span className="mono text-[9px] text-[#7c909d]">ВОССТАНОВИТЬ ПАНЕЛИ</span>
+          {closedEditorPanelIds.map((id) => (
+            <button key={id} type="button" className="btn btn-mini"
+              data-testid={`editor-panel-restore-${id}`}
+              onClick={() => restoreEditorPanel(id)}>+ {EDITOR_PANEL_LABELS[id]}</button>
+          ))}
+          {closedEditorPanelIds.length > 1 && (
+            <button type="button" className="btn btn-mini"
+              onClick={() => setEditorPanelState((prev) => ({ ...prev, closed: [] }))}>Все</button>
+          )}
+        </div>
+      )}
+
+      {!editorPanelState.closed.includes("carRadio") && (
+      <EditorPanelFrame id="carRadio" title={EDITOR_PANEL_LABELS.carRadio}
+        collapsed={editorPanelState.collapsed.includes("carRadio")}
+        onToggle={toggleEditorCollapse} onClose={closeEditorPanel}>
       <div className="panel p-4 space-y-3" data-testid="editor-vehicle-radio-panel">
         <div>
           <div className="flex items-center justify-between gap-2 mb-2">
@@ -816,6 +909,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           <p className="mono text-[10px] text-[#7c909d]">Выбранные автомобиль и станции применяются только к этому сценарию. Старые сценарии используют Ceed JD и весь каталог.</p>
         </div>
       </div>
+      </EditorPanelFrame>
+      )}
 
       {/* Сворачиваемая памятка по офлайн-импорту карт */}
       {showOsmHelp && (
@@ -979,6 +1074,10 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         )}
       </div>
 
+      {!editorPanelState.closed.includes("palette") && (
+      <EditorPanelFrame id="palette" title={EDITOR_PANEL_LABELS.palette}
+        collapsed={editorPanelState.collapsed.includes("palette")}
+        onToggle={toggleEditorCollapse} onClose={closeEditorPanel}>
       {/* === [SEC:custom-preview] Палитра классов, действия Undo/Redo и интерактивный 2D-холст === */}
       <div className="panel p-3.5 space-y-3">
         {/* Инструменты палитры + Undo/Redo/Дубль/Удалить */}
@@ -1296,8 +1395,13 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         </div>
       </div>
 
+      </EditorPanelFrame>
+      )}
+
       {/* Основная рабочая область: слева 2D-холст, справа инспектор выбранного объекта */}
-      <div className="grid xl:grid-cols-[1fr_410px] gap-4 items-start">
+      <div className={editorPanelState.closed.includes("inspector")
+        ? "grid grid-cols-1 gap-4 items-start"
+        : "grid xl:grid-cols-[1fr_410px] gap-4 items-start"}>
         <MapCanvasEditor
           def={def}
           tool={tool}
@@ -1317,7 +1421,11 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         />
 
         {/* === [SEC:custom-forms] Инспектор выбранного объекта, реестр и параметры карты === */}
+        {!editorPanelState.closed.includes("inspector") && (
         <div className="space-y-4 min-w-0">
+          <EditorPanelFrame id="inspector" title={EDITOR_PANEL_LABELS.inspector}
+            collapsed={editorPanelState.collapsed.includes("inspector")}
+            onToggle={toggleEditorCollapse} onClose={closeEditorPanel}>
           {/* Инспектор свойств выбранного объекта */}
           <div className="panel p-4 space-y-3" data-testid="editor-inspector">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2580,7 +2688,9 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
               />
             </div>
           </div>
+          </EditorPanelFrame>
         </div>
+        )}
       </div>
     </div>
   );
