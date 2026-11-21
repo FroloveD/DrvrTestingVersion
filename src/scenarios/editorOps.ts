@@ -3,7 +3,7 @@
  * @layer pure-core
  * @role Чистые операции 2D-редактора карт: размещение, перенос с привязкой к сетке, поворот, узлы дорог, дублирование, удаление, автомаршрут, автоисправление маршрута, слияние обновлённой OSM-карты с ручными объектами, генерация коридора/оболочки и обрезка карты, Undo/Redo.
  * @invariants #1 (координаты +Z север, +X лево, +h влево), #7 (чистое ядро без DOM и three).
- * @tests T29, T39–T42
+ * @tests T29, T39–T43
  */
 import { boundsToPolygon, boundingBoxOfPolygon, buildConvexHullPolygon, buildPresetBoundaryPolygon, buildRouteCorridorPolygon, clampPointToWorldBoundary, clipPolylineToPolygon, insertBoundaryVertex, isInsideWorldBoundary, isSimplePolygon, isValidBoundaryPolygon, removeBoundaryVertex, sanitizeBoundaryPolygon, type BoundaryShapePreset } from "../maps/boundary";
 import { buildRouteFromRoads, findRoadNetworkPath, nearestRoadPoint } from "../maps/route";
@@ -572,6 +572,17 @@ export function appendRoadPoint(
   });
   const bounds = newPt ? expandBoundsIfNeeded(def.bounds, (newPt as Vec2).x, (newPt as Vec2).z, 10) : def.bounds;
   return { def: { ...def, bounds, roads }, pointIndex };
+}
+
+/** Разворачивает порядок узлов выбранной дороги, меняя направление её движения. */
+export function reverseRoadDirection(def: CustomScenarioDef, roadId: string): CustomScenarioDef {
+  let found = false;
+  const roads = (def.roads ?? []).map((road) => {
+    if (road.id !== roadId || road.points.length < 2) return road;
+    found = true;
+    return { ...road, points: [...road.points].reverse() };
+  });
+  return found ? { ...def, roads } : def;
 }
 
 /** Дублирует выбранный объект с небольшим смещением, чтобы копию было удобно перетащить. */
