@@ -1088,6 +1088,20 @@ try {
   check("O4 отмена действия (Undo) возвращает знак на прежнее место",
     undoneTf === beforeTf, `${undoneTf} vs ${beforeTf}`);
 
+  // Обновляем ту же OSM-выгрузку через режим слияния: ручной знак должен остаться.
+  const mergeManualSignsBefore = await page.locator('[data-testid^="map-sign-sign-give_way"]').count();
+  await page.getByTestId("editor-merge-import-input").setInputFiles({
+    name: "uchebnaya-refresh.osm",
+    mimeType: "application/xml",
+    buffer: Buffer.from(osmXml),
+  });
+  await sleep(450);
+  const mergeManualSignsAfter = await page.locator('[data-testid^="map-sign-sign-give_way"]').count();
+  const mergeAllSignsAfter = await page.locator('[data-testid^="map-sign-"]').count();
+  check("O4b обновление OSM сохраняет ручной знак и импортированные знаки",
+    mergeManualSignsBefore === 1 && mergeManualSignsAfter === 1 && mergeAllSignsAfter >= 2,
+    `manual=${mergeManualSignsBefore}->${mergeManualSignsAfter}, all=${mergeAllSignsAfter}`);
+
   // 4. Открываем отредактированную карту со знаками, светофором, забором и деревом в 3D-тренажёре
   await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
   await sleep(1200);
