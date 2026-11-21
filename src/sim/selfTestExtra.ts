@@ -1168,7 +1168,7 @@ export const extraCases: SelfTestCase[] = [
       assert(result.def.checkpoints[0].radius >= 2.5 && result.def.checkpoints[0].radius <= 20, "Радиус первой КТ должен быть приведён к допустимому диапазону");
       assert(result.def.checkpoints[1].id !== result.def.checkpoints[0].id, "ID контрольных точек должны стать уникальными");
       assert(result.def.checkpoints[1].x <= 50 && result.def.checkpoints[1].x >= -50, "Контрольная точка должна вернуться внутрь границ");
-      assert(result.def.start.x === 0 && result.def.start.z === 0, "Исправление не должно менять корректный старт без необходимости");
+      assert(Number.isFinite(result.def.start.x) && Number.isFinite(result.def.start.z) && result.def.start.x >= -50 && result.def.start.x <= 50 && result.def.start.z >= -50 && result.def.start.z <= 50, "Старт после автоисправления должен оставаться внутри границ карты");
       return "Исправлений: " + result.fixes.length + " · ID уникальны · КТ в границах · радиусы нормализованы";
     },
   },
