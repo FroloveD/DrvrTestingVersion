@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BOUNDARY_SHAPE_PRESETS, polygonArea, type BoundaryShapePreset } from "../maps/boundary";
+import { checkScenarioRoute } from "../maps/routeCheck";
 import {
   buildCityOsmScenario,
   buildParallelScenario,
@@ -309,6 +310,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const [showOsmHelp, setShowOsmHelp] = useState(false);
 
   const validation = useMemo(() => validateCustomScenario(def), [def]);
+  const routeCheck = useMemo(() => checkScenarioRoute(def), [def]);
   const blocked = validation.errors.length > 0;
   // Imported OSM geometry may contain editor-only validation warnings (e.g. large
   // footprints) while still being a valid renderable simulator world. Do not trap
@@ -835,6 +837,40 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           })}
         </div>
       )}
+
+
+      {/* Диагностика связности и геометрии экзаменационного маршрута */}
+      <div className="panel p-3.5 space-y-2" data-testid="route-check-panel">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Icon name="route" size={14} />
+            <span className="text-xs font-extrabold">Проверка экзаменационного маршрута</span>
+          </div>
+          <Chip tone={routeCheck.status === "valid" ? "mint" : routeCheck.status === "errors" ? "red" : "amber"}>
+            {routeCheck.status === "valid" ? "Маршрут исправен" : routeCheck.status === "errors" ? "Найдены ошибки" : routeCheck.status === "empty" ? "Маршрут не задан" : "Есть замечания"}
+          </Chip>
+        </div>
+        <p className="text-[11px] text-[#a9bcc8]" data-testid="route-check-summary">{routeCheck.summary}</p>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mono text-[10px] text-[#7c909d]">
+          <span>КТ: {routeCheck.checkpointsCount}</span>
+          <span>Длина: {routeCheck.totalLengthM} м</span>
+          <span>Связанные участки: {routeCheck.connectedLegsCount}/{routeCheck.legs.length}</span>
+          <span>Светофоры: {routeCheck.signalsOnRoute}</span>
+          <span>Переходы: {routeCheck.crosswalksOnRoute}</span>
+          <span>Знаки: {routeCheck.signsOnRoute}</span>
+        </div>
+        {routeCheck.issues.length > 0 && (
+          <ul className="space-y-1" data-testid="route-check-issues">
+            {routeCheck.issues.slice(0, 8).map((issue, index) => (
+              <li key={index} className={`text-[11px] ${issue.severity === "error" ? "text-[#ff9494]" : issue.severity === "warning" ? "text-[#f5d78a]" : "text-[#9bafbc]"}`}>
+                <strong className="mono mr-1">{issue.severity === "error" ? "ОШИБКА" : issue.severity === "warning" ? "ПРЕДУПРЕЖДЕНИЕ" : "ИНФО"}</strong>
+                {issue.message}
+              </li>
+            ))}
+            {routeCheck.issues.length > 8 && <li className="text-[10px] text-[#7c909d]">И ещё {routeCheck.issues.length - 8} замечаний…</li>}
+          </ul>
+        )}
+      </div>
 
       {/* === [SEC:custom-preview] Палитра классов, действия Undo/Redo и интерактивный 2D-холст === */}
       <div className="panel p-3.5 space-y-3">
