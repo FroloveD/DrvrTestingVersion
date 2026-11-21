@@ -2,3 +2,12 @@ node_modules
 dist
 .DS_Store
 *.local
+# UEDev: только исходники/конфигурация, без локальной сборки и кэшей Unreal.
+ue/**/Binaries/
+ue/**/DerivedDataCache/
+ue/**/Intermediate/
+ue/**/Saved/
+ue/**/.vs/
+ue/**/*.sln
+ue/**/*.vcxproj*
+ue/**/*.suo
