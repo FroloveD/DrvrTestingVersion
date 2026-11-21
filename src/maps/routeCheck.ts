@@ -443,7 +443,7 @@ export function checkScenarioRoute(input: RouteCheckInput): RouteCheckReport {
 
     if (streetRoads.length > 0 && !net.connected && input.useLotSurface === false && !cp.isFinalPark) {
       issues.push({
-        severity: "warning",
+        severity: "error",
         message: `Участок ${fromLabel} → ${toLabel} (${net.lengthM.toFixed(0)} м) не связан единой дорогой OSM (разрыв сети или точка вне улицы).`,
         target: { kind: "checkpoint", id: cp.id },
       });
