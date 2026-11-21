@@ -1333,7 +1333,8 @@ export function SimulatorView({
 
   const bindPedal = (which: "gas" | "brake") => ({
     onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (e.button !== 0 || pedalOwner.current[which] !== null) return;
+      // For touch/pen, pointerId identifies the contact; button is only meaningful for mouse buttons.
+      if ((e.pointerType === "mouse" && e.button !== 0) || pedalOwner.current[which] !== null) return;
       e.preventDefault(); e.stopPropagation();
       e.currentTarget.setPointerCapture(e.pointerId);
       pressPedal(which, e.pointerId);
