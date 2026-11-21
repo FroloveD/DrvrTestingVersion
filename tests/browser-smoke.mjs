@@ -865,14 +865,28 @@ try {
   const finger2 = { x: h.x + h.width / 2, y: h.y + h.height / 2, id: 2 };
   const moved2 = { ...finger2, x: finger2.x - 45, y: finger2.y - 80 };
   const cdp = await ctx.newCDPSession(page);
+  const pointerTrace = await page.evaluate(() => {
+    window.__pedalPointerTrace = [];
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) {
+      document.addEventListener(type, (event) => {
+        const target = event.target instanceof Element ? event.target.closest("button") : null;
+        if (target && (target.getAttribute("aria-label") === "Газ" || target.getAttribute("aria-label") === "Тормоз"
+          || target.getAttribute("aria-label") === "Переместить педаль тормоза")) {
+          window.__pedalPointerTrace.push({ type, label: target.getAttribute("aria-label"), id: event.pointerId,
+            pointerType: event.pointerType, button: event.button });
+        }
+      }, true);
+    }
+    return true;
+  });
   const touch = async (type, touchPoints) => {
     await cdp.send("Input.dispatchTouchEvent", { type, touchPoints }); await sleep(100);
   };
-  // Сначала активируем газ, затем добавляем второй контакт, сохраняя первый
-  // в списке активных точек. Это моделирует реальное последовательное касание
-  // и гарантирует отдельный pointerdown для ручки тормоза.
+  // CDP принимает в touchStart только новый контакт; активные контакты
+  // передаются вместе при перемещении. Это проверяет добавление второго пальца
+  // без повторного старта уже удерживаемого газа.
   await touch("touchStart", [finger1]);
-  await touch("touchStart", [finger1, finger2]);
+  await touch("touchStart", [finger2]);
   await touch("touchMove", [finger1, moved2]);
   const gasPressed = (await gas.getAttribute("aria-pressed")) === "true";
   const brakePressed = (await brake.getAttribute("aria-pressed")) === "true";
@@ -881,7 +895,7 @@ try {
   const m1Details = { gasPressed, brakePressed, gripDeltaY: movedGripBox ? Math.round(movedGripBox.y - h.y) : null, gasDeltaY: movedGasBox ? Math.round(movedGasBox.y - g.y) : null };
   check("M1 второй палец переносит только тормоз, не включая его и не отпуская газ",
     gasPressed && !brakePressed && Math.abs((movedGripBox?.y ?? h.y) - h.y) > 50 && Math.abs((movedGasBox?.y ?? g.y) - g.y) < 1,
-    JSON.stringify(m1Details));
+    JSON.stringify({ ...m1Details, pointerEvents: await page.evaluate(() => window.__pedalPointerTrace ?? []) }));
   // После touchEnd остаётся только первый контакт на газе; второй палец отпускает ручку.
   await touch("touchEnd", [finger1]);
   check("M2 отпускание ручки второго пальца не сбрасывает газ",(await gas.getAttribute("aria-pressed")) === "true");
@@ -1081,10 +1095,25 @@ try {
   const canvas = page.getByTestId("map-editor-canvas");
   await canvas.scrollIntoViewIfNeeded();
   await sleep(150);
-  const cBox = await canvas.boundingBox();
-  await canvas.click({
-    position: { x: Math.round(cBox.width * 0.62), y: Math.round(cBox.height * 0.45) },
+  // Размещаем ручной знак возле середины импортированной OSM-дороги:
+  // точка гарантированно лежит в исходных границах карты, даже если выше
+  // пользователь построил дополнительную дорогу и расширил текущий viewport.
+  const signPlacement = await canvas.evaluate((svg) => {
+    const road = svg.querySelector('[data-testid^="map-road-"]');
+    const line = road?.querySelector("polyline");
+    const raw = line?.getAttribute("points")?.trim().split(/\\s+/) ?? [];
+    if (raw.length < 2) return null;
+    const parse = (value) => value.split(",").map(Number);
+    const a = parse(raw[0]), b = parse(raw[1]);
+    if (a.length !== 2 || b.length !== 2 || ![...a, ...b].every(Number.isFinite)) return null;
+    const point = svg.createSVGPoint();
+    point.x = (a[0] + b[0]) / 2;
+    point.y = (a[1] + b[1]) / 2;
+    const screen = point.matrixTransform(svg.getScreenCTM());
+    return { x: screen.x, y: screen.y };
   });
+  if (!signPlacement) throw new Error("Не удалось определить точку внутри импортированной OSM-дороги");
+  await page.mouse.click(signPlacement.x, signPlacement.y);
   await sleep(250);
   const signsAfter = await page.locator('[data-testid^="map-sign-"]').count();
   check("O2 новый дорожный знак ставится кликом на 2D-карту",
@@ -1123,9 +1152,11 @@ try {
   await sleep(450);
   const mergeManualSignsAfter = await page.locator('[data-testid^="map-sign-sign-give_way"]').count();
   const mergeAllSignsAfter = await page.locator('[data-testid^="map-sign-"]').count();
+  const manualSignIdsBefore = await page.locator('[data-testid^="map-sign-sign-give_way"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+  const manualSignIdsAfter = await page.locator('[data-testid^="map-sign-sign-give_way"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
   check("O4b обновление OSM сохраняет ручной знак и импортированные знаки",
     mergeManualSignsBefore === 1 && mergeManualSignsAfter === 1 && mergeAllSignsAfter >= 2,
-    `manual=${mergeManualSignsBefore}->${mergeManualSignsAfter}, all=${mergeAllSignsAfter}`);
+    `manual=${mergeManualSignsBefore}->${mergeManualSignsAfter}, all=${mergeAllSignsAfter}, ids=${manualSignIdsBefore.join(",")} -> ${manualSignIdsAfter.join(",")}`);
 
   // 4. Открываем отредактированную карту со знаками, светофором, забором и деревом в 3D-тренажёре
   await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
