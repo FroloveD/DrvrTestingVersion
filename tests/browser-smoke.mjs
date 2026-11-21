@@ -101,6 +101,8 @@ const layoutOverlaps = (page) => page.evaluate(() => {
     document.querySelector('[aria-label="Рулевое колесо"]')?.closest("div.absolute") ??
     panelOf(spans.find((s) => s.textContent === "Руль"));
   const status = panelOf(spans.find((s) => (s.textContent ?? "").startsWith("Двигатель заглушен")));
+  const cameraControls = document.querySelector('[data-hud-panel="camToggles"]');
+  const cluster = document.querySelector('[data-hud-panel="cluster"]');
   const kmh = spans.find((s) => s.textContent === "км/ч");
   const speed = kmh ? kmh.parentElement : null;
   const camera = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").trim() === "1 Сзади");
@@ -113,6 +115,7 @@ const layoutOverlaps = (page) => page.evaluate(() => {
   return {
     found: Boolean(mirror && wheel && status && speed && camera),
     mirrorStatus: hit(mirror, status),
+    cameraCluster: hit(cameraControls, cluster),
     wheelSpeed: hit(wheel, speed),
     wheelCamera: hit(wheel, camera),
   };
@@ -129,6 +132,7 @@ try {
   const lay = await layoutOverlaps(page);
   check("A2b раскладка по умолчанию: зеркало не закрывает строку задания", lay.found && !lay.mirrorStatus, JSON.stringify(lay));
   check("A2c раскладка по умолчанию: руль не закрывает спидометр и кнопки камеры", lay.found && !lay.wheelSpeed && !lay.wheelCamera, JSON.stringify(lay));
+  check("A2c3 панель переключения камер не перекрыта приборной панелью", !lay.cameraCluster, JSON.stringify(lay));
 
   await page.getByRole("button", { name: "2 Салон" }).click();
   const cockpitClass = await page.getByRole("button", { name: "2 Салон" }).getAttribute("class");
