@@ -59,7 +59,7 @@ import {
 } from "../scenarios/editorOps";
 import { createDefaultObstacle, createDefaultRoad, createDefaultSign, OBSTACLE_CATALOG, ROAD_SIGN_CATALOG } from "../scenarios/signs";
 import { DEFAULT_CALIBRATION, DEFAULT_RULESET } from "../scoring/rules";
-import { applyShifterTarget, checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS } from "./controls";
+import { applyShifterTarget, checkEngineToggle, checkGearChange, PARK_LOCK_MAX_SPEED_MS, resolveExclusivePedals } from "./controls";
 import { joinAttempt, splitAttempt, upsertJournal, upsertReview, type AttemptMeta } from "./journal";
 import { AttemptRecorder, quantizeInput, replayInputStream, type RecordedAttempt } from "./recorder";
 import { SpatialGrid } from "./spatialGrid";
@@ -1336,6 +1336,27 @@ export const extraCases: SelfTestCase[] = [
       assert(reverseRoadDirection(input, "missing-road") === input,
         "Неизвестный ID не должен создавать ложные изменения");
       return "3 узла развёрнуты; соседняя дорога и исходный сценарий сохранены";
+    },
+  },
+
+  {
+    id: "T44",
+    suite: "controls",
+    name: "Газ и тормоз взаимоисключающие",
+    fn: () => {
+      const gasOnly = resolveExclusivePedals(0.7, 0);
+      assert(gasOnly.throttle === 0.7 && gasOnly.brake === 0,
+        "При нажатом газе тормоз должен оставаться отпущенным");
+      const brakeOnly = resolveExclusivePedals(0, 0.6);
+      assert(brakeOnly.throttle === 0 && brakeOnly.brake === 0.6,
+        "При нажатом тормозе газ должен оставаться отпущенным");
+      const both = resolveExclusivePedals(1, 0.4);
+      assert(both.throttle === 0 && both.brake === 0.4,
+        "При конфликте входов тормоз имеет приоритет, одновременное нажатие запрещено");
+      const clamped = resolveExclusivePedals(2, -1);
+      assert(clamped.throttle === 1 && clamped.brake === 0,
+        "Значения педалей должны ограничиваться диапазоном 0..1");
+      return "Газ/тормоз взаимоисключающие; тормоз имеет приоритет при конфликте источников";
     },
   },
 
