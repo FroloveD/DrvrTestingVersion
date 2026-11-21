@@ -105,6 +105,8 @@ export type PerfMetrics = {
   geometries: number;
   textures: number;
   textureBytesEstimate: number;
+  geometryBytesEstimate: number;
+  gpuResourceBytesEstimate: number;
 };
 
 // === [SEC:render-textures] Процедурные Canvas-текстуры (офлайн, без внешних ассетов) ===
@@ -164,6 +166,7 @@ export class SceneController {
   private useInstancedBuildings = false;
   private totalBuildingCount = 0;
   private cachedTextureBytesEstimate = 0;
+  private cachedGeometryBytesEstimate = 0;
   private lastTextureEstimateAt = 0;
   private readonly signalVisuals: SignalVisual[] = [];
   private readonly pedVisuals: PedestrianVisual[] = [];
@@ -652,6 +655,7 @@ export class SceneController {
   loadWorld(world: WorldData): void {
     this.lastTextureEstimateAt = 0;
     this.cachedTextureBytesEstimate = 0;
+    this.cachedGeometryBytesEstimate = 0;
     const requestedCarId = world.playerCarId ?? "ceed";
     if (requestedCarId !== this.playerCarId) this.rebuildPlayerRig(requestedCarId);
     const osmBuildingCount = world.scenarioId === "city_osm"
@@ -1587,11 +1591,41 @@ export class SceneController {
     return Math.round(bytes);
   }
 
+  // Оценка объёма вершинных/индексных буферов и матриц инстансов сцены.
+  private estimateSceneGeometryBytes(): number {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const instances = new Set<THREE.InstancedMesh>();
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.geometry instanceof THREE.BufferGeometry) geometries.add(mesh.geometry);
+      if (mesh instanceof THREE.InstancedMesh) instances.add(mesh);
+    });
+    let bytes = 0;
+    const addArray = (value: unknown) => {
+      if (value && typeof value === "object" && "byteLength" in value) {
+        bytes += Number((value as { byteLength: number }).byteLength) || 0;
+      }
+    };
+    for (const geometry of geometries) {
+      for (const attribute of Object.values(geometry.attributes)) {
+        const raw = attribute as unknown as { array?: unknown; data?: { array?: unknown } };
+        addArray(raw.array ?? raw.data?.array);
+      }
+      if (geometry.index) addArray(geometry.index.array);
+    }
+    for (const mesh of instances) {
+      addArray(mesh.instanceMatrix.array);
+      if (mesh.instanceColor) addArray(mesh.instanceColor.array);
+    }
+    return bytes;
+  }
+
   // === [SEC:render-dispose] Метрики FPS и освобождение GPU-ресурсов ===
   getPerfMetrics(): PerfMetrics {
     const now = performance.now();
     if (this.lastTextureEstimateAt === 0) {
       this.cachedTextureBytesEstimate = this.estimateSceneTextureBytes();
+      this.cachedGeometryBytesEstimate = this.estimateSceneGeometryBytes();
       this.lastTextureEstimateAt = now;
     }
     if (this.frameTimes.length === 0) {
@@ -1605,6 +1639,10 @@ export class SceneController {
         geometries: this.renderer.info.memory.geometries,
         textures: this.renderer.info.memory.textures,
         textureBytesEstimate: this.cachedTextureBytesEstimate,
+      geometryBytesEstimate: this.cachedGeometryBytesEstimate,
+      gpuResourceBytesEstimate: this.cachedTextureBytesEstimate + this.cachedGeometryBytesEstimate,
+        geometryBytesEstimate: this.cachedGeometryBytesEstimate,
+        gpuResourceBytesEstimate: this.cachedTextureBytesEstimate + this.cachedGeometryBytesEstimate,
       };
     }
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
@@ -1620,6 +1658,8 @@ export class SceneController {
       geometries: this.renderer.info.memory.geometries,
       textures: this.renderer.info.memory.textures,
       textureBytesEstimate: this.cachedTextureBytesEstimate,
+      geometryBytesEstimate: this.cachedGeometryBytesEstimate,
+      gpuResourceBytesEstimate: this.cachedTextureBytesEstimate + this.cachedGeometryBytesEstimate,
     };
   }
 
