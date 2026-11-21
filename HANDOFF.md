@@ -105,7 +105,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/input/keyBindings.ts`, `KeyBindingsEditor.tsx` | конфликтно-безопасное переназначение клавиш и сохранение раскладки |
 | `src/sim/journal.ts` | разделение meta/payload, лимит 300 записей, оценки инструкторов |
 | `src/sim/golden.ts` | FNV-1a checksum, golden-набор (`cdt.golden.v1`) для сверки с инструктором |
-| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 36 автотестов ядра (T01–T37) |
+| `src/sim/selfTest.ts`, `src/sim/selfTestExtra.ts` | 38 автотестов ядра (T01–T38) |
 | `src/scoring/rules.ts` | правила как данные (verdict, баллы, immediate/penalty), DEFAULT_CALIBRATION |
 | `src/maps/osmLoader.ts`, `src/maps/osmXml.ts` | офлайн-парсер OSM XML/Overpass JSON/GeoJSON: oneway, roundabout, lanes/width, multipolygon, bounds, ODbL |
 | `src/maps/osmDeconflict.ts` | дорожные коридоры и согласование конфликтов дорог, зданий, ограждений, знаков и зон скорости |
@@ -132,7 +132,7 @@ node tests/browser-smoke.mjs http://127.0.0.1:4173/index.html \
 | `src/App.tsx`, `src/components/*` | оболочка вкладок, плавающие панели HUD и экраны кабинета |
 | `src/data.ts` | исторический архив аудита монолита v8 (справка для вкладки «План и стратегия») |
 | `src/handoff.ts`, `scripts/write-handoff.mjs` | генератор этого документа (`HANDOFF.md`) и блока в UI |
-| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–Q |
+| `scripts/run-tests.mjs`, `tests/browser-smoke.mjs` | автогейт чистоты/тестов/доков в Node и Playwright-смоук A–R |
 | `tools/build-map-pack.mjs` | офлайн-сборщик компактного OSM map pack (упрощение Рамера — Дугласа — Пекера) |
 
 ## 4. Инварианты — нарушать нельзя
