@@ -396,10 +396,12 @@ export class SceneController {
     // Заднее: 10:3, боковые: 2:1. Задняя камера видит мир без пересечения крыши/салона;
     // боковые дополнительно видят наружную кромку автомобиля, но не корпуса зеркал.
     this.rearRT = new THREE.WebGLRenderTarget(320, 96, { depthBuffer: true });
-    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 130);
+    // Зеркалам не нужна дальность основной камеры: ограничиваем сцену ради FPS.
+    // 85 м сохраняют ближайшие перекрёстки и транспорт, но отсекают дальний городской фон.
+    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 85);
     this.rearBuf = new Uint8Array(320 * 96 * 4);
     this.sideRT = new THREE.WebGLRenderTarget(320, 160, { depthBuffer: true });
-    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 130);
+    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 85);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
 
