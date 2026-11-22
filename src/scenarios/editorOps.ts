@@ -129,7 +129,7 @@ export function getSelectionAnchor(
       return {
         x: round2(anchors.reduce((sum, item) => sum + item.x, 0) / anchors.length),
         z: round2(anchors.reduce((sum, item) => sum + item.z, 0) / anchors.length),
-        h: null,
+        h: 0,
         label: group.name || `Группа (${anchors.length})`,
       };
     }
@@ -492,6 +492,21 @@ export function setSelectedHeading(
   const target = primarySelection(sel);
   if (!target) return def;
   const h = normalizeAngleRad(newHeadingRad);
+
+  if (target.kind === "group") {
+    const group = (def.groups ?? []).find((item) => item.id === target.id);
+    const center = getSelectionAnchor(def, target);
+    if (!group || !center) return def;
+    const delta = h;
+    const members = group.members.map((member) => ({ member, anchor: getSelectionAnchor(def, member) }))
+      .filter((item): item is { member: EditorGroupMember; anchor: { x: number; z: number; h: number | null; label: string } } => Boolean(item.anchor));
+    return members.reduce((state, item) => {
+      const offset = rotateOffset(item.anchor.x - center.x, item.anchor.z - center.z, delta);
+      let next = moveSelected(state, item.member, center.x + offset.x, center.z + offset.z, 0);
+      if (item.anchor.h !== null) next = setSelectedHeading(next, item.member, item.anchor.h + delta);
+      return next;
+    }, def);
+  }
 
   switch (target.kind) {
     case "start":
