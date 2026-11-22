@@ -1133,6 +1133,12 @@ export class SceneController {
         return;
       }
       const bld = buildTexturedBuilding(obs, cityEnv);
+      // Fallback OBB buildings in large OSM scenes do not cast dynamic shadows;
+      // keep the original shadow behavior for compact and non-OSM scenarios.
+      if (this.isLargeOsmWorld) {
+        bld.castShadow = false;
+        bld.receiveShadow = false;
+      }
       bld.userData.mirrorCategory = "building";
       this.worldGroup.add(bld);
       this.buildingMeshes.push(bld);
