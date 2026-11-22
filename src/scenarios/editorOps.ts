@@ -67,6 +67,7 @@ export type EditorSelection =
   | { kind: "bay"; id: number }
   | { kind: "obstacle"; id: string }
   | { kind: "checkpoint"; id: string }
+  | { kind: "group"; id: string }
   | { kind: "boundary_point"; index: number };
 
 export type CropSummary = {
@@ -118,6 +119,19 @@ export function getSelectionAnchor(
   switch (sel.kind) {
     case "start":
       return { x: def.start.x, z: def.start.z, h: def.start.h, label: "Старт автомобиля" };
+    case "group": {
+      const group = (def.groups ?? []).find((item) => item.id === sel.id);
+      if (!group || group.members.length === 0) return null;
+      const anchors = group.members.map((member) => getSelectionAnchor(def, member)).filter((item): item is NonNullable<typeof item> => Boolean(item));
+      if (anchors.length === 0) return null;
+      return {
+        x: round2(anchors.reduce((sum, item) => sum + item.x, 0) / anchors.length),
+        z: round2(anchors.reduce((sum, item) => sum + item.z, 0) / anchors.length),
+        h: null,
+        label: group.name || `Группа (${anchors.length})`,
+      };
+    }
+
     case "boundary_point": {
       const p = def.boundaryPolygon?.[sel.index];
       return p ? { x: p.x, z: p.z, h: null, label: `Граница · вершина #${sel.index + 1}` } : null;
@@ -317,6 +331,21 @@ export function moveSelected(
   rawZ: number,
   snapStep = 0
 ): CustomScenarioDef {
+  if (sel.kind === "group") {
+    const group = (def.groups ?? []).find((item) => item.id === sel.id);
+    if (!group) return def;
+    const anchor = getSelectionAnchor(def, sel);
+    if (!anchor) return def;
+    const targetX = snapCoord(rawX, snapStep);
+    const targetZ = snapCoord(rawZ, snapStep);
+    const dx = targetX - anchor.x;
+    const dz = targetZ - anchor.z;
+    return group.members.reduce((state, member) => {
+      const memberAnchor = getSelectionAnchor(state, member);
+      return memberAnchor ? moveSelected(state, member, memberAnchor.x + dx, memberAnchor.z + dz, snapStep) : state;
+    }, def);
+  }
+
   if (sel.kind === "boundary_point") {
     if (!def.boundaryPolygon || sel.index < 0 || sel.index >= def.boundaryPolygon.length) return def;
     const next = def.boundaryPolygon.map((p, i) => i === sel.index ? { x: round2(snapCoord(rawX, snapStep)), z: round2(snapCoord(rawZ, snapStep)) } : p);
@@ -708,6 +737,23 @@ export function deleteSelected(
   def: CustomScenarioDef,
   sel: EditorSelection
 ): { def: CustomScenarioDef; selection: EditorSelection | null } {
+  if (sel.kind === "group") {
+    const group = (def.groups ?? []).find((item) => item.id === sel.id);
+    if (!group) return { def, selection: null };
+    const members = new Set(group.members.map((member) => `${member.kind}:${member.id}`));
+    const next: CustomScenarioDef = {
+      ...def,
+      signs: (def.signs ?? []).filter((item) => !members.has(`sign:${item.id}`)),
+      signals: (def.signals ?? []).filter((item) => !members.has(`signal:${item.id}`)),
+      crosswalks: (def.crosswalks ?? []).filter((item) => !members.has(`crosswalk:${item.id}`)),
+      roads: (def.roads ?? []).filter((item) => !members.has(`road:${item.id}`)),
+      bays: def.bays.filter((item) => !members.has(`bay:${item.id}`)),
+      obstacles: def.obstacles.filter((item) => !members.has(`obstacle:${item.id}`)),
+      checkpoints: def.checkpoints.filter((item) => !members.has(`checkpoint:${item.id}`)),
+      groups: (def.groups ?? []).filter((item) => item.id !== sel.id),
+    };
+    return { def: next, selection: null };
+  }
   if (sel.kind === "start") return { def, selection: sel };
   if (sel.kind === "boundary_point") {
     if (!def.boundaryPolygon) return { def, selection: null };
