@@ -331,6 +331,44 @@ export function buildWorldRoadsAndSidewalks(
   const curbGeometryBatches = new Map<string, CurbGeometryBatch>();
   const curbTransform = new THREE.Object3D();
 
+  type BoxGeometryBatch = {
+    material: THREE.Material;
+    centerX: number;
+    centerZ: number;
+    geometries: THREE.BufferGeometry[];
+  };
+  const boxGeometryBatches = new Map<string, BoxGeometryBatch>();
+  const boxTransform = new THREE.Object3D();
+
+  const addBoxGeometry = (
+    material: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+    angle: number,
+    width: number,
+    height: number,
+    length: number
+  ) => {
+    const cellX = Math.floor(x / flatBatchCellSize);
+    const cellZ = Math.floor(z / flatBatchCellSize);
+    const centerX = (cellX + 0.5) * flatBatchCellSize;
+    const centerZ = (cellZ + 0.5) * flatBatchCellSize;
+    const key = `${material.uuid}|${cellX},${cellZ}`;
+    let batch = boxGeometryBatches.get(key);
+    if (!batch) {
+      batch = { material, centerX, centerZ, geometries: [] };
+      boxGeometryBatches.set(key, batch);
+    }
+    const geometry = new THREE.BoxGeometry(width, height, length);
+    geometry.clearGroups();
+    boxTransform.position.set(x - centerX, y, z - centerZ);
+    boxTransform.rotation.set(0, angle, 0);
+    boxTransform.scale.set(1, 1, 1);
+    boxTransform.updateMatrix();
+    batch.geometries.push(geometry.applyMatrix4(boxTransform.matrix));
+  };
+
   const addCurbGeometry = (
     material: THREE.Material,
     x: number,
@@ -530,10 +568,16 @@ export function buildWorldRoadsAndSidewalks(
               true
             );
             const backOff = swOff + side * (swW * 0.5 + 0.045);
-            const backRim = new THREE.Mesh(new THREE.BoxGeometry(0.09, swH, rLen), mats.concreteBaseMat);
-            backRim.rotation.y = angle;
-            backRim.position.set(bx + lx * backOff, swH * 0.5, bz + lz * backOff);
-            group.add(backRim);
+            addBoxGeometry(
+              mats.concreteBaseMat,
+              bx + lx * backOff,
+              swH * 0.5,
+              bz + lz * backOff,
+              angle,
+              0.09,
+              swH,
+              rLen
+            );
 
             // Бордюр БР 100.30.15: у перекрёстков и переходов — чёрно-белый ГОСТ, в середине квартала — бетонный
             const useBw = nearControlZone(bx, bz);
@@ -551,41 +595,40 @@ export function buildWorldRoadsAndSidewalks(
         }
       } else if (isBridge) {
         // 2б. Пролётное строение эстакады + металлическое барьерное ограждение 11ДО с катафотами КД-3
-        const deck = new THREE.Mesh(
-          new THREE.BoxGeometry(road.width + 0.9, 0.14, len),
-          mats.concreteBaseMat
-        );
-        deck.rotation.y = angle;
-        deck.position.set(mx, asphY - 0.075, mz);
-        group.add(deck);
+        addBoxGeometry(mats.concreteBaseMat, mx, asphY - 0.075, mz, angle, road.width + 0.9, 0.14, len);
 
         for (const side of [-1, 1]) {
           const gOff = side * (road.width * 0.5 + 0.24);
-          const beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.28, len), mats.galvPoleMat);
-          beam.rotation.y = angle;
-          beam.position.set(mx + lx * gOff, asphY + 0.56, mz + lz * gOff);
-          beam.castShadow = true;
-          group.add(beam);
+          addBoxGeometry(
+            mats.galvPoleMat,
+            mx + lx * gOff,
+            asphY + 0.56,
+            mz + lz * gOff,
+            angle,
+            0.12,
+            0.28,
+            len
+          );
 
           const postCount = Math.min(28, Math.max(2, Math.floor(len / 4) + 1));
           for (let pk = 0; pk < postCount; pk++) {
             const pd = postCount === 1 ? len * 0.5 : (pk / (postCount - 1)) * len;
             const px = p0.x + fx * pd + lx * gOff;
             const pz = p0.z + fz * pd + lz * gOff;
-            const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.72, 0.1), mats.galvPoleMat);
-            post.rotation.y = angle;
-            post.position.set(px, asphY + 0.36, pz);
-            group.add(post);
+            addBoxGeometry(mats.galvPoleMat, px, asphY + 0.36, pz, angle, 0.1, 0.72, 0.1);
 
             // Катафот КД-3: справа по ходу красный, слева белый (ГОСТ Р 52289)
             if (pk % 2 === 0) {
-              const refl = new THREE.Mesh(
-                new THREE.BoxGeometry(0.05, 0.1, 0.14),
-                side < 0 ? mats.reflRedMat : mats.reflWhiteMat
+              addBoxGeometry(
+                side < 0 ? mats.reflRedMat : mats.reflWhiteMat,
+                px - lx * side * 0.06,
+                asphY + 0.58,
+                pz - lz * side * 0.06,
+                angle,
+                0.05,
+                0.1,
+                0.14
               );
-              refl.rotation.y = angle;
-              refl.position.set(px - lx * side * 0.06, asphY + 0.58, pz - lz * side * 0.06);
-              group.add(refl);
             }
           }
         }
@@ -789,6 +832,33 @@ export function buildWorldRoadsAndSidewalks(
     mesh.position.set(batch.centerX, 0, batch.centerZ);
     mesh.receiveShadow = batch.receiveShadow;
     mesh.name = "road-flat-batch";
+    group.add(mesh);
+  }
+
+  for (const [key, batch] of boxGeometryBatches) {
+    const merged = batch.geometries.length === 1
+      ? batch.geometries[0]
+      : mergeGeometries(batch.geometries, false);
+    if (!merged) {
+      for (const geometry of batch.geometries) {
+        const mesh = new THREE.Mesh(geometry, batch.material);
+        mesh.position.set(batch.centerX, 0, batch.centerZ);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+      continue;
+    }
+    if (batch.geometries.length > 1) {
+      for (const geometry of batch.geometries) geometry.dispose();
+    }
+    const mesh = new THREE.Mesh(merged, batch.material);
+    mesh.position.set(batch.centerX, 0, batch.centerZ);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.name = `road-box-batch-${key.slice(key.lastIndexOf("|") + 1)}`;
+    mesh.userData.segmentCount = batch.geometries.length;
+    mesh.frustumCulled = true;
     group.add(mesh);
   }
 
