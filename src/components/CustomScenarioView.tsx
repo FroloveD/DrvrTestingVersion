@@ -26,6 +26,7 @@ import {
   importEditorFileText,
   validateCustomScenario,
   type CustomScenarioDef,
+  type EditorGroupMember,
 } from "../scenarios/custom";
 import {
   appendRoadPoint,
@@ -352,6 +353,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const mergeImportRef = useRef<HTMLInputElement | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
   const [selection, setSelection] = useState<EditorSelection | null>({ kind: "start" });
+  const [multiSelection, setMultiSelection] = useState<EditorSelection[]>([]);
   const [snapStep, setSnapStep] = useState<number>(0.5);
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [fitSignal, setFitSignal] = useState<number>(0);
@@ -507,11 +509,41 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   }, [commitChange, def, onNotify, selection]);
 
   const handleDelete = useCallback(() => {
+    if (multiSelection.length > 0) {
+      const next = multiSelection.reduce((state, item) => deleteSelected(state, item).def, def);
+      commitChange(next, def);
+      setMultiSelection([]); setSelection(null);
+      onNotify(`Удалено объектов: ${multiSelection.length}`);
+      return;
+    }
     if (!selection || selection.kind === "start") return;
     const res = deleteSelected(def, selection);
-    commitChange(res.def, def);
-    setSelection(res.selection);
-    onNotify("Объект удалён");
+    commitChange(res.def, def); setSelection(res.selection);
+    onNotify(selection.kind === "group" ? "Группа и входящие в неё объекты удалены" : "Объект удалён");
+  }, [commitChange, def, multiSelection, onNotify, selection]);
+
+  const handleGroupSelection = useCallback(() => {
+    const candidates = multiSelection.map((item) => primarySelection(item)).filter((item): item is EditorSelection => Boolean(item))
+      .filter((item): item is EditorGroupMember => item.kind === "sign" || item.kind === "signal" || item.kind === "crosswalk" || item.kind === "road" || item.kind === "bay" || item.kind === "obstacle" || item.kind === "checkpoint");
+    const unique = new Map(candidates.map((item) => [`${item.kind}:${item.id}`, item]));
+    if (unique.size < 2) { onNotify("Для группировки выделите минимум два объекта (Ctrl + клик)."); return; }
+    const absorbedIds = new Set((def.groups ?? []).filter((group) => group.members.some((member) => unique.has(`${member.kind}:${member.id}`))).map((group) => group.id));
+    const absorbedMembers = (def.groups ?? []).filter((group) => absorbedIds.has(group.id)).flatMap((group) => group.members);
+    const merged = new Map([...absorbedMembers, ...unique.values()].map((item) => [`${item.kind}:${item.id}`, item]));
+    const number = Math.max(0, ...(def.groups ?? []).map((group) => Number(group.id.replace(/^group-/, "")) || 0)) + 1;
+    const id = `group-${number}`;
+    const next: CustomScenarioDef = { ...def, groups: [...(def.groups ?? []).filter((group) => !absorbedIds.has(group.id)), { id, name: `Группа ${number}`, members: [...merged.values()] }] };
+    commitChange(next, def); setSelection({ kind: "group", id }); setMultiSelection([]);
+    onNotify(`Создана группа: ${merged.size} объектов. Группу можно перемещать и удалять целиком.`);
+  }, [commitChange, def, multiSelection, onNotify]);
+
+  const handleUngroup = useCallback(() => {
+    if (selection?.kind !== "group") return;
+    const group = (def.groups ?? []).find((item) => item.id === selection.id);
+    if (!group) return;
+    commitChange({ ...def, groups: (def.groups ?? []).filter((item) => item.id !== group.id) }, def);
+    setSelection(group.members[0] ?? null);
+    onNotify(`Группа «${group.name}» расформирована; объекты сохранены.`);
   }, [commitChange, def, onNotify, selection]);
 
   const handleDeleteArea = useCallback(() => {
@@ -1169,10 +1201,12 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             >
               ↷ Повтор
             </button>
+            {multiSelection.length >= 2 && <button type="button" className="btn btn-mini border-[#52d6bd]/50 text-[#8de7d5]" onClick={handleGroupSelection} data-testid="editor-group-selection">Сгруппировать ({multiSelection.length})</button>}
+            {selection?.kind === "group" && <button type="button" className="btn btn-mini" onClick={handleUngroup} data-testid="editor-ungroup-selection">Разгруппировать</button>}
             <button
               type="button"
               className="btn btn-mini"
-              disabled={!selection || selection.kind === "start"}
+              disabled={!selection || selection.kind === "start" || selection.kind === "group"}
               title="Дублировать выбранный объект (Ctrl+D)"
               onClick={handleDuplicate}
             >
@@ -1181,11 +1215,11 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
             <button
               type="button"
               className="btn btn-mini text-[#ff9494]"
-              disabled={!selection || selection.kind === "start"}
-              title="Удалить выбранный объект (Delete)"
+              disabled={(!selection || selection.kind === "start") && multiSelection.length === 0}
+              title="Удалить выбранный объект или несколько выделенных (Delete)"
               onClick={handleDelete}
             >
-              Удалить
+              {multiSelection.length > 0 ? `Удалить (${multiSelection.length})` : selection?.kind === "group" ? "Удалить группу" : "Удалить"}
             </button>
           </div>
         </div>
@@ -1438,6 +1472,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           def={def}
           areaSelection={areaSelection}
           onAreaSelection={setAreaSelection}
+          multiSelection={multiSelection}
+          onMultiSelection={setMultiSelection}
           tool={tool}
           selection={selection}
           snapStep={snapStep}
