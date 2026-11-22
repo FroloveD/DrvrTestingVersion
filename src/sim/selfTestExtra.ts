@@ -1613,4 +1613,46 @@ export const extraCases: SelfTestCase[] = [
     },
   },
 
+  {
+    id: "T48",
+    suite: "maps",
+    name: "OSM multipolygon building keeps visual footprint, courtyard and roof tags",
+    fn: () => {
+      const xml = `<osm version="0.6">
+        <node id="501" lat="55.7500" lon="37.6100"/>
+        <node id="502" lat="55.7500" lon="37.6105"/>
+        <node id="503" lat="55.7504" lon="37.6105"/>
+        <node id="504" lat="55.7504" lon="37.6100"/>
+        <node id="505" lat="55.7500" lon="37.6100"/>
+        <node id="511" lat="55.7501" lon="37.6101"/>
+        <node id="512" lat="55.7501" lon="37.6102"/>
+        <node id="513" lat="55.7503" lon="37.6102"/>
+        <node id="514" lat="55.7503" lon="37.6101"/>
+        <node id="515" lat="55.7501" lon="37.6101"/>
+        <way id="520"><nd ref="501"/><nd ref="502"/><nd ref="503"/><nd ref="504"/><nd ref="505"/></way>
+        <way id="521"><nd ref="511"/><nd ref="512"/><nd ref="513"/><nd ref="514"/><nd ref="515"/></way>
+        <relation id="530">
+          <member type="way" ref="520" role="outer"/>
+          <member type="way" ref="521" role="inner"/>
+          <tag k="type" v="multipolygon"/>
+          <tag k="building" v="yes"/>
+          <tag k="name" v="Дом с внутренним двором"/>
+          <tag k="height" v="8"/>
+          <tag k="roof:shape" v="hipped"/>
+          <tag k="roof:height" v="2.5"/>
+        </relation>
+      </osm>`;
+      const pack = parseOsmXml(xml, "Проверка геометрии здания");
+      const building = pack.buildings.find((item) => item.id === "rel-bld-530");
+      assert(Boolean(building), "Мультиполигон здания должен импортироваться одной collision-геометрией");
+      assert((building?.footprint?.length ?? 0) >= 4,
+        "Исходный внешний контур должен сохраниться отдельно от collision OBB");
+      assert((building?.footprintHoles?.length ?? 0) === 1,
+        "Внутренний двор multipolygon должен сохраниться в footprintHoles");
+      assert(building?.roofShape === "hipped" && building.roofHeight === 2.5,
+        "Теги roof:shape и roof:height должны пройти импорт без потери");
+      return "Внешний контур, внутренний двор, roof:shape и roof:height сохранены в ObstacleBox";
+    },
+  },
+
 ];
