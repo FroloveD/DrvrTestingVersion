@@ -21,6 +21,7 @@ import { carGeometry } from "../sim/vehicle";
 import {
   buildRealisticTree,
   buildOsmTreeInstances,
+  buildOsmBuildingFootprintBatches,
   buildTexturedBuilding,
   createCityEnvironmentPack,
   makeCloudySkyTexture,
@@ -866,7 +867,14 @@ export class SceneController {
       ? world.obstacles.filter((obs) => obs.kind === "building")
       : [];
     this.totalBuildingCount = osmBuildings.length;
-    this.useInstancedBuildings = osmBuildings.length >= 250;
+    // OSM-контуры рисуются как extruded polygons с отверстиями; collision OBB остаются в WorldData.
+    const renderedFootprintIds = buildOsmBuildingFootprintBatches(
+      this.worldGroup,
+      osmBuildings,
+      cityEnv
+    );
+    const osmBuildingFallbacks = osmBuildings.filter((obs) => !renderedFootprintIds.has(obs.id));
+    this.useInstancedBuildings = osmBuildingFallbacks.length >= 250;
     if (this.useInstancedBuildings) {
       const cells = new Map<string, ObstacleBox[]>();
       for (const obs of osmBuildings) {
@@ -1068,6 +1076,8 @@ export class SceneController {
     }
 
     if (obs.kind === "building") {
+      // Геометрия этого здания уже включена в spatial batch исходных OSM-контуров.
+      if (obs.footprint && world.scenarioId === "city_osm") return;
       if (this.useInstancedBuildings) {
         const gx = Math.floor(obs.cx / 96);
         const gz = Math.floor(obs.cz / 96);
