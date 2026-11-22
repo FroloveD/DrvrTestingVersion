@@ -1599,15 +1599,15 @@ export const extraCases: SelfTestCase[] = [
       </osm>`;
       const pack = parseOsmXml(xml, "Проверка контуров зданий");
       const building = pack.buildings.find((item) => item.id === "rel-bld-413");
-      assert(Boolean(building), "Мультиполигон здания должен импортироваться");
-      assert((building?.footprint?.length ?? 0) === 6,
+      if (!building) throw new Error("Мультиполигон здания должен импортироваться");
+      assert((building.footprint?.length ?? 0) === 6,
         "Исходный вогнутый внешний контур должен сохраняться без преобразования в OBB");
-      assert((building?.footprintHoles?.length ?? 0) === 1 &&
-        (building?.footprintHoles?.[0]?.length ?? 0) === 4,
+      assert((building.footprintHoles?.length ?? 0) === 1 &&
+        (building.footprintHoles?.[0]?.length ?? 0) === 4,
         "Внутренний двор multipolygon должен сохраняться отдельным кольцом");
-      assert(building?.roofShape === "hipped" && building?.roofHeight === 2.5,
+      assert(building.roofShape === "hipped" && building.roofHeight === 2.5,
         "Теги roof:shape и roof:height должны сохраняться в данных здания");
-      assert(building?.height === 18 && building.halfX > 0 && building.halfZ > 0,
+      assert(building.height === 18 && building.halfX > 0 && building.halfZ > 0,
         "Collision OBB должен остаться доступным независимо от исходной визуальной геометрии");
       return "Вогнутый footprint, внутренний двор, параметры крыши и collision OBB сохранены раздельно";
     },
