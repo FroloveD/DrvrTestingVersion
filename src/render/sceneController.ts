@@ -1133,6 +1133,7 @@ export class SceneController {
         return;
       }
       const bld = buildTexturedBuilding(obs, cityEnv);
+      bld.userData.mirrorCategory = "building";
       this.worldGroup.add(bld);
       this.buildingMeshes.push(bld);
       return;
