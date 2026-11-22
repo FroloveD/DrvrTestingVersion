@@ -18,6 +18,7 @@ import {
   primarySelection,
   setSelectedHeading,
   snapCoord,
+  type EditorArea,
   type EditorSelection,
   type EditorTool,
   type PlaceOptions,
@@ -81,6 +82,14 @@ type DragState =
       before: CustomScenarioDef;
     }
   | {
+      mode: "delete_area";
+      startX: number;
+      startZ: number;
+      currentX: number;
+      currentZ: number;
+      moved: boolean;
+    }
+  | {
       mode: "pan";
       startClientX: number;
       startClientY: number;
@@ -102,6 +111,8 @@ type Props = {
   fitSignal: number;
   /** Счётчик внешнего запроса центрирования карты на выбранном объекте. */
   focusSignal: number;
+  areaSelection: EditorArea | null;
+  onAreaSelection: (area: EditorArea | null) => void;
   onSelect: (sel: EditorSelection | null) => void;
   /** Плавное обновление во время перетаскивания (без записи каждого кадра в историю). */
   onLiveChange: (next: CustomScenarioDef) => void;
@@ -237,6 +248,7 @@ const TOOL_HINTS: Record<EditorTool, string> = {
   select: "Площадка: перетаскивание — перенос, угловые ручки — размер · объекты — перенос · пустое место — панорама",
   boundary: "Кликайте, чтобы построить контур площадки; Enter или двойной клик — завершить, Esc — отменить",
   pan: "Зажмите кнопку мыши (или палец) и перетаскивайте карту · колесо — масштаб",
+  delete_area: "Зажмите левую кнопку и выделите прямоугольную область. Затем удалите отмеченные объекты кнопкой над картой",
   start: "Кликните по карте, чтобы перенести стартовую позицию автомобиля",
   sign: "Кликните по карте, чтобы установить выбранный дорожный знак (затем можно сразу перетащить)",
   signal: "Кликните по карте, чтобы поставить светофор со стоп-линией 1.12",
@@ -256,6 +268,8 @@ export function MapCanvasEditor({
   placeOptions,
   fitSignal,
   focusSignal,
+  areaSelection,
+  onAreaSelection,
   onSelect,
   onLiveChange,
   onCommitChange,
@@ -270,6 +284,7 @@ export function MapCanvasEditor({
   const [cursor, setCursor] = useState<{ x: number; z: number } | null>(null);
   const [lotSelected, setLotSelected] = useState(false);
   const [roadDraftPoints, setRoadDraftPoints] = useState<Array<{ x: number; z: number }>>([]);
+  const [areaDraft, setAreaDraft] = useState<EditorArea | null>(null);
 
   useEffect(() => {
     setVb(computeFitViewBox(def.bounds));
@@ -487,6 +502,16 @@ export function MapCanvasEditor({
 
     if (e.button !== 0) return;
 
+    if (tool === "delete_area") {
+      e.preventDefault();
+      onSelect(null);
+      onAreaSelection(null);
+      setAreaDraft({ minX: pt.x, maxX: pt.x, minZ: pt.z, maxZ: pt.z });
+      svgRef.current?.setPointerCapture?.(e.pointerId);
+      dragRef.current = { mode: "delete_area", startX: pt.x, startZ: pt.z, currentX: pt.x, currentZ: pt.z, moved: false };
+      return;
+    }
+
     if (tool === "boundary") {
       const bx = snapStep > 0 ? snapCoord(pt.x, snapStep) : Number(pt.x.toFixed(2));
       const bz = snapStep > 0 ? snapCoord(pt.z, snapStep) : Number(pt.z.toFixed(2));
@@ -541,6 +566,15 @@ export function MapCanvasEditor({
 
     const drag = dragRef.current;
     if (!drag) return;
+
+    if (drag.mode === "delete_area") {
+      const next = { minX: Math.min(drag.startX, pt.x), maxX: Math.max(drag.startX, pt.x), minZ: Math.min(drag.startZ, pt.z), maxZ: Math.max(drag.startZ, pt.z) };
+      drag.currentX = pt.x;
+      drag.currentZ = pt.z;
+      drag.moved = Math.hypot(pt.x - drag.startX, pt.z - drag.startZ) >= 0.5;
+      setAreaDraft(next);
+      return;
+    }
 
     if (drag.mode === "pan") {
       const svg = svgRef.current;
@@ -625,6 +659,11 @@ export function MapCanvasEditor({
       }
     } catch {
       // указатель уже освобождён
+    }
+    if (drag?.mode === "delete_area") {
+      const area = { minX: Math.min(drag.startX, drag.currentX), maxX: Math.max(drag.startX, drag.currentX), minZ: Math.min(drag.startZ, drag.currentZ), maxZ: Math.max(drag.startZ, drag.currentZ) };
+      setAreaDraft(null);
+      if (drag.moved) onAreaSelection(area);
     }
     if (drag && (drag.mode === "move" || drag.mode === "rotate" || drag.mode === "lot_move" || drag.mode === "lot_resize") && drag.moved) {
       onCommitChange(defRef.current, drag.before);
@@ -843,6 +882,8 @@ export function MapCanvasEditor({
               {roadDraftPoints.map((p, i) => <circle key={i} cx={-p.x} cy={-p.z} r={Math.max(0.55, signUnit * 0.55)} fill="#52d6bd" stroke="#0b1118" strokeWidth={thin} />)}
             </g>
           )}
+
+          {(areaSelection || areaDraft) && (() => { const area = areaDraft ?? areaSelection!; return <rect data-testid="map-delete-area" x={-area.maxX} y={-area.maxZ} width={Math.max(0.05, area.maxX-area.minX)} height={Math.max(0.05, area.maxZ-area.minZ)} fill="rgba(248,113,113,0.16)" stroke="#f87171" strokeWidth={Math.max(0.25, thin*2)} strokeDasharray={`${scale*0.9} ${scale*0.55}`} pointerEvents="none" />; })()}
 
           {boundaryPoly && <g data-testid="map-boundary-overlay"><polygon points={boundaryPoly.map(p => `${-p.x},${-p.z}`).join(" ")} fill="none" stroke={boundaryValid ? "#f5b942" : "#ff6b6b"} strokeDasharray={`${scale} ${scale*0.6}`} strokeWidth={Math.max(0.24,thin*1.8)} />{boundaryPoly.map((p,i)=><circle key={i} cx={-p.x} cy={-p.z} r={Math.max(0.5,signUnit*0.45)} fill="#f5b942" stroke="#071018" strokeWidth={thin} className="cursor-move" onPointerDown={e=>beginObjectDrag(e,{kind:"boundary_point",index:i})} />)}</g>}
           {tool === "boundary" && draftBoundary.length > 0 && <polyline points={draftBoundary.map(p=>`${-p.x},${-p.z}`).join(" ")} fill="none" stroke="#52d6bd" strokeWidth={Math.max(0.25,thin*2)} strokeDasharray={`${scale} ${scale*0.5}`} />}
