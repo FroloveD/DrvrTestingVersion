@@ -807,6 +807,30 @@ export function deleteSelected(
 }
 
 /**
+/** Удаляет из групп ссылки на отсутствующие объекты; группы менее чем из двух объектов расформировываются. */
+export function normalizeEditorGroups(def: CustomScenarioDef): CustomScenarioDef {
+  if (!def.groups?.length) return def;
+  const exists = (member: EditorGroupMember): boolean => {
+    switch (member.kind) {
+      case "sign": return (def.signs ?? []).some((item) => item.id === member.id);
+      case "signal": return (def.signals ?? []).some((item) => item.id === member.id);
+      case "crosswalk": return (def.crosswalks ?? []).some((item) => item.id === member.id);
+      case "road": return (def.roads ?? []).some((item) => item.id === member.id);
+      case "bay": return def.bays.some((item) => item.id === member.id);
+      case "obstacle": return def.obstacles.some((item) => item.id === member.id);
+      case "checkpoint": return def.checkpoints.some((item) => item.id === member.id);
+    }
+  };
+  const groups = def.groups.map((group) => ({
+    ...group,
+    members: [...new Map(group.members.filter(exists).map((member) => [`${member.kind}:${member.id}`, member])).values()],
+  })).filter((group) => group.members.length >= 2);
+  const unchanged = groups.length === def.groups.length && groups.every((group, index) =>
+    group.members.length === def.groups![index].members.length
+  );
+  return unchanged ? def : { ...def, groups };
+}
+
  * Удаляет редактируемые объекты, пересекающие прямоугольную область.
  * Для точечных объектов проверяется опорная точка; для дорог — пересечение
  * любого сегмента полилинии с областью. Старт и граница мира защищены.
