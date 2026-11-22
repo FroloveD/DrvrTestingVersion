@@ -416,7 +416,8 @@ export function MapCanvasEditor({
     e.stopPropagation();
     const pt = clientToWorld(e.clientX, e.clientY);
     if (e.ctrlKey || e.metaKey) {
-      onMultiSelection((prev => prev)(multiSelection).some((item) => item.kind === target.kind && "id" in item && "id" in target && item.id === target.id)
+      const exists = multiSelection.some((item) => item.kind === target.kind && "id" in item && "id" in target && item.id === target.id);
+      onMultiSelection(exists
         ? multiSelection.filter((item) => !(item.kind === target.kind && "id" in item && "id" in target && item.id === target.id))
         : [...multiSelection, target]);
       onSelect(null);
