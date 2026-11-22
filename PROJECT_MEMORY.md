@@ -83,7 +83,7 @@
 
 ### Последняя точка остановки
 - Исправление Q8 внесено в `tests/browser-smoke.mjs`; журнал изменений — `WORKLOG.md`.
-- Последний записанный HEAD в текущем цикле: `7ff87faa58a01685d9063d1e2e17b155367c8402` (22.11.2026), включает удаление лимита 650 зданий, culling footprint-батчей и T47/T48. Локальный checkout недоступен из-за DNS при `git clone`; TypeScript, core/docs/offline gate, Browser Smoke A–S и Deploy не подтверждены. Актуальные статусы необходимо перепроверить по GitHub Actions.
+- Последний записанный HEAD в текущем цикле: `3bd164d1e78db58a02d71a24058f7881cea20cf7` (22.11.2026), включает удаление лимита 650 зданий, culling footprint-батчей и T47/T48. Локальный checkout недоступен из-за DNS при `git clone`; TypeScript, core/docs/offline gate, Browser Smoke A–S и Deploy не подтверждены. Актуальные статусы необходимо перепроверить по GitHub Actions.
 - Текущая опубликованная страница проекта: https://froloved.github.io/DrvrTestingVersion/arena/.
 
 ## 7. Ближайшие действия
