@@ -255,7 +255,10 @@ export function normalizeCustomScenario(raw: Partial<CustomScenarioDef>): Custom
       id: typeof group.id === "string" ? group.id : `group-${index + 1}`,
       name: typeof group.name === "string" ? group.name : `Группа ${index + 1}`,
       members: Array.isArray(group.members) ? group.members.filter((member) =>
-        member && typeof member.id === "string" || member && member.kind === "bay" && Number.isFinite(member.id)
+        member && (
+          (member.kind === "bay" && Number.isFinite(member.id)) ||
+          (["sign", "signal", "crosswalk", "road", "obstacle", "checkpoint"].includes(member.kind) && typeof member.id === "string")
+        )
       ).map((member) => ({ ...member })) : [],
     })).filter((group) => group.members.length >= 2) : [],
     mapMeta: raw.mapMeta ? { ...raw.mapMeta, bbox: [...raw.mapMeta.bbox] as [number, number, number, number] } : undefined,
