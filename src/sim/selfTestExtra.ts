@@ -46,10 +46,12 @@ import {
   setCustomBoundaryPolygon,
   attachCheckpointToSign,
   createEditorHistory,
+  deleteObjectsInArea,
   deleteSelected,
   duplicateSelected,
   fitBoundsToContent,
   moveSelected,
+  normalizeEditorGroups,
   placeObjectAt,
   pushEditorHistory,
   redoEditorHistory,
@@ -1654,5 +1656,45 @@ export const extraCases: SelfTestCase[] = [
       return "Внешний контур, внутренний двор, roof:shape и roof:height сохранены в ObstacleBox";
     },
   },
+
+  {
+    id: "T50",
+    suite: "editor",
+    name: "Area deletion and persistent groups support multi-object movement and removal",
+    fn: () => {
+      const base = emptyCustomScenario();
+      const grouped = normalizeCustomScenario({
+        ...base,
+        checkpoints: [
+          ...base.checkpoints,
+          { ...base.checkpoints[0], id: "cp-group-2", x: 10, z: 10 },
+        ],
+        groups: [{
+          id: "group-1",
+          name: "Группа 1",
+          members: [
+            { kind: "checkpoint", id: "cp-custom-1" },
+            { kind: "checkpoint", id: "cp-group-2" },
+          ],
+        }],
+      });
+      assert(grouped.groups?.length === 1 && grouped.groups[0].members.length === 2,
+        "Группа и её состав должны сохраняться при нормализации сценария");
+      const moved = moveSelected(grouped, { kind: "group", id: "group-1" }, 7, 12, 0);
+      assert(moved.checkpoints[0].x === 2 && moved.checkpoints[0].z === 12 &&
+        moved.checkpoints[1].x === 12 && moved.checkpoints[1].z === 12,
+        "Перемещение группы должно сохранять взаимное расположение объектов");
+      const deleted = deleteSelected(moved, { kind: "group", id: "group-1" });
+      assert(deleted.def.checkpoints.length === 0 && deleted.def.groups?.length === 0,
+        "Удаление группы должно удалить все её объекты и саму группу");
+      const area = deleteObjectsInArea(grouped, { minX: -1, minZ: 9, maxX: 1, maxZ: 11 });
+      const cleaned = normalizeEditorGroups(area.def);
+      assert(area.removed.checkpoints === 1 && cleaned.checkpoints.length === 1 &&
+        (cleaned.groups?.length ?? 0) === 0,
+        "Удаление в области должно удалять попавшую КТ и расформировывать группу с одним остатком");
+      return "Группа сохраняется, перемещается и удаляется целиком; удаление области очищает состав групп";
+    },
+  },
+
 
 ];
