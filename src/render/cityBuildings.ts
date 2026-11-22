@@ -235,10 +235,14 @@ function buildOsmRoofGeometry(
   }
   base.dispose();
 
-  const minX = Math.min(...points.map((p) => p[0]));
-  const maxX = Math.max(...points.map((p) => p[0]));
-  const minY = Math.min(...points.map((p) => p[1]));
-  const maxY = Math.max(...points.map((p) => p[1]));
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of points) {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null;
   const spanX = Math.max(0.01, maxX - minX);
   const spanY = Math.max(0.01, maxY - minY);
   const longAlongX = spanX >= spanY;
@@ -349,9 +353,14 @@ export function buildOsmBuildingFootprintBatches(
     const centerX = (Math.floor(building.cx / cellSize) + 0.5) * cellSize;
     const centerZ = (Math.floor(building.cz / cellSize) + 0.5) * cellSize;
     geometry.translate(-centerX, 0, -centerZ);
-    const roofGeometry = buildOsmRoofGeometry(
-      shape, building.roofShape, building.roofHeight, height, centerX, centerZ
-    );
+    let roofGeometry: THREE.BufferGeometry | null = null;
+    try {
+      roofGeometry = buildOsmRoofGeometry(
+        shape, building.roofShape, building.roofHeight, height, centerX, centerZ
+      );
+    } catch {
+      // Ошибка построения скатной поверхности не должна убирать само здание.
+    }
     const key = `${Math.floor(building.cx / cellSize)},${Math.floor(building.cz / cellSize)}`;
     const bucket = cells.get(key) ?? [];
     bucket.push(geometry);
