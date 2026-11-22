@@ -583,6 +583,7 @@ export function MapCanvasEditor({
     if (!drag) return;
 
     if (drag.mode === "delete_area") {
+      if (!pt) return;
       const next = { minX: Math.min(drag.startX, pt.x), maxX: Math.max(drag.startX, pt.x), minZ: Math.min(drag.startZ, pt.z), maxZ: Math.max(drag.startZ, pt.z) };
       drag.currentX = pt.x;
       drag.currentZ = pt.z;
