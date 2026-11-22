@@ -1680,6 +1680,13 @@ export const extraCases: SelfTestCase[] = [
       });
       assert(grouped.groups?.length === 1 && grouped.groups[0].members.length === 2,
         "Группа и её состав должны сохраняться при нормализации сценария");
+      const rotated = rotateSelected(grouped, { kind: "group", id: "group-1" }, Math.PI / 2);
+      const rotatedDistance = Math.hypot(
+        rotated.checkpoints[1].x - rotated.checkpoints[0].x,
+        rotated.checkpoints[1].z - rotated.checkpoints[0].z
+      );
+      assert(Math.abs(rotatedDistance - 10) < 0.01,
+        "Поворот группы должен сохранять расстояние между объектами");
       const moved = moveSelected(grouped, { kind: "group", id: "group-1" }, 7, 12, 0);
       assert(moved.checkpoints[0].x === 2 && moved.checkpoints[0].z === 12 &&
         moved.checkpoints[1].x === 12 && moved.checkpoints[1].z === 12,
