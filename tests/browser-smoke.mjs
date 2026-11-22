@@ -1735,7 +1735,9 @@ try {
     await scorePanel.click({ position: { x: 70, y: 12 } });
     const scoreFront = await until(async () => await scorePanel.evaluate((el) => el.style.zIndex), 3000, 50);
     const clusterBehind = await cluster.evaluate((el) => el.style.zIndex);
-    await cluster.click({ position: { x: 18, y: 12 } });
+    // Кнопка «Окна HUD» остаётся поверх левой части экрана даже в закрытом состоянии.
+    // Для проверки z-order нажимаем на свободную текстовую область заголовка панели приборов.
+    await cluster.click({ position: { x: 70, y: 12 } });
     const clusterFront = await until(async () => await cluster.evaluate((el) => el.style.zIndex), 3000, 50);
     check("Q8 активная HUD-панель поднимается над соседними окнами",
       scoreFront === "250" && clusterBehind !== "250" && clusterFront === "250",

@@ -962,6 +962,35 @@ export const extraCases: SelfTestCase[] = [
       }], { x: 0, z: 60 }, { x: 0, z: 58 }, 10);
       assert(!shortReverse.connected && Boolean(shortReverse.wrongWay),
         "Даже короткий путь против one-way на одном длинном сегменте должен блокироваться");
+
+      const longDetour = findRoadNetworkPath([
+        {
+          id: "detour-start",
+          points: [{ x: 0, z: -10 }, { x: 0, z: 0 }],
+          width: 8, lanes: 1, highway: "residential", oneway: true,
+        },
+        {
+          id: "detour-end",
+          points: [{ x: 100, z: 0 }, { x: 100, z: 10 }],
+          width: 8, lanes: 1, highway: "residential", oneway: true,
+        },
+        {
+          id: "long-oneway-detour",
+          points: [
+            { x: 0, z: 0 },
+            { x: 0, z: 500 },
+            { x: 500, z: 500 },
+            { x: 500, z: -500 },
+            { x: 100, z: -500 },
+            { x: 100, z: 0 },
+          ],
+          width: 8, lanes: 1, highway: "residential", oneway: true,
+        },
+      ], { x: 0, z: -5 }, { x: 100, z: 5 }, 10);
+      assert(longDetour.connected,
+        `Связный односторонний объезд не должен становиться разрывом сети: ${longDetour.lengthM} м`);
+      assert(longDetour.lengthM > 2500,
+        `Ожидался реальный длинный объезд (>2500 м), получено ${longDetour.lengthM} м`);
       assert(record.checkpoints.length >= 2 && record.checkpoints[record.checkpoints.length - 1]?.requireStop === true,
         "Нужны промежуточные КТ и финальная КТ с остановкой");
       assert(record.scenarioSnapshot.mapMeta?.attribution === "© OpenStreetMap contributors",

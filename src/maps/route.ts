@@ -881,13 +881,13 @@ export function findRoadNetworkPath(
   };
 
   const heuristic = (id: number) => Math.hypot(nodes[id].x - nodes[dst].x, nodes[id].z - nodes[dst].z);
-  const maxPathCost = directLen * 6 + 400;
+  // Законный односторонний объезд может быть во много раз длиннее прямой дистанции.
+  // Не вводим искусственный предел стоимости: A* завершится при извлечении dst либо исчерпании связной компоненты.
   pushHeap({ id: src, g: 0, f: heuristic(src) });
   while (heap.length > 0) {
     const current = popHeap()!;
     const u = current.id;
     if (closed[u] || current.g !== dist[u]) continue;
-    if (current.g > maxPathCost) continue;
     closed[u] = 1;
     if (u === dst) break;
     for (const edge of adj[u]) {
