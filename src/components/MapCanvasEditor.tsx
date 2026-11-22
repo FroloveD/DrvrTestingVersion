@@ -247,7 +247,7 @@ function SignGlyph({ sign, unit, selected }: { sign: RoadSignDef; unit: number; 
 }
 
 const TOOL_HINTS: Record<EditorTool, string> = {
-  select: "Площадка: перетаскивание — перенос · объекты — перенос · Ctrl+клик — мультивыбор · пустое место — панорама",
+  select: "Площадка: перетаскивание — перенос · объекты — перенос · Ctrl/Shift+клик — мультивыбор · пустое место — панорама",
   boundary: "Кликайте, чтобы построить контур площадки; Enter или двойной клик — завершить, Esc — отменить",
   pan: "Зажмите кнопку мыши (или палец) и перетаскивайте карту · колесо — масштаб",
   delete_area: "Зажмите левую кнопку и выделите прямоугольную область. Затем удалите отмеченные объекты кнопкой над картой",
@@ -415,7 +415,7 @@ export function MapCanvasEditor({
     if (tool !== "select" && !(tool === "boundary" && target.kind === "boundary_point")) return;
     e.stopPropagation();
     const pt = clientToWorld(e.clientX, e.clientY);
-    if (e.ctrlKey || e.metaKey) {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
       const exists = multiSelection.some((item) => item.kind === target.kind && "id" in item && "id" in target && item.id === target.id);
       onMultiSelection(exists
         ? multiSelection.filter((item) => !(item.kind === target.kind && "id" in item && "id" in target && item.id === target.id))
