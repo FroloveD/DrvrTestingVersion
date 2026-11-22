@@ -184,14 +184,22 @@ export function buildTexturedBuilding(obs: ObstacleBox, env: CityEnvironmentPack
  * Shape/ExtrudeGeometry сохраняют вогнутые контуры и внутренние дворы. Некорректный полигон
  * пропускается и остаётся доступен старому OBB-рендеру как безопасный fallback.
  */
+export type OsmBuildingFootprintBatchResult = {
+  renderedIds: Set<string>;
+  meshes: THREE.Mesh[];
+};
+
+/** Результат содержит meshes по ячейкам: SceneController может отсекать дальние батчи целиком. */
 export function buildOsmBuildingFootprintBatches(
   group: THREE.Group,
   buildings: readonly ObstacleBox[],
   env: CityEnvironmentPack
-): Set<string> {
+): OsmBuildingFootprintBatchResult {
   const cellSize = 96;
   const cells = new Map<string, THREE.BufferGeometry[]>();
+  const cellBuildingCounts = new Map<string, number>();
   const renderedIds = new Set<string>();
+  const meshes: THREE.Mesh[] = [];
   const facade = env.facadeMat;
   const roof = env.roofMat;
 
@@ -243,6 +251,7 @@ export function buildOsmBuildingFootprintBatches(
     const bucket = cells.get(key) ?? [];
     bucket.push(geometry);
     cells.set(key, bucket);
+    cellBuildingCounts.set(key, (cellBuildingCounts.get(key) ?? 0) + 1);
     renderedIds.add(building.id);
   }
 
@@ -260,9 +269,12 @@ export function buildOsmBuildingFootprintBatches(
     mesh.receiveShadow = true;
     mesh.frustumCulled = true;
     mesh.name = `osm-building-footprints-${key}`;
+    // Положение меша — центр spatial cell; количество зданий нужно для точной метрики видимости.
+    mesh.userData.buildingCount = cellBuildingCounts.get(key) ?? 0;
     group.add(mesh);
+    meshes.push(mesh);
   }
-  return renderedIds;
+  return { renderedIds, meshes };
 }
 
 /**
