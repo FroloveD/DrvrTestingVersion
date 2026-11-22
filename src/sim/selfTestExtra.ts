@@ -1434,7 +1434,7 @@ export const extraCases: SelfTestCase[] = [
   {
     id: "T46",
     suite: "maps",
-    name: "OSM layer: импорт bridge/tunnel, разделение уровней и соединение рампы",
+    name: "OSM layer: bridge/tunnel/building_passage, разделение уровней и соединение рампы",
     fn: () => {
       // Проверяем полный путь импорта: XML-теги bridge/tunnel должны перейти в RoadSegment.layer
       // и сохраниться при преобразовании пакета в сценарий редактора и WorldData.
@@ -1444,6 +1444,8 @@ export const extraCases: SelfTestCase[] = [
   <node id="302" lat="55.7510" lon="37.6100"/>
   <node id="303" lat="55.7500" lon="37.6120"/>
   <node id="304" lat="55.7510" lon="37.6120"/>
+  <node id="305" lat="55.7520" lon="37.6100"/>
+  <node id="306" lat="55.7530" lon="37.6100"/>
   <way id="310">
     <nd ref="301"/><nd ref="302"/>
     <tag k="highway" v="secondary"/>
@@ -1456,18 +1458,29 @@ export const extraCases: SelfTestCase[] = [
     <tag k="name" v="Тестовый тоннель"/>
     <tag k="tunnel" v="yes"/>
   </way>
+  <way id="312">
+    <nd ref="305"/><nd ref="306"/>
+    <tag k="highway" v="service"/>
+    <tag k="name" v="Проезд через здание"/>
+    <tag k="tunnel" v="building_passage"/>
+  </way>
 </osm>`;
       const importedPack = parseOsmXml(levelXml, "Проверка уровней OSM");
       const importedBridge = importedPack.roads.find((road) => road.name === "Тестовый мост");
       const importedTunnel = importedPack.roads.find((road) => road.name === "Тестовый тоннель");
+      const importedBuildingPassage = importedPack.roads.find((road) => road.name === "Проезд через здание");
       assert(importedBridge?.layer === 1, "bridge=yes должен импортироваться как layer=1");
       assert(importedTunnel?.layer === -1, "tunnel=yes должен импортироваться как layer=-1");
+      assert(importedBuildingPassage?.layer === 0,
+        "tunnel=building_passage должен сохранять наземный layer=0");
 
       const importedWorld = buildCustomWorld(customFromOsmPack(importedPack));
       assert(importedWorld.roads.find((road) => road.name === "Тестовый мост")?.layer === 1,
         "Сборка сценария не должна терять уровень моста");
       assert(importedWorld.roads.find((road) => road.name === "Тестовый тоннель")?.layer === -1,
         "Сборка сценария не должна терять уровень тоннеля");
+      assert(importedWorld.roads.find((road) => road.name === "Проезд через здание")?.layer === 0,
+        "Сборка сценария не должна превращать наземный building_passage в тоннель");
 
       const groundRoad = {
         ...createDefaultRoad("grade-ground", 0, 0, 0),
@@ -1513,7 +1526,7 @@ export const extraCases: SelfTestCase[] = [
       assert(rampJoin.connected,
         "Общие концевые точки съезда и дороги должны соединяться даже при смене layer");
 
-      return "bridge=yes → layer=1; tunnel=yes → layer=-1; уровни не смешиваются на пересечении; рампа стыкуется по общей концевой точке";
+      return "bridge=yes → layer=1; tunnel=yes → layer=-1; building_passage остаётся на layer=0; уровни не смешиваются на пересечении; рампа стыкуется по общей концевой точке";
     },
   },
 
