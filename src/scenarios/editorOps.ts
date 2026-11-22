@@ -833,6 +833,7 @@ export function normalizeEditorGroups(def: CustomScenarioDef): CustomScenarioDef
   return unchanged ? def : { ...def, groups };
 }
 
+/**
  * Удаляет редактируемые объекты, пересекающие прямоугольную область.
  * Для точечных объектов проверяется опорная точка; для дорог — пересечение
  * любого сегмента полилинии с областью. Старт и граница мира защищены.
