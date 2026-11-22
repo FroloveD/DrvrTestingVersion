@@ -251,6 +251,13 @@ export function normalizeCustomScenario(raw: Partial<CustomScenarioDef>): Custom
     signals: Array.isArray(raw.signals) ? raw.signals.map((s) => ({ ...s })) : [],
     crosswalks: Array.isArray(raw.crosswalks) ? raw.crosswalks.map((c) => ({ ...c })) : [],
     checkpoints: Array.isArray(raw.checkpoints) ? raw.checkpoints.map((c) => ({ ...c })) : [],
+    groups: Array.isArray(raw.groups) ? raw.groups.map((group, index) => ({
+      id: typeof group.id === "string" ? group.id : `group-${index + 1}`,
+      name: typeof group.name === "string" ? group.name : `Группа ${index + 1}`,
+      members: Array.isArray(group.members) ? group.members.filter((member) =>
+        member && typeof member.id === "string" || member && member.kind === "bay" && Number.isFinite(member.id)
+      ).map((member) => ({ ...member })) : [],
+    })).filter((group) => group.members.length >= 2) : [],
     mapMeta: raw.mapMeta ? { ...raw.mapMeta, bbox: [...raw.mapMeta.bbox] as [number, number, number, number] } : undefined,
     boundaryPolygon: Array.isArray(raw.boundaryPolygon) ? sanitizeBoundaryPolygon(raw.boundaryPolygon) : undefined,
     perimeterCurb: Boolean(raw.perimeterCurb) || undefined,
