@@ -207,6 +207,7 @@ export class SceneController {
   // никогда не попадают в заднее зеркало (96 строк). Буферы переиспользуются, без аллокаций на кадр.
   private readonly mirrorFrames = new WeakMap<HTMLCanvasElement, { ctx: CanvasRenderingContext2D; image: ImageData }>();
   private readonly mirrorLookTarget = new THREE.Vector3();
+  private readonly mirrorCullEntries: Array<{ root: THREE.Object3D; x: number; z: number; category: "road" | "building" | "small" | "car" }> = [];
   /**
    * Three.js рендерит в offscreen-таргет в линейном пространстве и без tone mapping
    * (WebGLRenderer отключает ACES для render target). Без этой конверсии readback
@@ -398,10 +399,10 @@ export class SceneController {
     this.rearRT = new THREE.WebGLRenderTarget(320, 96, { depthBuffer: true });
     // Зеркалам не нужна дальность основной камеры: ограничиваем сцену ради FPS.
     // 85 м сохраняют ближайшие перекрёстки и транспорт, но отсекают дальний городской фон.
-    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 85);
+    this.rearCam = new THREE.PerspectiveCamera(38, 320 / 96, 0.06, 220);
     this.rearBuf = new Uint8Array(320 * 96 * 4);
     this.sideRT = new THREE.WebGLRenderTarget(320, 160, { depthBuffer: true });
-    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 85);
+    this.sideCam = new THREE.PerspectiveCamera(44, 320 / 160, 0.06, 220);
     this.sideBuf = new Uint8Array(320 * 160 * 4);
     this.sideCam.layers.enable(PLAYER_EXTERIOR_LAYER);
 
@@ -678,6 +679,7 @@ export class SceneController {
     this.lastTrajectorySteer = Number.NaN;
     this.lastTrajectoryReverse = null;
     this.disposeGroup(this.worldGroup);
+    this.mirrorCullEntries.length = 0;
     this.buildingMeshes.length = 0;
     this.buildingBatches.clear();
     this.useInstancedBuildings = false;
@@ -803,7 +805,11 @@ export class SceneController {
     }
 
     // Дороги, следы наката, объёмные тротуары с плиткой, ГОСТ-бордюры БР 100.30.15, эстакады 11ДО, люки и разметка ГОСТ Р 51256
+    const roadChildrenStart = new Set(this.worldGroup.children);
     buildWorldRoadsAndSidewalks(this.worldGroup, world, roadMats);
+    for (const child of this.worldGroup.children) {
+      if (!roadChildrenStart.has(child)) child.userData.mirrorCategory = "road";
+    }
 
     // Парковочные боксы (перпендикулярные и параллельные)
     for (const bay of world.bays) {
@@ -879,6 +885,7 @@ export class SceneController {
     );
     const renderedFootprintIds = footprintBatches.renderedIds;
     this.buildingMeshes.push(...footprintBatches.meshes);
+    for (const mesh of footprintBatches.meshes) mesh.userData.mirrorCategory = "building";
     const osmBuildingFallbacks = osmBuildings.filter((obs) => !renderedFootprintIds.has(obs.id));
     this.useInstancedBuildings = osmBuildingFallbacks.length >= 250;
     if (this.useInstancedBuildings) {
@@ -911,6 +918,7 @@ export class SceneController {
         mesh.position.set(centerX, 0, centerZ);
         mesh.castShadow = false;
         mesh.receiveShadow = false;
+        mesh.userData.mirrorCategory = "building";
         this.worldGroup.add(mesh);
         this.buildingMeshes.push(mesh);
         this.buildingBatches.set(key, { mesh, cursor: 0, centerX, centerZ });
@@ -1042,6 +1050,23 @@ export class SceneController {
       });
     }
 
+    // Индексируем корневые узлы мира один раз при загрузке. В зеркалах дальние дороги
+    // и мелкие пропы отсекаются отдельно, а автомобили сохраняются до camera.far.
+    this.worldGroup.updateMatrixWorld(true);
+    const mirrorBounds = new THREE.Box3();
+    const mirrorCenter = new THREE.Vector3();
+    for (const root of this.worldGroup.children) {
+      const category = root.userData.mirrorCategory === "road" || root.userData.mirrorCategory === "building" ||
+        root.userData.mirrorCategory === "car" ? root.userData.mirrorCategory : "small";
+      mirrorBounds.setFromObject(root);
+      if (mirrorBounds.isEmpty()) {
+        root.getWorldPosition(mirrorCenter);
+      } else {
+        mirrorBounds.getCenter(mirrorCenter);
+      }
+      this.mirrorCullEntries.push({ root, x: mirrorCenter.x, z: mirrorCenter.z, category });
+    }
+
     this.resetOrbit();
     this.camLookTarget.set(world.start.x, 1.0, world.start.z);
   }
@@ -1069,6 +1094,7 @@ export class SceneController {
       );
       rig.root.position.set(obs.cx, 0, obs.cz);
       rig.root.rotation.y = obs.h;
+      rig.root.userData.mirrorCategory = "car";
       this.worldGroup.add(rig.root);
       return;
     }
@@ -1452,9 +1478,38 @@ export class SceneController {
     const previous = this.renderer.getRenderTarget();
     try {
       this.renderer.setRenderTarget(rt);
-      this.renderer.render(this.scene, cam);
+      this.withMirrorDistanceCulling(cam, () => this.renderer.render(this.scene, cam));
     } finally {
       this.renderer.setRenderTarget(previous);
+    }
+  }
+
+  /** Временное отсечение статического мира для зеркал; автомобили не получают короткий лимит. */
+  private withMirrorDistanceCulling(cam: THREE.Camera, draw: () => void): void {
+    if (!this.isLargeOsmWorld || this.mirrorCullEntries.length === 0) {
+      draw();
+      return;
+    }
+    const hidden: THREE.Object3D[] = [];
+    const roadLimit = 48;
+    const buildingLimit = 78;
+    const smallLimit = 34;
+    const carLimit = 210;
+    const camX = cam.position.x;
+    const camZ = cam.position.z;
+    for (const entry of this.mirrorCullEntries) {
+      const limit = entry.category === "road" ? roadLimit
+        : entry.category === "building" ? buildingLimit
+        : entry.category === "car" ? carLimit : smallLimit;
+      if ((entry.x - camX) ** 2 + (entry.z - camZ) ** 2 > limit * limit && entry.root.visible) {
+        entry.root.visible = false;
+        hidden.push(entry.root);
+      }
+    }
+    try {
+      draw();
+    } finally {
+      for (const root of hidden) root.visible = true;
     }
   }
 
@@ -1499,8 +1554,10 @@ export class SceneController {
     const previous = this.renderer.getRenderTarget();
     try {
       this.renderer.setRenderTarget(rt);
-      this.renderer.render(this.scene, cam);
-      this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+      this.withMirrorDistanceCulling(cam, () => {
+        this.renderer.render(this.scene, cam);
+        this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+      });
     } finally {
       this.renderer.setRenderTarget(previous);
     }
