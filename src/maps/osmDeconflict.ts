@@ -920,7 +920,17 @@ export function buildDeconflictedBuildingObstacles(
   const renderFootprint = {
     footprint: ring.map((p) => ({ x: p.x, z: p.z })),
     ...(innerRings.length > 0
-      ? { footprintHoles: innerRings.filter((hole) => hole.length >= 3).map((hole) => hole.map((p) => ({ x: p.x, z: p.z }))) }
+      ? {
+          footprintHoles: innerRings
+            .filter((hole) => hole.length >= 3)
+            .map((hole) => {
+              const normalized = hole.length >= 4 &&
+                Math.hypot(hole[0].x - hole[hole.length - 1].x, hole[0].z - hole[hole.length - 1].z) < 0.05
+                ? hole.slice(0, -1)
+                : hole;
+              return normalized.map((p) => ({ x: p.x, z: p.z }));
+            }),
+        }
       : {}),
     ...(tags["roof:shape"] ? { roofShape: tags["roof:shape"].trim().toLowerCase() } : {}),
     ...(roofHeightTag && roofHeightTag > 0 ? { roofHeight: Math.min(12, roofHeightTag) } : {}),
