@@ -1405,8 +1405,41 @@ export const extraCases: SelfTestCase[] = [
   {
     id: "T46",
     suite: "maps",
-    name: "Граф OSM не соединяет дороги на разных уровнях layer",
+    name: "OSM layer: импорт bridge/tunnel, разделение уровней и соединение рампы",
     fn: () => {
+      // Проверяем полный путь импорта: XML-теги bridge/tunnel должны перейти в RoadSegment.layer
+      // и сохраниться при преобразовании пакета в сценарий редактора и WorldData.
+      const levelXml = `<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <node id="301" lat="55.7500" lon="37.6100"/>
+  <node id="302" lat="55.7510" lon="37.6100"/>
+  <node id="303" lat="55.7500" lon="37.6120"/>
+  <node id="304" lat="55.7510" lon="37.6120"/>
+  <way id="310">
+    <nd ref="301"/><nd ref="302"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="Тестовый мост"/>
+    <tag k="bridge" v="yes"/>
+  </way>
+  <way id="311">
+    <nd ref="303"/><nd ref="304"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="Тестовый тоннель"/>
+    <tag k="tunnel" v="yes"/>
+  </way>
+</osm>`;
+      const importedPack = parseOsmXml(levelXml, "Проверка уровней OSM");
+      const importedBridge = importedPack.roads.find((road) => road.name === "Тестовый мост");
+      const importedTunnel = importedPack.roads.find((road) => road.name === "Тестовый тоннель");
+      assert(importedBridge?.layer === 1, "bridge=yes должен импортироваться как layer=1");
+      assert(importedTunnel?.layer === -1, "tunnel=yes должен импортироваться как layer=-1");
+
+      const importedWorld = buildCustomWorld(customFromOsmPack(importedPack));
+      assert(importedWorld.roads.find((road) => road.name === "Тестовый мост")?.layer === 1,
+        "Сборка сценария не должна терять уровень моста");
+      assert(importedWorld.roads.find((road) => road.name === "Тестовый тоннель")?.layer === -1,
+        "Сборка сценария не должна терять уровень тоннеля");
+
       const groundRoad = {
         ...createDefaultRoad("grade-ground", 0, 0, 0),
         points: [{ x: -30, z: 0 }, { x: 30, z: 0 }],
@@ -1428,9 +1461,30 @@ export const extraCases: SelfTestCase[] = [
       const atGradeRoad = { ...bridgeRoad, layer: 0 };
       const connected = findRoadNetworkPath([groundRoad, atGradeRoad], start, destination);
       assert(connected.connected,
-        "Концевое примыкание на одном уровне должно оставаться связным");
+        "Концевое Т-примыкание на одном уровне должно оставаться связным");
 
-      return "Разные уровни layer разделены; одноуровневое Т-примыкание соединяется";
+      // Разные уровни могут соединяться в общей концевой точке, где заканчивается съезд с эстакады.
+      const groundApproach = {
+        ...createDefaultRoad("ground-approach", 0, 0, 0),
+        points: [{ x: -20, z: 40 }, { x: 0, z: 40 }],
+        width: 8,
+        layer: 0,
+      };
+      const bridgeRamp = {
+        ...createDefaultRoad("bridge-ramp", 0, 0, 0),
+        points: [{ x: 0, z: 40 }, { x: 0, z: 70 }],
+        width: 8,
+        layer: 1,
+      };
+      const rampJoin = findRoadNetworkPath(
+        [groundApproach, bridgeRamp],
+        { x: -10, z: 40 },
+        { x: 0, z: 55 }
+      );
+      assert(rampJoin.connected,
+        "Общие концевые точки съезда и дороги должны соединяться даже при смене layer");
+
+      return "bridge=yes → layer=1; tunnel=yes → layer=-1; уровни не смешиваются на пересечении; рампа стыкуется по общей концевой точке";
     },
   },
 
