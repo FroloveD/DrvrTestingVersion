@@ -35,6 +35,22 @@ import { SIGN_SPEED_ZONE_PREFIX, signToSpeedZone } from "./signs";
  * Все поля расширения (дороги, знаки, светофоры, переходы, метаданные OSM) опциональны:
  * старые сохранения `cdt.customScenario.v1` и JSON-файлы читаются без миграции.
  */
+/** Состав логической группы объектов редактора (без стартовой позиции и вспомогательных ручек). */
+export type EditorGroupMember =
+  | { kind: "sign"; id: string }
+  | { kind: "signal"; id: string }
+  | { kind: "crosswalk"; id: string }
+  | { kind: "road"; id: string }
+  | { kind: "bay"; id: number }
+  | { kind: "obstacle"; id: string }
+  | { kind: "checkpoint"; id: string };
+
+export type EditorObjectGroup = {
+  id: string;
+  name: string;
+  members: EditorGroupMember[];
+};
+
 export type CustomScenarioDef = {
   version: 1;
   title: string;
@@ -49,6 +65,8 @@ export type CustomScenarioDef = {
   lotCenterZ?: number;
   /** Рисовать ли прямоугольную асфальтовую площадку (true для автодрома, false для уличной сети). */
   useLotSurface?: boolean;
+  /** Логические группы объектов редактора; отсутствует в старых сохранениях. */
+  groups?: EditorObjectGroup[];
   /** Произвольные сегменты дорог (импортированные из OSM/GeoJSON или добавленные в редакторе). */
   roads?: RoadSegment[];
   bays: ParkingBay[];
