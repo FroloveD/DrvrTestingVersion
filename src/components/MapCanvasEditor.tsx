@@ -113,6 +113,8 @@ type Props = {
   focusSignal: number;
   areaSelection: EditorArea | null;
   onAreaSelection: (area: EditorArea | null) => void;
+  multiSelection: EditorSelection[];
+  onMultiSelection: (items: EditorSelection[]) => void;
   onSelect: (sel: EditorSelection | null) => void;
   /** Плавное обновление во время перетаскивания (без записи каждого кадра в историю). */
   onLiveChange: (next: CustomScenarioDef) => void;
@@ -270,6 +272,8 @@ export function MapCanvasEditor({
   focusSignal,
   areaSelection,
   onAreaSelection,
+  multiSelection,
+  onMultiSelection,
   onSelect,
   onLiveChange,
   onCommitChange,
@@ -411,13 +415,23 @@ export function MapCanvasEditor({
     if (tool !== "select" && !(tool === "boundary" && target.kind === "boundary_point")) return;
     e.stopPropagation();
     const pt = clientToWorld(e.clientX, e.clientY);
-    onSelect(target);
-    const anchor = getSelectionAnchor(def, target);
+    if (e.ctrlKey || e.metaKey) {
+      onMultiSelection((prev => prev)(multiSelection).some((item) => item.kind === target.kind && "id" in item && "id" in target && item.id === target.id)
+        ? multiSelection.filter((item) => !(item.kind === target.kind && "id" in item && "id" in target && item.id === target.id))
+        : [...multiSelection, target]);
+      onSelect(null);
+      return;
+    }
+    const memberGroup = (def.groups ?? []).find((group) => group.members.some((member) => member.kind === target.kind && "id" in member && "id" in target && member.id === target.id));
+    const dragTarget: EditorSelection = memberGroup ? { kind: "group", id: memberGroup.id } : target;
+    onMultiSelection([]);
+    onSelect(dragTarget);
+    const anchor = getSelectionAnchor(def, dragTarget);
     if (!pt || !anchor) return;
     svgRef.current?.setPointerCapture?.(e.pointerId);
     dragRef.current = {
       mode: "move",
-      selection: target,
+      selection: dragTarget,
       offsetX: anchor.x - pt.x,
       offsetZ: anchor.z - pt.z,
       moved: false,
@@ -488,7 +502,7 @@ export function MapCanvasEditor({
     if (!pt) return;
 
     // Средняя кнопка, инструмент «Панорама» или Shift+перетаскивание — панорамирование
-    if (e.button === 1 || tool === "pan" || (tool === "select" && e.shiftKey)) {
+    if (e.button === 1 || tool === "pan") {
       e.preventDefault();
       svgRef.current?.setPointerCapture?.(e.pointerId);
       dragRef.current = {
@@ -717,6 +731,11 @@ export function MapCanvasEditor({
       : null;
 
   const isSelected = (k: EditorSelection["kind"], id?: string | number): boolean => {
+    if (multiSelection.some((item) => item.kind === k && ("id" in item ? item.id === id : false))) return true;
+    if (primary?.kind === "group") {
+      const group = (def.groups ?? []).find((item) => item.id === primary.id);
+      if (group?.members.some((member) => member.kind === k && member.id === id)) return true;
+    }
     if (!primary || primary.kind !== k) return false;
     if (k === "start") return true;
     return "id" in primary && primary.id === id;
