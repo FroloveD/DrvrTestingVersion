@@ -44,6 +44,7 @@ import {
 /** Инструменты палитры 2D-редактора карт. */
 export type EditorTool =
   | "select"
+  | "delete_area"
   | "pan"
   | "boundary"
   | "start"
