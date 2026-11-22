@@ -1519,6 +1519,32 @@ try {
         check("P19a после загрузки общего snapshot восстанавливается автомобиль конкретного маршрута",
           restoredVehicle === "rio", restoredVehicle);
         await tab(page, "Каталог маршрутов");
+        const originalRouteCard = page.getByTestId("route-card").filter({ hasText: "Маршрут P · редакция" });
+        page.once("dialog", (dialog) => dialog.accept());
+        await originalRouteCard.locator('button[title="Удалить маршрут"]').click();
+        await originalRouteCard.waitFor({ state: "detached", timeout: 4000 });
+        const afterSharedDelete = await page.evaluate(() => new Promise((resolve, reject) => {
+          const request = indexedDB.open("cdt-route-catalog", 2);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result;
+            const tx = db.transaction(["routes", "maps"], "readonly");
+            const routes = tx.objectStore("routes").getAll();
+            const maps = tx.objectStore("maps").getAll();
+            tx.oncomplete = () => {
+              resolve({ routes: routes.result.length, maps: maps.result.length });
+              db.close();
+            };
+            tx.onerror = () => reject(tx.error);
+          };
+        }));
+        check("P19b удаление одного из двух маршрутов сохраняет общий snapshot для оставшегося",
+          afterSharedDelete.routes === 1 && afterSharedDelete.maps === 1, JSON.stringify(afterSharedDelete));
+        await page.reload();
+        await tab(page, "Каталог маршрутов");
+        check("P19c оставшийся маршрут открывается после удаления соседа и перезагрузки",
+          await page.getByTestId("route-card").count() === 1 &&
+          await page.getByTestId("route-card").getByRole("button", { name: /Открыть/ }).count() === 1);
       }
     }
     // Recreate a legacy v1 database from one valid v2 record, then let the app upgrade it.
@@ -1595,6 +1621,27 @@ try {
       migrated && migrationStats.version === 2 && migrationStats.routes === 1 &&
       migrationStats.maps === 1 && migrationStats.embeddedSnapshots === 0,
       JSON.stringify(migrationStats));
+    const migratedRouteCard = page.getByTestId("route-card").first();
+    page.once("dialog", (dialog) => dialog.accept());
+    await migratedRouteCard.locator('button[title="Удалить маршрут"]').click();
+    await migratedRouteCard.waitFor({ state: "detached", timeout: 4000 });
+    const afterLastDelete = await page.evaluate(() => new Promise((resolve, reject) => {
+      const request = indexedDB.open("cdt-route-catalog", 2);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction(["routes", "maps"], "readonly");
+        const routes = tx.objectStore("routes").getAll();
+        const maps = tx.objectStore("maps").getAll();
+        tx.oncomplete = () => {
+          resolve({ routes: routes.result.length, maps: maps.result.length });
+          db.close();
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+    }));
+    check("P21a удаление последнего маршрута очищает неиспользуемый общий snapshot",
+      afterLastDelete.routes === 0 && afterLastDelete.maps === 0, JSON.stringify(afterLastDelete));
     check("P22 ошибок JavaScript в полном цикле каталога маршрутов нет", errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.screenshot({ path: `${shotDir}/osm-route-catalog.png` });
   } catch (e) {
