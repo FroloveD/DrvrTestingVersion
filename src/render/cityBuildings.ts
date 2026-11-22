@@ -172,8 +172,10 @@ export function buildTexturedBuilding(obs: ObstacleBox, env: CityEnvironmentPack
   const mesh = new THREE.Mesh(geometry, materials);
   mesh.position.set(obs.cx, height * 0.5, obs.cz);
   mesh.rotation.y = obs.h;
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  // Building shadows are disabled: large OSM footprints are spatially merged and
+  // shadow-casting every facade batch multiplies the cost in the main and mirror passes.
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
   mesh.userData.obstacleId = obs.id;
   return mesh;
 }
@@ -383,8 +385,10 @@ export function buildOsmBuildingFootprintBatches(
     merged.computeVertexNormals();
     const mesh = new THREE.Mesh(merged, [facade, roof]);
     mesh.position.set(centerX, 0, centerZ);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    // Static OSM building batches do not cast/receive dynamic shadows. This avoids
+    // submitting large facade batches to the shadow map on every rendered frame.
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
     mesh.frustumCulled = true;
     mesh.name = `osm-building-footprints-${key}`;
     // Положение меша — центр spatial cell; количество зданий нужно для точной метрики видимости.
