@@ -1,3 +1,13 @@
+## 2026-11-22 — Исходные контуры зданий OSM отделены от collision OBB
+
+- В `ObstacleBox` добавлены необязательные поля `footprint`, `footprintHoles`, `roofShape`, `roofHeight` и `collisionOnly`. Они не меняют формулу столкновений: `SpatialGrid` продолжает использовать OBB.
+- OSM importer сохраняет исходный внешний контур и inner rings multipolygon на визуальном объекте здания; теги `roof:shape` / `roof:height` переносятся в модель. При разбиении здания на несколько collision OBB только первый объект несёт визуальный контур, остальные отмечены `collisionOnly`, чтобы не создавать дубликаты.
+- `cityBuildings.ts` строит ExtrudeGeometry по реальному footprint с внутренними отверстиями и объединяет геометрию в ячейки 96×96 м. `sceneController.ts` использует эти батчи; старый OBB-рендер остаётся fallback для отсутствующих/непостроенных контуров и старых сценариев.
+- Добавлен T48: multipolygon с вогнутым внешним кольцом и inner courtyard должен сохранить 6 вершин внешнего контура, 1 внутреннее кольцо, параметры крыши и collision OBB. T47 отдельно покрывает импорт 651 здания.
+- Ограничение: реальные скатные крыши пока не моделируются; `roof:shape` и `roof:height` только сохраняются. Collision по-прежнему прямоугольный, точная полигональная коллизия не вводилась. Нужна визуальная проверка отверстий/триангуляции и замеры на большой карте.
+- Изменены `src/sim/types.ts`, `src/maps/osmDeconflict.ts`, `src/render/cityBuildings.ts`, `src/render/sceneController.ts`, `src/sim/selfTestExtra.ts`, `docs/ADR.md`, `src/strategy/plan.ts`.
+- TypeScript, T47/T48, production build, offline/docs gate и Browser Smoke ещё не подтверждены в этой среде; не считать тесты пройденными до CI.
+
 ## 2026-11-22 — Исправлено отсечение точной геометрии OSM-зданий
 
 - Подтверждено по коду: `buildOsmBuildingFootprintBatches` уже строит фасады из исходного внешнего контура и внутренних колец через `ExtrudeGeometry`; `ObstacleBox` отдельно хранит collision OBB и render footprint. Предыдущая запись о том, что визуализация всех зданий остаётся `BoxGeometry`, была неточной.
