@@ -179,6 +179,107 @@ export function buildTexturedBuilding(obs: ObstacleBox, env: CityEnvironmentPack
 }
 
 /**
+ * Создаёт сетку скатной крыши поверх исходного OSM footprint.
+ * ShapeGeometry уже учитывает holes; два уровня разбиения добавляют вершины
+ * внутри треугольников, чтобы профиль скатов не зависел только от углов контура.
+ */
+function buildOsmRoofGeometry(
+  shape: THREE.Shape,
+  roofShape: string | undefined,
+  roofHeight: number | undefined,
+  wallHeight: number,
+  centerX: number,
+  centerZ: number
+): THREE.BufferGeometry | null {
+  const supported = roofShape === "gabled" || roofShape === "hipped" ||
+    roofShape === "pyramidal" || roofShape === "round";
+  if (!supported || !Number.isFinite(roofHeight) || (roofHeight ?? 0) <= 0) return null;
+
+  const rise = Math.min(roofHeight as number, 12);
+  const base = new THREE.ShapeGeometry(shape, 1);
+  const position = base.getAttribute("position");
+  const index = base.getIndex();
+  if (!position || !index || index.count < 3) {
+    base.dispose();
+    return null;
+  }
+
+  let triangles: Array<[number, number, number]> = [];
+  for (let i = 0; i + 2 < index.count; i += 3) {
+    triangles.push([
+      index.getX(i), index.getX(i + 1), index.getX(i + 2),
+    ]);
+  }
+  let points: Array<[number, number]> = [];
+  for (let i = 0; i < position.count; i++) points.push([position.getX(i), position.getY(i)]);
+
+  // Два прохода: 16 треугольников на исходный треугольник.
+  for (let pass = 0; pass < 2; pass++) {
+    const nextTriangles: Array<[number, number, number]> = [];
+    const midpoint = new Map<string, number>();
+    const mid = (a: number, b: number): number => {
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const cached = midpoint.get(key);
+      if (cached !== undefined) return cached;
+      const p = points[a], q = points[b];
+      const id = points.length;
+      points.push([(p[0] + q[0]) * 0.5, (p[1] + q[1]) * 0.5]);
+      midpoint.set(key, id);
+      return id;
+    };
+    for (const [a, b, c] of triangles) {
+      const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a);
+      nextTriangles.push([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]);
+    }
+    triangles = nextTriangles;
+  }
+  base.dispose();
+
+  const minX = Math.min(...points.map((p) => p[0]));
+  const maxX = Math.max(...points.map((p) => p[0]));
+  const minY = Math.min(...points.map((p) => p[1]));
+  const maxY = Math.max(...points.map((p) => p[1]));
+  const spanX = Math.max(0.01, maxX - minX);
+  const spanY = Math.max(0.01, maxY - minY);
+  const longAlongX = spanX >= spanY;
+  const shortSpan = Math.min(spanX, spanY);
+  const longSpan = Math.max(spanX, spanY);
+  const vertices: number[] = [];
+  const uvs: number[] = [];
+
+  const roofProfile = (x: number, y: number): number => {
+    const nx = Math.max(-1, Math.min(1, ((x - minX) / spanX) * 2 - 1));
+    const ny = Math.max(-1, Math.min(1, ((y - minY) / spanY) * 2 - 1));
+    const across = longAlongX ? ny : nx;
+    const along = longAlongX ? nx : ny;
+    if (roofShape === "gabled") return 1 - Math.abs(across);
+    if (roofShape === "hipped") {
+      const acrossProfile = 1 - Math.abs(across);
+      const hipRun = Math.min(1, (1 - Math.abs(along)) * (longSpan / shortSpan));
+      return Math.max(0, Math.min(acrossProfile, hipRun));
+    }
+    if (roofShape === "pyramidal") return Math.max(0, 1 - Math.max(Math.abs(nx), Math.abs(ny)));
+    return Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+  };
+
+  for (const [a, b, c] of triangles) {
+    for (const id of [a, b, c]) {
+      const [x, y] = points[id];
+      vertices.push(x, wallHeight + roofProfile(x, y) * rise, y);
+      uvs.push((x - minX) / spanX, (y - minY) / spanY);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(-centerX, 0, -centerZ);
+  geometry.computeVertexNormals();
+  geometry.addGroup(0, vertices.length / 3, 1);
+  return geometry;
+}
+
+/**
  * Строит здания по исходным контурам OSM, объединяя геометрию в ячейки 96×96 м.
  * Collision OBB остаются отдельными объектами ядра; здесь используются footprint/holes.
  * Shape/ExtrudeGeometry сохраняют вогнутые контуры и внутренние дворы. Некорректный полигон
@@ -248,9 +349,13 @@ export function buildOsmBuildingFootprintBatches(
     const centerX = (Math.floor(building.cx / cellSize) + 0.5) * cellSize;
     const centerZ = (Math.floor(building.cz / cellSize) + 0.5) * cellSize;
     geometry.translate(-centerX, 0, -centerZ);
+    const roofGeometry = buildOsmRoofGeometry(
+      shape, building.roofShape, building.roofHeight, height, centerX, centerZ
+    );
     const key = `${Math.floor(building.cx / cellSize)},${Math.floor(building.cz / cellSize)}`;
     const bucket = cells.get(key) ?? [];
     bucket.push(geometry);
+    if (roofGeometry) bucket.push(roofGeometry);
     cells.set(key, bucket);
     cellBuildingCounts.set(key, (cellBuildingCounts.get(key) ?? 0) + 1);
     const ids = cellBuildingIds.get(key) ?? [];
