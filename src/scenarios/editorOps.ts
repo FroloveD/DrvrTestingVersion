@@ -77,6 +77,9 @@ export type CropSummary = {
   keptCheckpoints: number;
 };
 
+/** Прямоугольная область выделения в мировых координатах редактора. */
+export type EditorArea = { minX: number; minZ: number; maxX: number; maxZ: number };
+
 export type PlaceOptions = {
   signKind: RoadSignKind;
   signSpeedLimit: number;
@@ -755,6 +758,70 @@ export function deleteSelected(
     default:
       return { def, selection: null };
   }
+}
+
+/**
+ * Удаляет редактируемые объекты, пересекающие прямоугольную область.
+ * Для точечных объектов проверяется опорная точка; для дорог — пересечение
+ * любого сегмента полилинии с областью. Старт и граница мира защищены.
+ */
+export function deleteObjectsInArea(
+  def: CustomScenarioDef,
+  area: EditorArea
+): { def: CustomScenarioDef; removed: { roads: number; bays: number; obstacles: number; signs: number; signals: number; crosswalks: number; checkpoints: number }; total: number } {
+  const minX = Math.min(area.minX, area.maxX);
+  const maxX = Math.max(area.minX, area.maxX);
+  const minZ = Math.min(area.minZ, area.maxZ);
+  const maxZ = Math.max(area.minZ, area.maxZ);
+  const contains = (p: Vec2) => p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ;
+  const segmentIntersects = (a: Vec2, b: Vec2): boolean => {
+    let t0 = 0;
+    let t1 = 1;
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const clip = (p: number, q: number): boolean => {
+      if (Math.abs(p) < 1e-12) return q >= 0;
+      const r = q / p;
+      if (p < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+      return true;
+    };
+    return clip(-dx, a.x - minX) && clip(dx, maxX - a.x) &&
+      clip(-dz, a.z - minZ) && clip(dz, maxZ - a.z) && t0 <= t1;
+  };
+  const roadHits = (road: RoadSegment) =>
+    road.points.some(contains) ||
+    road.points.some((point, index) => index > 0 && segmentIntersects(road.points[index - 1], point));
+  const roads = (def.roads ?? []).filter((road) => !roadHits(road));
+  const bays = def.bays.filter((item) => contains({ x: item.cx, z: item.cz }));
+  const obstacles = def.obstacles.filter((item) => contains({ x: item.cx, z: item.cz }));
+  const signs = (def.signs ?? []).filter((item) => contains({ x: item.x, z: item.z }));
+  const signals = (def.signals ?? []).filter((item) =>
+    !contains({ x: item.x, z: item.z }) && !contains({ x: item.stopLineX, z: item.stopLineZ })
+  );
+  const crosswalks = (def.crosswalks ?? []).filter((item) => !contains({ x: item.cx, z: item.cz }));
+  const checkpoints = def.checkpoints.filter((item) => !contains({ x: item.x, z: item.z }));
+  const removed = {
+    roads: (def.roads ?? []).length - roads.length,
+    bays: def.bays.length - bays.length,
+    obstacles: def.obstacles.length - obstacles.length,
+    signs: (def.signs ?? []).length - signs.length,
+    signals: (def.signals ?? []).length - signals.length,
+    crosswalks: (def.crosswalks ?? []).length - crosswalks.length,
+    checkpoints: def.checkpoints.length - checkpoints.length,
+  };
+  const total = Object.values(removed).reduce((sum, count) => sum + count, 0);
+  if (total === 0) return { def, removed, total };
+  return {
+    def: { ...def, roads, bays, obstacles, signs, signals, crosswalks, checkpoints },
+    removed,
+    total,
+  };
 }
 
 /** Добавляет к маршруту КТ, связанную с выбранным дорожным знаком (STOP, поворот, скорость и т. д.). */
