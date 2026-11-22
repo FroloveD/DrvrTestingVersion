@@ -1685,8 +1685,9 @@ export const extraCases: SelfTestCase[] = [
         rotated.checkpoints[1].x - rotated.checkpoints[0].x,
         rotated.checkpoints[1].z - rotated.checkpoints[0].z
       );
-      assert(Math.abs(rotatedDistance - 10) < 0.01,
-        "Поворот группы должен сохранять расстояние между объектами");
+      assert(Math.abs(rotatedDistance - 10) < 0.01 &&
+        (Math.abs(rotated.checkpoints[0].x) > 0.1 || Math.abs(rotated.checkpoints[0].z - 10) > 0.1),
+        "Поворот группы должен менять положение участников и сохранять расстояние между ними");
       const moved = moveSelected(grouped, { kind: "group", id: "group-1" }, 7, 12, 0);
       assert(moved.checkpoints[0].x === 2 && moved.checkpoints[0].z === 12 &&
         moved.checkpoints[1].x === 12 && moved.checkpoints[1].z === 12,
