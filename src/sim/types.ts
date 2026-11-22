@@ -165,6 +165,8 @@ export type ObstacleBox = {
   roofShape?: string;
   /** Высота над верхом стен из roof:height, м. */
   roofHeight?: number;
+  /** Дополнительный collision OBB того же контура; не создавать для него отдельную визуальную копию. */
+  collisionOnly?: boolean;
 };
 
 export type ParkingBayKind = "perpendicular" | "parallel";
