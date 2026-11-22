@@ -198,6 +198,7 @@ export function buildOsmBuildingFootprintBatches(
   const cellSize = 96;
   const cells = new Map<string, THREE.BufferGeometry[]>();
   const cellBuildingCounts = new Map<string, number>();
+  const cellBuildingIds = new Map<string, string[]>();
   const renderedIds = new Set<string>();
   const meshes: THREE.Mesh[] = [];
   const facade = env.facadeMat;
@@ -252,7 +253,9 @@ export function buildOsmBuildingFootprintBatches(
     bucket.push(geometry);
     cells.set(key, bucket);
     cellBuildingCounts.set(key, (cellBuildingCounts.get(key) ?? 0) + 1);
-    renderedIds.add(building.id);
+    const ids = cellBuildingIds.get(key) ?? [];
+    ids.push(building.id);
+    cellBuildingIds.set(key, ids);
   }
 
   for (const [key, geometries] of cells) {
@@ -262,6 +265,7 @@ export function buildOsmBuildingFootprintBatches(
     const merged = mergeGeometries(geometries, true);
     geometries.forEach((geometry) => geometry.dispose());
     if (!merged) continue;
+    for (const id of cellBuildingIds.get(key) ?? []) renderedIds.add(id);
     merged.computeVertexNormals();
     const mesh = new THREE.Mesh(merged, [facade, roof]);
     mesh.position.set(centerX, 0, centerZ);
