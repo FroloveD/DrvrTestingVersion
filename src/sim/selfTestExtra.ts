@@ -1614,7 +1614,7 @@ export const extraCases: SelfTestCase[] = [
   },
 
   {
-    id: "T48",
+    id: "T49",
     suite: "maps",
     name: "OSM multipolygon building keeps visual footprint, courtyard and roof tags",
     fn: () => {
