@@ -914,11 +914,23 @@ export function buildDeconflictedBuildingObstacles(
   };
 
   const primary = makeBox(id, minL, maxL, minF, maxF);
+  // Исходный OSM-контур хранится отдельно от collision OBB. Рендерер использует его
+  // для фасадов/крыш, а SpatialGrid продолжает проверять упрощённые прямоугольники.
+  const roofHeightTag = parseOsmMeters(tags["roof:height"]);
+  const renderFootprint = {
+    footprint: ring.map((p) => ({ x: p.x, z: p.z })),
+    ...(innerRings.length > 0
+      ? { footprintHoles: innerRings.filter((hole) => hole.length >= 3).map((hole) => hole.map((p) => ({ x: p.x, z: p.z }))) }
+      : {}),
+    ...(tags["roof:shape"] ? { roofShape: tags["roof:shape"].trim().toLowerCase() } : {}),
+    ...(roofHeightTag && roofHeightTag > 0 ? { roofHeight: Math.min(12, roofHeightTag) } : {}),
+  };
+  const withRenderFootprint = (box: ObstacleBox): ObstacleBox => ({ ...box, ...renderFootprint });
   const clearanceM = 0.45;
 
-  // Быстрый путь (95 % реальных зданий): OBB не задевает ни одну улицу и нет дворового проезда внутри
+  // Быстрый путь: исходный контур сохраняется независимо от упрощённого collision OBB.
   if (!doesObstacleOverlapRoads(primary, roadIndex, clearanceM)) {
-    return { boxes: [primary], resolvedConflict: false };
+    return { boxes: [withRenderFootprint(primary)], resolvedConflict: false };
   }
 
   // Вогнутые Г-/П-/Т-образные дома и мультиполигоны с двором раскладываем на корпуса вокруг проезда
@@ -1010,6 +1022,7 @@ export function buildDeconflictedBuildingObstacles(
       const boxes = top.map((wing, idx) =>
         makeBox(idx === 0 ? id : `${id}-w${idx + 1}`, wing.minL, wing.maxL, wing.minF, wing.maxF)
       );
+      if (boxes[0]) boxes[0] = withRenderFootprint(boxes[0]);
       return { boxes, resolvedConflict: true };
     }
   }
@@ -1020,7 +1033,7 @@ export function buildDeconflictedBuildingObstacles(
     return { boxes: [], resolvedConflict: true };
   }
   return {
-    boxes: [makeBox(id, trimmed.minL, trimmed.maxL, trimmed.minF, trimmed.maxF)],
+    boxes: [withRenderFootprint(makeBox(id, trimmed.minL, trimmed.maxL, trimmed.minF, trimmed.maxF))],
     resolvedConflict: true,
   };
 }
