@@ -157,6 +157,14 @@ export type ObstacleBox = {
   color?: number;
   model?: ParkedModelKey;
   label?: string;
+  /** Исходный внешний контур OSM для точной 3D-визуализации; не участвует в collision OBB. */
+  footprint?: Vec2[];
+  /** Внутренние кольца multipolygon (дворы/проёмы) исходной геометрии OSM. */
+  footprintHoles?: Vec2[][];
+  /** Исходный тег OSM roof:shape; неизвестные значения рендерер обрабатывает как плоскую крышу. */
+  roofShape?: string;
+  /** Высота над верхом стен из roof:height, м. */
+  roofHeight?: number;
 };
 
 export type ParkingBayKind = "perpendicular" | "parallel";
