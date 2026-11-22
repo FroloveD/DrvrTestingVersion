@@ -1023,15 +1023,10 @@ function parseOverpassElements(
   // Индекс всех наземных проезжих частей для мгновенного устранения конфликтов геометрии
   const roadIndex = new RoadCorridorIndex(roads, true);
 
-  // На крупных выгрузках (> 600 зданий) приоритезируем застройку от центра участка, а не случайный угол файла
-  if (buildingCandidates.length > 600) {
-    buildingCandidates.sort((a, b) => a.distSq - b.distSq);
-  }
-
-  // Проход 2: здания и дворовые мультиполигоны (без наезда на улицы и внутридворовые проезды)
+  // Проход 2: сохраняем все здания в окне импорта. Визуализация и SpatialGrid используют
+  // пространственное разбиение, поэтому глобальный лимит обрезал застройку без необходимости.
   const buildings: ObstacleBox[] = [];
   for (const cand of buildingCandidates) {
-    if (buildings.length >= 650) break;
     const res = buildDeconflictedBuildingObstacles(
       cand.id,
       cand.outer,
@@ -1042,7 +1037,6 @@ function parseOverpassElements(
     );
     if (res.resolvedConflict) counters.adjustedBuildings += 1;
     for (const box of res.boxes) {
-      if (buildings.length >= 650) break;
       if (!clipPoly || isPointInPolygon(box.cx, box.cz, clipPoly)) {
         buildings.push(box);
       }
@@ -1346,12 +1340,9 @@ function parseGeoJsonFeatures(
 
   const buildings: ObstacleBox[] = [];
   for (const b of pendingBuildings) {
-    if (buildings.length >= 650) break;
     const res = buildDeconflictedBuildingObstacles(b.id, b.outer, b.inners, b.tags, buildings.length, roadIndex);
     if (res.resolvedConflict) counters.adjustedBuildings += 1;
-    for (const box of res.boxes) {
-      if (buildings.length < 650) buildings.push(box);
-    }
+    buildings.push(...res.boxes);
   }
 
   const extraObstacles: ObstacleBox[] = [];
