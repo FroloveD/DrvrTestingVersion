@@ -40,6 +40,7 @@ import {
   attachCheckpointToSign,
   createEditorHistory,
   deleteSelected,
+  deleteObjectsInArea,
   duplicateSelected,
   fitBoundsToContent,
   getSelectionAnchor,
@@ -52,6 +53,7 @@ import {
   reverseRoadDirection,
   setSelectedHeading,
   undoEditorHistory,
+  type EditorArea,
   type EditorSelection,
   type EditorTool,
 } from "../scenarios/editorOps";
@@ -237,6 +239,7 @@ function TextField({
 
 const TOOL_BUTTONS: Array<{ id: EditorTool; label: string; badge: string }> = [
   { id: "select", label: "Выбор / Перенос", badge: "↖" },
+  { id: "delete_area", label: "Удалить область", badge: "▧" },
   { id: "pan", label: "Панорама", badge: "✥" },
   { id: "boundary", label: "Форма площадки", badge: "⬠" },
   { id: "sign", label: "Дорожный знак", badge: "⊘" },
@@ -354,6 +357,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const [fitSignal, setFitSignal] = useState<number>(0);
   const [focusSignal, setFocusSignal] = useState<number>(0);
   const [draftBoundary, setDraftBoundary] = useState<Vec2[]>([]);
+  const [areaSelection, setAreaSelection] = useState<EditorArea | null>(null);
 
   // Параметры добавляемого объекта в палитре
   const [signKind, setSignKind] = useState<RoadSignKind>("speed_limit");
@@ -510,6 +514,22 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
     onNotify("Объект удалён");
   }, [commitChange, def, onNotify, selection]);
 
+  const handleDeleteArea = useCallback(() => {
+    if (!areaSelection) return;
+    const result = deleteObjectsInArea(def, areaSelection);
+    if (result.total === 0) {
+      onNotify("В выделенной области нет объектов для удаления.");
+      setAreaSelection(null);
+      return;
+    }
+    commitChange(result.def, def);
+    setSelection(null);
+    setAreaSelection(null);
+    setTool("select");
+    const details = Object.entries(result.removed).filter(([, count]) => count > 0).map(([kind, count]) => `${kind}: ${count}`).join(", ");
+    onNotify(`Удалено объектов: ${result.total} (${details}). Действие можно отменить через Ctrl+Z.`);
+  }, [areaSelection, commitChange, def, onNotify]);
+
   const handleDeleteCollisionTarget = useCallback((message: string) => {
     const target = getCollisionTarget(def, message);
     if (!target) return;
@@ -570,6 +590,7 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           handleDelete();
         }
       } else if (e.code === "Escape") {
+        setAreaSelection(null);
         setTool("select");
       }
     };
@@ -735,6 +756,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const selectedBay = primary?.kind === "bay" ? def.bays.find((b) => b.id === primary.id) ?? null : null;
   const selectedObstacle = primary?.kind === "obstacle" ? def.obstacles.find((o) => o.id === primary.id) ?? null : null;
   const selectedCp = primary?.kind === "checkpoint" ? def.checkpoints.find((c) => c.id === primary.id) ?? null : null;
+
+  const areaDeleteCount = areaSelection ? deleteObjectsInArea(def, areaSelection).total : 0;
 
   const totalObjects =
     roads.length +
@@ -1119,6 +1142,15 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            {areaSelection && (
+              <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-[#f87171]/40 bg-[#f87171]/10 px-2 py-1">
+                <span className="mono text-[10px] text-[#ffc1c1]">В области: {areaDeleteCount} объектов</span>
+                <button type="button" className="btn btn-mini text-[#ffb8b8]" disabled={areaDeleteCount === 0} onClick={handleDeleteArea} data-testid="editor-delete-area-confirm">
+                  Удалить {areaDeleteCount}
+                </button>
+                <button type="button" className="btn btn-mini" onClick={() => setAreaSelection(null)}>Снять</button>
+              </div>
+            )}
             <button
               type="button"
               className="btn btn-mini"
@@ -1404,6 +1436,8 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         : "grid xl:grid-cols-[1fr_410px] gap-4 items-start"}>
         <MapCanvasEditor
           def={def}
+          areaSelection={areaSelection}
+          onAreaSelection={setAreaSelection}
           tool={tool}
           selection={selection}
           snapStep={snapStep}
