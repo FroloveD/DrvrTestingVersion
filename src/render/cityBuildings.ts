@@ -6,6 +6,7 @@
  * @tests Смоук A, L, O, P (`tests/browser-smoke.mjs`)
  */
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import type { ObstacleBox } from "../sim/types";
 import facadeTextureUrl from "../assets/buildings/facade.svg?url";
 import roofTextureUrl from "../assets/buildings/roof.svg?url";
@@ -175,6 +176,93 @@ export function buildTexturedBuilding(obs: ObstacleBox, env: CityEnvironmentPack
   mesh.receiveShadow = true;
   mesh.userData.obstacleId = obs.id;
   return mesh;
+}
+
+/**
+ * Строит здания по исходным контурам OSM, объединяя геометрию в ячейки 96×96 м.
+ * Collision OBB остаются отдельными объектами ядра; здесь используются footprint/holes.
+ * Shape/ExtrudeGeometry сохраняют вогнутые контуры и внутренние дворы. Некорректный полигон
+ * пропускается и остаётся доступен старому OBB-рендеру как безопасный fallback.
+ */
+export function buildOsmBuildingFootprintBatches(
+  group: THREE.Group,
+  buildings: readonly ObstacleBox[],
+  env: CityEnvironmentPack
+): Set<string> {
+  const cellSize = 96;
+  const cells = new Map<string, THREE.BufferGeometry[]>();
+  const renderedIds = new Set<string>();
+  const facade = env.facadeMat;
+  const roof = env.roofMat;
+
+  for (const building of buildings) {
+    const outer = building.footprint;
+    if (!outer || outer.length < 3) continue;
+    const ring = outer.length > 3 &&
+      Math.hypot(outer[0].x - outer[outer.length - 1].x, outer[0].z - outer[outer.length - 1].z) < 0.05
+      ? outer.slice(0, -1)
+      : outer;
+    if (ring.length < 3 || ring.some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.z))) continue;
+
+    const shape = new THREE.Shape();
+    shape.moveTo(ring[0].x, -ring[0].z);
+    for (let i = 1; i < ring.length; i++) shape.lineTo(ring[i].x, -ring[i].z);
+    shape.closePath();
+
+    for (const hole of building.footprintHoles ?? []) {
+      if (hole.length < 3 || hole.some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.z))) continue;
+      const points = hole.length > 3 &&
+        Math.hypot(hole[0].x - hole[hole.length - 1].x, hole[0].z - hole[hole.length - 1].z) < 0.05
+        ? hole.slice(0, -1)
+        : hole;
+      if (points.length < 3) continue;
+      const path = new THREE.Path();
+      path.moveTo(points[0].x, -points[0].z);
+      for (let i = 1; i < points.length; i++) path.lineTo(points[i].x, -points[i].z);
+      path.closePath();
+      shape.holes.push(path);
+    }
+
+    const height = Math.max(3.2, building.height);
+    let geometry: THREE.ExtrudeGeometry;
+    try {
+      geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: height,
+        bevelEnabled: false,
+        curveSegments: 1,
+        steps: 1,
+      });
+    } catch {
+      continue;
+    }
+    geometry.rotateX(-Math.PI / 2);
+    const centerX = (Math.floor(building.cx / cellSize) + 0.5) * cellSize;
+    const centerZ = (Math.floor(building.cz / cellSize) + 0.5) * cellSize;
+    geometry.translate(-centerX, 0, -centerZ);
+    const key = `${Math.floor(building.cx / cellSize)},${Math.floor(building.cz / cellSize)}`;
+    const bucket = cells.get(key) ?? [];
+    bucket.push(geometry);
+    cells.set(key, bucket);
+    renderedIds.add(building.id);
+  }
+
+  for (const [key, geometries] of cells) {
+    const [gx, gz] = key.split(",").map(Number);
+    const centerX = (gx + 0.5) * cellSize;
+    const centerZ = (gz + 0.5) * cellSize;
+    const merged = mergeGeometries(geometries, true);
+    geometries.forEach((geometry) => geometry.dispose());
+    if (!merged) continue;
+    merged.computeVertexNormals();
+    const mesh = new THREE.Mesh(merged, [facade, roof]);
+    mesh.position.set(centerX, 0, centerZ);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = true;
+    mesh.name = `osm-building-footprints-${key}`;
+    group.add(mesh);
+  }
+  return renderedIds;
 }
 
 /**
