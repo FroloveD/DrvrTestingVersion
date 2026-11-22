@@ -1023,6 +1023,7 @@ export function buildDeconflictedBuildingObstacles(
         makeBox(idx === 0 ? id : `${id}-w${idx + 1}`, wing.minL, wing.maxL, wing.minF, wing.maxF)
       );
       if (boxes[0]) boxes[0] = withRenderFootprint(boxes[0]);
+      for (let i = 1; i < boxes.length; i++) boxes[i] = { ...boxes[i], collisionOnly: true };
       return { boxes, resolvedConflict: true };
     }
   }
