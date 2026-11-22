@@ -571,10 +571,12 @@ export class SceneController {
     } else {
       // На крупных OSM-районах ограничиваем fill-rate и стоимость shadow map.
       // Небольшие сценарии сохраняют прежний профиль High без изменений.
-      const ratioCap = this.isLargeOsmWorld ? 1.0 : 2;
-      this.renderer.setPixelRatio(Math.max(this.isLargeOsmWorld ? 0.9 : 1, Math.min(deviceRatio, ratioCap)));
+      // OSM-сцены содержат сотни зданий и протяжённую инфраструктуру.
+      // Для них High сохраняет визуальный профиль, но ограничивает fill-rate и shadow-map.
+      const ratioCap = this.isLargeOsmWorld ? 0.85 : 2;
+      this.renderer.setPixelRatio(Math.max(this.isLargeOsmWorld ? 0.75 : 1, Math.min(deviceRatio, ratioCap)));
       this.renderer.shadowMap.enabled = true;
-      const shadowSize = this.isLargeOsmWorld ? 1024 : 2048;
+      const shadowSize = this.isLargeOsmWorld ? 512 : 2048;
       this.sun.shadow.mapSize.set(shadowSize, shadowSize);
     }
     this.sun.shadow.map?.dispose();
@@ -1351,7 +1353,11 @@ export class SceneController {
     if (inCockpit && (opts.showRearMirror || opts.showMirrors)) {
       const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
       this.renderer.shadowMap.autoUpdate = false;
-      const stride = this.qualityPreset === "low" ? 3 : 2;
+      // OSM-район дорог в зеркалах повторно рендерит всю городскую сцену.
+      // Обновляем зеркала реже и в шахматном порядке, чтобы основной проход не конкурировал с ними.
+      const stride = this.isLargeOsmWorld
+        ? (this.qualityPreset === "low" ? 10 : this.qualityPreset === "medium" ? 8 : 6)
+        : (this.qualityPreset === "low" ? 3 : 2);
       try {
         if (opts.showRearMirror && (!this.cockpitRearPrimed || this.frameCounter % stride === 0)) {
           this.renderMirrorTarget(this.cockpitRearRT, this.rearCam, 0, 1.25, 0.25, 0, -0.075, 38);
@@ -1361,10 +1367,11 @@ export class SceneController {
         const mountX = carGeometry(state.carId).width / 2 + 0.13;
         if (opts.showMirrors) {
           const prime = !this.cockpitSidePrimed;
-          if (prime || this.frameCounter % stride === 0) {
+          const sidePhase = this.isLargeOsmWorld ? Math.floor(this.frameCounter / stride) % 2 : this.frameCounter % stride;
+          if (prime || sidePhase === 0) {
             this.renderMirrorTarget(this.cockpitLeftRT, this.sideCam, mountX, 0.945, 0.65, -0.37, -0.105, 44);
           }
-          if (prime || this.frameCounter % stride === 1) {
+          if (prime || (this.isLargeOsmWorld ? sidePhase === 1 : sidePhase === 1)) {
             this.renderMirrorTarget(this.cockpitRightRT, this.sideCam, -mountX, 0.945, 0.65, 0.37, -0.105, 44);
           }
           this.cockpitSidePrimed = true;
