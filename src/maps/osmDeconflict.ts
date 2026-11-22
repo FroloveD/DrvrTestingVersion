@@ -204,8 +204,10 @@ export function parseOsmLayer(tags: Record<string, string>): number {
   }
   const bridge = (tags.bridge ?? "").toLowerCase();
   if (bridge && bridge !== "no" && bridge !== "false" && bridge !== "0") return 1;
-  const tunnel = (tags.tunnel ?? "").toLowerCase();
-  if (tunnel && tunnel !== "no" && tunnel !== "false" && tunnel !== "0") return -1;
+  const tunnel = (tags.tunnel ?? "").trim().toLowerCase();
+  // OSM tunnel=building_passage описывает проезд сквозь здание на уровне земли.
+  // Он не должен автоматически получать layer=-1 и разрывать связь с обычной дорогой.
+  if (tunnel && tunnel !== "building_passage" && tunnel !== "no" && tunnel !== "false" && tunnel !== "0") return -1;
   return 0;
 }
 
