@@ -30,6 +30,7 @@ import {
   nextSignId,
   nextSignalId,
   type CustomScenarioDef,
+  type EditorGroupMember,
 } from "./custom";
 import {
   buildCheckpointForSign,
