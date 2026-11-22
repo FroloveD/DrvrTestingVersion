@@ -383,6 +383,7 @@ export function MapCanvasEditor({
     if (!pt) return;
     setLotSelected(true);
     onSelect(null);
+    onMultiSelection([]);
     svgRef.current?.setPointerCapture?.(e.pointerId);
     dragRef.current = {
       mode: "lot_move",
@@ -520,6 +521,7 @@ export function MapCanvasEditor({
     if (tool === "delete_area") {
       e.preventDefault();
       onSelect(null);
+      onMultiSelection([]);
       onAreaSelection(null);
       setAreaDraft({ minX: pt.x, maxX: pt.x, minZ: pt.z, maxZ: pt.z });
       svgRef.current?.setPointerCapture?.(e.pointerId);
@@ -541,6 +543,7 @@ export function MapCanvasEditor({
     if (tool === "select") {
       setLotSelected(false);
       onSelect(null);
+      onMultiSelection([]);
       svgRef.current?.setPointerCapture?.(e.pointerId);
       dragRef.current = {
         mode: "pan",
