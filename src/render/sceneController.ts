@@ -868,16 +868,18 @@ export class SceneController {
       : [];
     this.totalBuildingCount = osmBuildings.length;
     // OSM-контуры рисуются как extruded polygons с отверстиями; collision OBB остаются в WorldData.
-    const renderedFootprintIds = buildOsmBuildingFootprintBatches(
+    const footprintBatches = buildOsmBuildingFootprintBatches(
       this.worldGroup,
       osmBuildings,
       cityEnv
     );
+    const renderedFootprintIds = footprintBatches.renderedIds;
+    this.buildingMeshes.push(...footprintBatches.meshes);
     const osmBuildingFallbacks = osmBuildings.filter((obs) => !renderedFootprintIds.has(obs.id));
     this.useInstancedBuildings = osmBuildingFallbacks.length >= 250;
     if (this.useInstancedBuildings) {
       const cells = new Map<string, ObstacleBox[]>();
-      for (const obs of osmBuildings) {
+      for (const obs of osmBuildingFallbacks) {
         const gx = Math.floor(obs.cx / 96);
         const gz = Math.floor(obs.cz / 96);
         const key = `${gx},${gz}`;
@@ -1232,7 +1234,10 @@ export class SceneController {
         const dz = bm.position.z - state.z;
         const show = dx * dx + dz * dz <= r2;
         bm.visible = show;
-        if (show) vis += bm instanceof THREE.InstancedMesh ? bm.count : 1;
+        if (show) {
+          vis += Number(bm.userData.buildingCount ??
+            (bm instanceof THREE.InstancedMesh ? bm.count : 1));
+        }
       }
       this.visibleBuildings = vis;
       this.lastBuildingCullX = state.x;
