@@ -1730,13 +1730,13 @@ try {
     // Z-order должен переключаться по взаимодействию, а не зависеть от порядка JSX.
     const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
     await scorePanel.waitFor({ state: "visible", timeout: 3000 });
-    // Панель оценки расположена в левом верхнем углу под постоянно видимой
-    // кнопкой меню HUD; кликаем по свободной части заголовка справа от неё.
-    await scorePanel.click({ position: { x: 160, y: 12 } });
-    const scoreFront = await scorePanel.evaluate((el) => el.style.zIndex);
+    // В правой части заголовка расположены кнопки сворачивания/закрытия:
+    // их onPointerDown останавливает всплытие. Кликаем по текстовой области заголовка.
+    await scorePanel.click({ position: { x: 70, y: 12 } });
+    const scoreFront = await until(async () => await scorePanel.evaluate((el) => el.style.zIndex), 3000, 50);
     const clusterBehind = await cluster.evaluate((el) => el.style.zIndex);
     await cluster.click({ position: { x: 18, y: 12 } });
-    const clusterFront = await cluster.evaluate((el) => el.style.zIndex);
+    const clusterFront = await until(async () => await cluster.evaluate((el) => el.style.zIndex), 3000, 50);
     check("Q8 активная HUD-панель поднимается над соседними окнами",
       scoreFront === "250" && clusterBehind !== "250" && clusterFront === "250",
       JSON.stringify({ scoreFront, clusterBehind, clusterFront }));
