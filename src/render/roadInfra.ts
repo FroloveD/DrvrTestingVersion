@@ -320,6 +320,44 @@ export function buildWorldRoadsAndSidewalks(
   const flatMeshBatches = new Map<string, FlatMeshBatch>();
   const flatTransform = new THREE.Object3D();
 
+  // Бордюры — повторяющиеся BoxGeometry с одинаковыми материалами.
+  // Храним матрицы экземпляров по материалу и той же spatial-сетке 192×192 м.
+  type CurbInstanceBatch = {
+    material: THREE.Material;
+    centerX: number;
+    centerZ: number;
+    matrices: THREE.Matrix4[];
+  };
+  const curbInstanceBatches = new Map<string, CurbInstanceBatch>();
+  const curbTransform = new THREE.Object3D();
+
+  const addCurbInstance = (
+    material: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+    angle: number,
+    width: number,
+    height: number,
+    length: number
+  ) => {
+    const cellX = Math.floor(x / flatBatchCellSize);
+    const cellZ = Math.floor(z / flatBatchCellSize);
+    const centerX = (cellX + 0.5) * flatBatchCellSize;
+    const centerZ = (cellZ + 0.5) * flatBatchCellSize;
+    const key = `${material.uuid}|${cellX},${cellZ}`;
+    let batch = curbInstanceBatches.get(key);
+    if (!batch) {
+      batch = { material, centerX, centerZ, matrices: [] };
+      curbInstanceBatches.set(key, batch);
+    }
+    curbTransform.position.set(x - centerX, y, z - centerZ);
+    curbTransform.rotation.set(0, angle, 0);
+    curbTransform.scale.set(width, height, length);
+    curbTransform.updateMatrix();
+    batch.matrices.push(curbTransform.matrix.clone());
+  };
+
   const addFlatMesh = (
     geo: THREE.BufferGeometry,
     mat: THREE.Material,
@@ -494,15 +532,16 @@ export function buildWorldRoadsAndSidewalks(
 
             // Бордюр БР 100.30.15: у перекрёстков и переходов — чёрно-белый ГОСТ, в середине квартала — бетонный
             const useBw = nearControlZone(bx, bz);
-            const curb = new THREE.Mesh(
-              makeCurbBoxGeo(curbW, curbH, rLen, false),
-              useBw ? mats.curbBwMat : mats.curbGreyMat
+            addCurbInstance(
+              useBw ? mats.curbBwMat : mats.curbGreyMat,
+              bx + lx * curbOff,
+              curbH * 0.5,
+              bz + lz * curbOff,
+              angle,
+              curbW,
+              curbH,
+              rLen
             );
-            curb.rotation.y = angle;
-            curb.position.set(bx + lx * curbOff, curbH * 0.5, bz + lz * curbOff);
-            curb.receiveShadow = true;
-            curb.castShadow = true;
-            group.add(curb);
           }
         }
       } else if (isBridge) {
@@ -746,6 +785,23 @@ export function buildWorldRoadsAndSidewalks(
     mesh.receiveShadow = batch.receiveShadow;
     mesh.name = "road-flat-batch";
     group.add(mesh);
+  }
+
+  if (curbInstanceBatches.size > 0) {
+    const curbGeometry = new THREE.BoxGeometry(1, 1, 1);
+    for (const [key, batch] of curbInstanceBatches) {
+      const mesh = new THREE.InstancedMesh(curbGeometry, batch.material, batch.matrices.length);
+      mesh.position.set(batch.centerX, 0, batch.centerZ);
+      batch.matrices.forEach((matrix, index) => mesh.setMatrixAt(index, matrix));
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = true;
+      mesh.name = `road-curb-instances-${key.split("|").at(-1)}`;
+      mesh.userData.instanceCount = batch.matrices.length;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
   }
 }
 
