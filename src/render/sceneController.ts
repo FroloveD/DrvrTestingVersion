@@ -660,7 +660,7 @@ export class SceneController {
     const requestedCarId = world.playerCarId ?? "ceed";
     if (requestedCarId !== this.playerCarId) this.rebuildPlayerRig(requestedCarId);
     const osmBuildingCount = world.scenarioId === "city_osm"
-      ? world.obstacles.filter((obs) => obs.kind === "building").length
+      ? world.obstacles.filter((obs) => obs.kind === "building" && !obs.collisionOnly).length
       : 0;
     this.isLargeOsmWorld = world.scenarioId === "city_osm" &&
       (world.roads.length >= 500 || osmBuildingCount >= 250);
@@ -1077,7 +1077,7 @@ export class SceneController {
 
     if (obs.kind === "building") {
       // Геометрия этого здания уже включена в spatial batch исходных OSM-контуров.
-      if (obs.footprint && world.scenarioId === "city_osm") return;
+      if ((obs.footprint || obs.collisionOnly) && world.scenarioId === "city_osm") return;
       if (this.useInstancedBuildings) {
         const gx = Math.floor(obs.cx / 96);
         const gz = Math.floor(obs.cz / 96);
