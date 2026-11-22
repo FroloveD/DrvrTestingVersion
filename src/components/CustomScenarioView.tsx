@@ -619,12 +619,13 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
         e.preventDefault();
         handleDuplicate();
       } else if (e.code === "Delete" || e.code === "Backspace") {
-        if (selection && selection.kind !== "start") {
+        if ((selection && selection.kind !== "start") || multiSelection.length > 0) {
           e.preventDefault();
           handleDelete();
         }
       } else if (e.code === "Escape") {
         setAreaSelection(null);
+        setMultiSelection([]);
         setTool("select");
       }
     };
