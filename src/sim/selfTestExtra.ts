@@ -1569,4 +1569,48 @@ export const extraCases: SelfTestCase[] = [
     },
   },
 
+  {
+    id: "T48",
+    suite: "maps",
+    name: "OSM building footprint and multipolygon courtyard survive import independently of collision OBB",
+    fn: () => {
+      const xml = `<osm version="0.6">
+        <node id="401" lat="55.7500" lon="37.6100"/>
+        <node id="402" lat="55.7500" lon="37.6108"/>
+        <node id="403" lat="55.7505" lon="37.6108"/>
+        <node id="404" lat="55.7505" lon="37.6104"/>
+        <node id="405" lat="55.7510" lon="37.6104"/>
+        <node id="406" lat="55.7510" lon="37.6100"/>
+        <node id="407" lat="55.7502" lon="37.6102"/>
+        <node id="408" lat="55.7502" lon="37.6103"/>
+        <node id="409" lat="55.7503" lon="37.6103"/>
+        <node id="410" lat="55.7503" lon="37.6102"/>
+        <way id="411"><nd ref="401"/><nd ref="402"/><nd ref="403"/><nd ref="404"/><nd ref="405"/><nd ref="406"/><nd ref="401"/></way>
+        <way id="412"><nd ref="407"/><nd ref="408"/><nd ref="409"/><nd ref="410"/><nd ref="407"/></way>
+        <relation id="413">
+          <member type="way" ref="411" role="outer"/>
+          <member type="way" ref="412" role="inner"/>
+          <tag k="type" v="multipolygon"/>
+          <tag k="building" v="yes"/>
+          <tag k="height" v="18"/>
+          <tag k="roof:shape" v="hipped"/>
+          <tag k="roof:height" v="2.5"/>
+        </relation>
+      </osm>`;
+      const pack = parseOsmXml(xml, "Проверка контуров зданий");
+      const building = pack.buildings.find((item) => item.id === "rel-bld-413");
+      assert(Boolean(building), "Мультиполигон здания должен импортироваться");
+      assert((building?.footprint?.length ?? 0) === 6,
+        "Исходный вогнутый внешний контур должен сохраняться без преобразования в OBB");
+      assert((building?.footprintHoles?.length ?? 0) === 1 &&
+        (building?.footprintHoles?.[0]?.length ?? 0) === 4,
+        "Внутренний двор multipolygon должен сохраняться отдельным кольцом");
+      assert(building?.roofShape === "hipped" && building?.roofHeight === 2.5,
+        "Теги roof:shape и roof:height должны сохраняться в данных здания");
+      assert(building?.height === 18 && building.halfX > 0 && building.halfZ > 0,
+        "Collision OBB должен остаться доступным независимо от исходной визуальной геометрии");
+      return "Вогнутый footprint, внутренний двор, параметры крыши и collision OBB сохранены раздельно";
+    },
+  },
+
 ];
