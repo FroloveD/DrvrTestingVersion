@@ -46,6 +46,7 @@ import {
   fitBoundsToContent,
   getSelectionAnchor,
   mergeUserObjectsOntoOsmMap,
+  normalizeEditorGroups,
   primarySelection,
   pushEditorHistory,
   rebuildRouteFromEditorRoads,
@@ -462,8 +463,9 @@ export function CustomScenarioView({ def, onChange, calibration, onOpenInSimulat
   const commitChange = useCallback(
     (next: CustomScenarioDef, before: CustomScenarioDef = def) => {
       if (next === before) return;
+      const normalized = normalizeEditorGroups(next);
       setHistory((h) => pushEditorHistory(h, before));
-      onChange(next);
+      onChange(normalized);
     },
     [def, onChange]
   );
