@@ -172,10 +172,8 @@ export function buildTexturedBuilding(obs: ObstacleBox, env: CityEnvironmentPack
   const mesh = new THREE.Mesh(geometry, materials);
   mesh.position.set(obs.cx, height * 0.5, obs.cz);
   mesh.rotation.y = obs.h;
-  // Building shadows are disabled: large OSM footprints are spatially merged and
-  // shadow-casting every facade batch multiplies the cost in the main and mirror passes.
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   mesh.userData.obstacleId = obs.id;
   return mesh;
 }
