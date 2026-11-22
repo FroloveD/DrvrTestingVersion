@@ -1471,15 +1471,16 @@ export const extraCases: SelfTestCase[] = [
       const importedBuildingPassage = importedPack.roads.find((road) => road.name === "Проезд через здание");
       assert(importedBridge?.layer === 1, "bridge=yes должен импортироваться как layer=1");
       assert(importedTunnel?.layer === -1, "tunnel=yes должен импортироваться как layer=-1");
-      assert(importedBuildingPassage?.layer === 0,
-        "tunnel=building_passage должен сохранять наземный layer=0");
+      assert(Boolean(importedBuildingPassage) && (importedBuildingPassage?.layer ?? 0) === 0,
+        "tunnel=building_passage должен сохранять наземный layer=0 (неявный 0 допустим)");
 
       const importedWorld = buildCustomWorld(customFromOsmPack(importedPack));
       assert(importedWorld.roads.find((road) => road.name === "Тестовый мост")?.layer === 1,
         "Сборка сценария не должна терять уровень моста");
       assert(importedWorld.roads.find((road) => road.name === "Тестовый тоннель")?.layer === -1,
         "Сборка сценария не должна терять уровень тоннеля");
-      assert(importedWorld.roads.find((road) => road.name === "Проезд через здание")?.layer === 0,
+      const worldBuildingPassage = importedWorld.roads.find((road) => road.name === "Проезд через здание");
+      assert(Boolean(worldBuildingPassage) && (worldBuildingPassage?.layer ?? 0) === 0,
         "Сборка сценария не должна превращать наземный building_passage в тоннель");
 
       const groundRoad = {
