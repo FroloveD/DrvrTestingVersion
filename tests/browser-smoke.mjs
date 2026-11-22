@@ -1730,7 +1730,9 @@ try {
     // Z-order должен переключаться по взаимодействию, а не зависеть от порядка JSX.
     const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
     await scorePanel.waitFor({ state: "visible", timeout: 3000 });
-    await scorePanel.click({ position: { x: 18, y: 12 } });
+    // Панель оценки расположена в левом верхнем углу под постоянно видимой
+    // кнопкой меню HUD; кликаем по свободной части заголовка справа от неё.
+    await scorePanel.click({ position: { x: 160, y: 12 } });
     const scoreFront = await scorePanel.evaluate((el) => el.style.zIndex);
     const clusterBehind = await cluster.evaluate((el) => el.style.zIndex);
     await cluster.click({ position: { x: 18, y: 12 } });
