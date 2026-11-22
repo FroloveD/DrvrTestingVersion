@@ -797,7 +797,7 @@ export function buildWorldRoadsAndSidewalks(
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.frustumCulled = true;
-      mesh.name = `road-curb-instances-${key.split("|").at(-1)}`;
+      mesh.name = `road-curb-instances-${key.slice(key.lastIndexOf("|") + 1)}`;
       mesh.userData.instanceCount = batch.matrices.length;
       mesh.computeBoundingSphere();
       group.add(mesh);
