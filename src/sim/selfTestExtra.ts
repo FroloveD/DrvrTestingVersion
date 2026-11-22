@@ -1531,4 +1531,42 @@ export const extraCases: SelfTestCase[] = [
     },
   },
 
+  {
+    id: "T47",
+    suite: "maps",
+    name: "OSM import preserves buildings beyond the former 650-object limit",
+    fn: () => {
+      // 651 раздельных прямоугольных зданий в пределах одного локального окна.
+      // Проверяется весь XML → NormalizedOsmPack путь без зависимости от реального файла.
+      const nodes: string[] = [];
+      const ways: string[] = [];
+      const count = 651;
+      for (let i = 0; i < count; i++) {
+        const row = Math.floor(i / 33);
+        const col = i % 33;
+        const lat = 55.75 + row * 0.00012;
+        const lon = 37.61 + col * 0.00012;
+        const d = 0.000025;
+        const base = 10_000 + i * 5;
+        const corners: Array<[number, number]> = [
+          [lat - d, lon - d],
+          [lat - d, lon + d],
+          [lat + d, lon + d],
+          [lat + d, lon - d],
+        ];
+        corners.forEach(([nLat, nLon], j) => {
+          nodes.push(`<node id="${base + j}" lat="${nLat.toFixed(7)}" lon="${nLon.toFixed(7)}"/>`);
+        });
+        ways.push(
+          `<way id="${20_000 + i}"><nd ref="${base}"/><nd ref="${base + 1}"/><nd ref="${base + 2}"/><nd ref="${base + 3}"/><nd ref="${base}"/><tag k="building" v="yes"/></way>`
+        );
+      }
+      const xml = `<osm version="0.6">${nodes.join("")}${ways.join("")}</osm>`;
+      const pack = parseOsmXml(xml, "Проверка полноты зданий");
+      assert(pack.buildings.length === count,
+        `Импорт должен сохранить все ${count} здания, получено ${pack.buildings.length}`);
+      return `Импортировано ${pack.buildings.length} из ${count} зданий; прежний предел 650 устранён`;
+    },
+  },
+
 ];
