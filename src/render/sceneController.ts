@@ -864,7 +864,7 @@ export class SceneController {
     // Для крупных OSM-районов здания объединяются в InstancedMesh по ячейкам 96×96 м.
     // Это сохраняет габариты/высоты/повороты, сокращая количество отдельных draw calls.
     const osmBuildings = world.scenarioId === "city_osm"
-      ? world.obstacles.filter((obs) => obs.kind === "building")
+      ? world.obstacles.filter((obs) => obs.kind === "building" && !obs.collisionOnly)
       : [];
     this.totalBuildingCount = osmBuildings.length;
     // OSM-контуры рисуются как extruded polygons с отверстиями; collision OBB остаются в WorldData.
