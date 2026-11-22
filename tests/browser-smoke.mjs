@@ -1674,6 +1674,11 @@ try {
     await page.getByTestId("panel-restore-cluster").click();
     await cluster.waitFor({ state: "visible", timeout: 3000 });
     check("Q7 закрытую HUD-панель можно восстановить", await cluster.count() === 1);
+    // Закрываем меню управления до проверки z-order: оно находится поверх
+    // HUD и закономерно перехватывает клики по панели оценки в левом верхнем углу.
+    await page.getByTestId("hud-panels-menu").click();
+    check("Q7a меню управления HUD закрывается перед проверкой z-order",
+      await page.getByTestId("hud-panels-menu").getAttribute("aria-expanded") === "false");
 
     // Z-order должен переключаться по взаимодействию, а не зависеть от порядка JSX.
     const scorePanel = page.locator('[data-hud-panel="scorePanel"]');
