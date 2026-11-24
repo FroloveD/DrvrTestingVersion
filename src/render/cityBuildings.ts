@@ -284,7 +284,7 @@ function buildOsmRoofGeometry(
 }
 
 /**
- * Строит здания по исходным контурам OSM, объединяя геометрию в ячейки 96×96 м.
+ * Строит здания по исходным контурам OSM, объединяя геометрию в ячейки 96×96 м по умолчанию.
  * Collision OBB остаются отдельными объектами ядра; здесь используются footprint/holes.
  * Shape/ExtrudeGeometry сохраняют вогнутые контуры и внутренние дворы. Некорректный полигон
  * пропускается и остаётся доступен старому OBB-рендеру как безопасный fallback.
@@ -298,9 +298,9 @@ export type OsmBuildingFootprintBatchResult = {
 export function buildOsmBuildingFootprintBatches(
   group: THREE.Group,
   buildings: readonly ObstacleBox[],
-  env: CityEnvironmentPack
+  env: CityEnvironmentPack,
+  cellSize: 96 | 200 = 96
 ): OsmBuildingFootprintBatchResult {
-  const cellSize = 96;
   const cells = new Map<string, THREE.BufferGeometry[]>();
   const cellBuildingCounts = new Map<string, number>();
   const cellBuildingIds = new Map<string, string[]>();
