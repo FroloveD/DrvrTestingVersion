@@ -271,6 +271,7 @@ export class SceneController {
   private readonly frameTimes: number[] = [];
   private lastPerfSample = performance.now();
   private visibleBuildings = 0;
+  private sceneMeshCount = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
@@ -661,6 +662,7 @@ export class SceneController {
   /** Перестраивает 3D-геометрию мира при смене сценария или размеров бокса, освобождая старые ресурсы. */
   loadWorld(world: WorldData): void {
     this.lastTextureEstimateAt = 0;
+    this.sceneMeshCount = 0;
     this.cachedTextureBytesEstimate = 0;
     this.cachedGeometryBytesEstimate = 0;
     const requestedCarId = world.playerCarId ?? "ceed";
@@ -1071,6 +1073,9 @@ export class SceneController {
       this.mirrorCullEntries.push({ root, x: mirrorCenter.x, z: mirrorCenter.z, category });
     }
 
+    this.worldGroup.traverse((object) => {
+      if ((object as THREE.Mesh).isMesh) this.sceneMeshCount++;
+    });
     this.resetOrbit();
     this.camLookTarget.set(world.start.x, 1.0, world.start.z);
   }
@@ -1725,6 +1730,7 @@ export class SceneController {
         fps: 60,
         p95FrameMs: 16.6,
         visibleBuildings: this.visibleBuildings,
+        meshCount: this.sceneMeshCount,
         totalBuildings: this.totalBuildingCount || this.buildingMeshes.length,
         drawCalls: this.renderer.info.render.calls,
         triangles: this.renderer.info.render.triangles,
@@ -1742,6 +1748,7 @@ export class SceneController {
       fps: Math.round(1000 / Math.max(1, avg)),
       p95FrameMs: Number(p95.toFixed(1)),
       visibleBuildings: this.visibleBuildings,
+      meshCount: this.sceneMeshCount,
       totalBuildings: this.totalBuildingCount || this.buildingMeshes.length,
       drawCalls: this.renderer.info.render.calls,
       triangles: this.renderer.info.render.triangles,
