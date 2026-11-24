@@ -93,6 +93,7 @@ async function runScenario(browser, buildingCount, cellSize) {
         drawCalls: number("draw-calls"),
         triangles: number("triangles"),
         geometries: number("geometries"),
+        meshes: number("meshes"),
         textures: number("textures"),
         textureBytesEstimate: number("texture-bytes-estimate"),
         geometryBytesEstimate: number("geometry-bytes-estimate"),
@@ -105,6 +106,26 @@ async function runScenario(browser, buildingCount, cellSize) {
     await sleep(500);
   }
 
+  await page.getByRole("button", { name: "2 Салон", exact: true }).click();
+  await sleep(2500);
+  const cockpitSamples = [];
+  for (let i = 0; i < 12; i++) {
+    const attrs = await metrics.evaluate((el) => {
+      const number = (key) => Number(el.getAttribute("data-" + key) || 0);
+      return {
+        fps: number("fps"),
+        p95FrameMs: number("p95-frame-ms"),
+        drawCalls: number("draw-calls"),
+        triangles: number("triangles"),
+        geometries: number("geometries"),
+        meshes: number("meshes"),
+        visibleBuildings: number("visible-buildings"),
+        totalBuildings: number("total-buildings"),
+      };
+    });
+    cockpitSamples.push(attrs);
+    await sleep(500);
+  }
   const webgl = await page.evaluate(() => {
     const canvas = document.querySelector("canvas");
     const gl = canvas?.getContext("webgl2") || canvas?.getContext("webgl");
@@ -126,6 +147,18 @@ async function runScenario(browser, buildingCount, cellSize) {
     drawCallsMedian: median(samples.map((x) => x.drawCalls)),
     trianglesMedian: median(samples.map((x) => x.triangles)),
     geometriesMedian: median(samples.map((x) => x.geometries)),
+    meshesMedian: median(samples.map((x) => x.meshes)),
+    cockpitMetrics: {
+      cameraMode: "2 Салон",
+      fpsMedian: median(cockpitSamples.map((x) => x.fps)),
+      p95FrameMsMedian: median(cockpitSamples.map((x) => x.p95FrameMs)),
+      drawCallsMedian: median(cockpitSamples.map((x) => x.drawCalls)),
+      trianglesMedian: median(cockpitSamples.map((x) => x.triangles)),
+      geometriesMedian: median(cockpitSamples.map((x) => x.geometries)),
+      meshesMedian: median(cockpitSamples.map((x) => x.meshes)),
+      visibleBuildingsMedian: median(cockpitSamples.map((x) => x.visibleBuildings)),
+      totalBuildings: cockpitSamples.at(-1)?.totalBuildings ?? 0,
+    },
     texturesMedian: median(samples.map((x) => x.textures)),
     textureBytesEstimate: median(samples.map((x) => x.textureBytesEstimate)),
     geometryBytesEstimate: median(samples.map((x) => x.geometryBytesEstimate)),
