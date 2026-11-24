@@ -100,6 +100,7 @@ export type PerfMetrics = {
   fps: number;
   p95FrameMs: number;
   visibleBuildings: number;
+  meshCount: number;
   totalBuildings: number;
   drawCalls: number;
   triangles: number;
