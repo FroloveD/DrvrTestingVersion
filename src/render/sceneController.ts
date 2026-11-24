@@ -871,8 +871,10 @@ export class SceneController {
       }
     }
 
-    // Для крупных OSM-районов здания объединяются в InstancedMesh по ячейкам 96×96 м.
-    // Это сохраняет габариты/высоты/повороты, сокращая количество отдельных draw calls.
+    // По умолчанию используем ячейки 96×96 м. Параметр benchBuildingCellSize=200
+    // включает экспериментальный вариант только для A/B-бенчмарка; production default не меняется.
+    const buildingCellSize: 96 | 200 = typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("benchBuildingCellSize") === "200" ? 200 : 96;
     const osmBuildings = world.scenarioId === "city_osm"
       ? world.obstacles.filter((obs) => obs.kind === "building" && !obs.collisionOnly)
       : [];
@@ -881,7 +883,8 @@ export class SceneController {
     const footprintBatches = buildOsmBuildingFootprintBatches(
       this.worldGroup,
       osmBuildings,
-      cityEnv
+      cityEnv,
+      buildingCellSize
     );
     const renderedFootprintIds = footprintBatches.renderedIds;
     this.buildingMeshes.push(...footprintBatches.meshes);
@@ -891,8 +894,8 @@ export class SceneController {
     if (this.useInstancedBuildings) {
       const cells = new Map<string, ObstacleBox[]>();
       for (const obs of osmBuildingFallbacks) {
-        const gx = Math.floor(obs.cx / 96);
-        const gz = Math.floor(obs.cz / 96);
+        const gx = Math.floor(obs.cx / buildingCellSize);
+        const gz = Math.floor(obs.cz / buildingCellSize);
         const key = `${gx},${gz}`;
         const bucket = cells.get(key) ?? [];
         bucket.push(obs);
@@ -901,8 +904,8 @@ export class SceneController {
       const unitBox = new THREE.BoxGeometry(1, 1, 1);
       for (const [key, bucket] of cells) {
         const [gx, gz] = key.split(",").map(Number);
-        const centerX = (gx + 0.5) * 96;
-        const centerZ = (gz + 0.5) * 96;
+        const centerX = (gx + 0.5) * buildingCellSize;
+        const centerZ = (gz + 0.5) * buildingCellSize;
         const mesh = new THREE.InstancedMesh(
           unitBox,
           [
@@ -1111,8 +1114,8 @@ export class SceneController {
       // Геометрия этого здания уже включена в spatial batch исходных OSM-контуров.
       if ((obs.footprint || obs.collisionOnly) && world.scenarioId === "city_osm") return;
       if (this.useInstancedBuildings) {
-        const gx = Math.floor(obs.cx / 96);
-        const gz = Math.floor(obs.cz / 96);
+        const gx = Math.floor(obs.cx / buildingCellSize);
+        const gz = Math.floor(obs.cz / buildingCellSize);
         const batch = this.buildingBatches.get(`${gx},${gz}`);
         if (batch) {
           const w = Math.max(2, obs.halfX * 2);
