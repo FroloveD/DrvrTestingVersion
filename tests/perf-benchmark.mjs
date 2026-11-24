@@ -7,7 +7,7 @@
  *   python3 -m http.server 4173 --directory dist
  *   node tests/perf-benchmark.mjs http://127.0.0.1:4173/index.html
  *
- * Сценарии 100/400/900 зданий; результаты выводятся в JSON.
+ * По умолчанию сравниваются ячейки 96 и 200 м на сценариях 100/400/900 зданий; результаты выводятся в JSON.
  * textureBytesEstimate — расчётный объём текстур, связанных с материалами сцены,
  * а не точное показание VRAM драйвера. Бенчмарк не является постоянным CI-gate.
  */
@@ -15,7 +15,9 @@ import { chromium } from "playwright";
 
 const url = process.argv[2] || "http://127.0.0.1:4173/index.html";
 const counts = (process.argv[3] || "100,400,900").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
+const cellSizes = (process.argv[4] || "96,200").split(",").map(Number).filter((n) => n === 96 || n === 200);
 if (!counts.length) throw new Error("Укажите хотя бы одно положительное число зданий.");
+if (!cellSizes.length) throw new Error("Размер ячейки должен быть 96 и/или 200 м.");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const median = (values) => {
@@ -56,15 +58,17 @@ function makeOsm(buildingCount) {
   return `<?xml version="1.0" encoding="UTF-8"?><osm version="0.6">${bounds}${nodes.join("")}${ways.join("")}</osm>`;
 }
 
-async function runScenario(browser, buildingCount) {
+async function runScenario(browser, buildingCount, cellSize) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text().slice(0, 240)); });
 
+  const scenarioUrl = new URL(url);
+  scenarioUrl.searchParams.set("benchBuildingCellSize", String(cellSize));
   const startedAt = performance.now();
-  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.goto(scenarioUrl.toString(), { waitUntil: "domcontentloaded" });
   await page.waitForSelector("canvas", { state: "visible", timeout: 30000 });
   await page.getByRole("button", { name: /Свой сценарий/ }).first().click();
   await page.getByTestId("editor-import-input").setInputFiles({
@@ -113,6 +117,7 @@ async function runScenario(browser, buildingCount) {
 
   const result = {
     requestedBuildings: buildingCount,
+    buildingCellSizeM: cellSize,
     importedBuildings: samples.at(-1)?.totalBuildings ?? 0,
     visibleBuildingsMedian: median(samples.map((x) => x.visibleBuildings)),
     readyMs,
@@ -140,12 +145,14 @@ const browser = await chromium.launch({ headless: true, args: ["--enable-webgl",
 try {
   const results = [];
   for (const count of counts) {
-    results.push(await runScenario(browser, count));
+    for (const cellSize of cellSizes) {
+      results.push(await runScenario(browser, count, cellSize));
+    }
   }
   console.log(JSON.stringify({
     generatedAt: new Date().toISOString(),
     url,
-    note: "Texture memory is an estimate; browser/driver VRAM allocation is not directly exposed by WebGL.",
+    note: "Each building count is imported into a fresh browser context for every cell size. Texture memory is an estimate; browser/driver VRAM allocation is not directly exposed by WebGL.",
     results,
   }, null, 2));
 } finally {
