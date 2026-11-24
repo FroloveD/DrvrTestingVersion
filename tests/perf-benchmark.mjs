@@ -82,10 +82,11 @@ async function runScenario(browser, buildingCount, cellSize) {
   });
   const metrics = page.getByTestId("sim-perf-metrics");
   await metrics.waitFor({ state: "visible", timeout: 45000 });
-  const imported = await until(async () => {
-    const total = Number(await metrics.getAttribute("data-total-buildings") || 0);
-    return total === buildingCount ? total : 0;
-  }, 45000, 100);
+  await page.waitForFunction((expected) => {
+    const element = document.querySelector('[data-testid="sim-perf-metrics"]');
+    return Number(element?.getAttribute("data-total-buildings") || 0) === expected;
+  }, buildingCount, { timeout: 45000 });
+  const imported = Number(await metrics.getAttribute("data-total-buildings") || 0);
   if (imported !== buildingCount) throw new Error(`OSM world contains ${imported} buildings instead of ${buildingCount}`);
   const readyMs = Math.round(performance.now() - startedAt);
   await sleep(3500);
