@@ -1652,7 +1652,9 @@ try {
 
 // ───────── Q. Переносимые настройки автомобиля, радио и HUD-панелей ─────────
 {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // At 1440px the compact sticky header keeps the "Тренажёр" nav item over HUD click targets.
+  // Use the wide layout here so this test measures HUD z-order, not header hit-testing.
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
   const { page, errors } = await open(ctx, httpUrl);
   try {
     await tab(page, "Свой сценарий");
