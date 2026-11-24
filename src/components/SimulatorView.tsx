@@ -510,7 +510,7 @@ export function SimulatorView({
     speedLimit: world.defaultSpeedLimitKmh,
     gridChecks: 0,
     totalObstacles: world.obstacles.length,
-    perf: { fps: 60, p95FrameMs: 16.6, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0, textureBytesEstimate: 0, geometryBytesEstimate: 0, gpuResourceBytesEstimate: 0 },
+    perf: { fps: 60, p95FrameMs: 16.6, visibleBuildings: 0, meshCount: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0, textureBytesEstimate: 0, geometryBytesEstimate: 0, gpuResourceBytesEstimate: 0 },
     nextSignal: null,
     latestViolation: null,
   }));
@@ -948,7 +948,7 @@ export function SimulatorView({
           totalObstacles: w.obstacles.length,
           perf: sceneCtrlRef.current
             ? sceneCtrlRef.current.getPerfMetrics()
-            : { fps: 60, p95FrameMs: 16, visibleBuildings: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0, textureBytesEstimate: 0, geometryBytesEstimate: 0, gpuResourceBytesEstimate: 0 },
+            : { fps: 60, p95FrameMs: 16, visibleBuildings: 0, meshCount: 0, totalBuildings: 0, drawCalls: 0, triangles: 0, geometries: 0, textures: 0, textureBytesEstimate: 0, geometryBytesEstimate: 0, gpuResourceBytesEstimate: 0 },
           nextSignal,
           latestViolation: viol,
         });
@@ -1809,6 +1809,7 @@ export function SimulatorView({
               data-texture-bytes-estimate={hud.perf.textureBytesEstimate}
               data-geometry-bytes-estimate={hud.perf.geometryBytesEstimate}
               data-gpu-resource-bytes-estimate={hud.perf.gpuResourceBytesEstimate}
+              data-meshes={hud.perf.meshCount}
               data-visible-buildings={hud.perf.visibleBuildings}
               data-total-buildings={hud.perf.totalBuildings}
               className="hidden sm:block rounded-xl bg-[#091017]/84 backdrop-blur-md border hairline px-2.5 py-1.5 mono text-[10px] text-[#9bafbc] leading-tight"
@@ -1818,7 +1819,7 @@ export function SimulatorView({
                 {hud.perf.p95FrameMs}мс
               </div>
               <div className="text-[#6e8492]">
-                Draw {hud.perf.drawCalls} · Tri {(hud.perf.triangles / 1000).toFixed(1)}k · Geo {hud.perf.geometries}
+                Draw {hud.perf.drawCalls} · Mesh {hud.perf.meshCount} · Tri {(hud.perf.triangles / 1000).toFixed(1)}k · Geo {hud.perf.geometries}
               </div>
               <div className="text-[#6e8492]">
                 Grid {hud.gridChecks}/{hud.totalObstacles} · Buildings {hud.perf.visibleBuildings}/{hud.perf.totalBuildings}
