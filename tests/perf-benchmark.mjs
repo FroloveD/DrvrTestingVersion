@@ -1,5 +1,5 @@
 /**
- * Одноразовый ручной бенчмарк рендеринга OSM-зданий.
+ * Одноразовый ручной бенчмарк рендеринга OSM-зданий через штатный импорт в сценарий city_osm.
  *
  * Запуск после npm run build и локального HTTP-сервера:
  *   npm install --no-save playwright
@@ -70,16 +70,23 @@ async function runScenario(browser, buildingCount, cellSize) {
   const startedAt = performance.now();
   await page.goto(scenarioUrl.toString(), { waitUntil: "domcontentloaded" });
   await page.waitForSelector("canvas", { state: "visible", timeout: 30000 });
-  await page.getByRole("button", { name: /Свой сценарий/ }).first().click();
-  await page.getByTestId("editor-import-input").setInputFiles({
+  await page.getByRole("button", { name: /3D-Тренажёр/ }).first().click();
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: /OSM \/ GeoJSON/ }).click(),
+  ]);
+  await fileChooser.setFiles({
     name: `buildings-${buildingCount}.osm`,
     mimeType: "application/xml",
     buffer: Buffer.from(makeOsm(buildingCount)),
   });
-  await page.getByTestId("editor-odbl-banner").waitFor({ state: "visible", timeout: 30000 });
-  await page.getByRole("button", { name: /Открыть в тренажёре/ }).click();
   const metrics = page.getByTestId("sim-perf-metrics");
   await metrics.waitFor({ state: "visible", timeout: 45000 });
+  const imported = await until(async () => {
+    const total = Number(await metrics.getAttribute("data-total-buildings") || 0);
+    return total === buildingCount ? total : 0;
+  }, 45000, 100);
+  if (imported !== buildingCount) throw new Error(`OSM world contains ${imported} buildings instead of ${buildingCount}`);
   const readyMs = Math.round(performance.now() - startedAt);
   await sleep(3500);
 
