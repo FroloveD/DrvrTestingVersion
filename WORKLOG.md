@@ -652,3 +652,12 @@
 - Это именно geometry batching, а не InstancedMesh: выбранный способ сохраняет разные UV-координаты сегментов бордюра без растяжения текстуры.
 - TypeScript/core/browser-smoke для этого последнего изменения ожидают CI; draw calls/FPS на реальной карте ещё не измерялись.
 - Рабочая ветка: `arena/exam-routes-v1-integration`; `v1` не изменялась.
+
+
+## 2026-11-24 — Подготовка A/B-бенчмарка spatial cell зданий OSM
+
+- Добавлен ограниченный экспериментальный параметр ?benchBuildingCellSize=200; без него footprint batches и fallback OBB batches продолжают использовать 96×96 м.
+- Скрипт tests/perf-benchmark.mjs теперь сравнивает одинаковые наборы зданий на ячейках 96 и 200 м в отдельных браузерных контекстах. В JSON фиксируются FPS, p95, Draw Calls, triangles, geometries, visible/total buildings и время готовности.
+- Production default не менялся. Численных результатов пока нет: их следует получить запуском Playwright-бенчмарка на собранном приложении.
+- Browser Smoke Q падал не из-за ошибки рендера, а потому что при ширине 1440 px sticky header перехватывал координату клика по HUD. Для теста z-order выбран широкий layout 1600 px, где компактный пункт навигации скрыт; проверка остаётся реальным pointer click.
+- Рабочая ветка: arena/exam-routes-v1-integration; v1 не изменялась.
