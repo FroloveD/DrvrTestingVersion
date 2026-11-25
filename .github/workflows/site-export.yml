@@ -1,0 +1,100 @@
+name: Export Tilda site to offline archive
+
+# Ручной запуск: скачивает публичную страницу конструктора вместе со всеми CSS/JS/картинками
+# и кладёт готовый офлайн-архив в артефакт + бранч `site-export/<host>`.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Адрес страницы (например https://dmitryusharov.tilda.ws/)"
+        required: true
+        default: "https://dmitryusharov.tilda.ws/"
+      branch:
+        description: "Ветка для сохранения архива (пусто = site-export/<домен>)"
+        required: false
+        default: ""
+      max_file_mb:
+        description: "Лимит на один файл, МБ"
+        required: false
+        default: "20"
+      max_total_mb:
+        description: "Лимит на всю выгрузку, МБ"
+        required: false
+        default: "200"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: Download page, assets, CSS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Скачать страницу и все ресурсы
+        run: |
+          set -euo pipefail
+          OUT="artifacts/site-export"
+          node tools/site-export.mjs "${{ inputs.url }}" "$OUT" \
+            --max-file-mb="${{ inputs.max_file_mb }}" \
+            --max-total-mb="${{ inputs.max_total_mb }}"
+          {
+            echo "### Офлайн-выгрузка"
+            echo ""
+            echo "- **URL:** ${{ inputs.url }}"
+            echo "- **Файлов:** $(node -e "console.log(require('./$OUT/meta.json').downloadedFiles)")"
+            echo "- **Размер ресурсов:** $(node -e "const m=require('./$OUT/meta.json');console.log((m.downloadedBytes/1048576).toFixed(2)+' МБ')")"
+            echo "- **Ошибок загрузки:** $(node -e "console.log(require('./$OUT/meta.json').failures.length)")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Упаковать в ZIP
+        run: |
+          set -euo pipefail
+          cd artifacts/site-export
+          zip -qr ../site-export.zip .
+          ls -lh ../site-export.zip
+
+      - name: Сохранить в бранч
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          URL="${{ inputs.url }}"
+          HOST="$(node -e "console.log(new URL(process.argv[1]).hostname)" "$URL")"
+          BRANCH="${{ inputs.branch }}"
+          [ -n "$BRANCH" ] || BRANCH="site-export/$HOST"
+          TARGET="$(node -e "console.log(new URL(process.argv[1]).pathname.replace(/^\/+|\/+$/g,'').replace(/[^A-Za-z0-9._-]+/g,'_') || 'index')" "$URL")"
+          git config user.name "site-export-bot"
+          git config user.email "site-export-bot@users.noreply.github.com"
+          git checkout --orphan export-tmp
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          find . -maxdepth 1 -mindepth 1 ! -name .git ! -name artifacts -exec rm -rf {} +
+          mkdir -p "$TARGET"
+          cp -r artifacts/site-export/. "$TARGET"/
+          cp artifacts/site-export.zip "$TARGET/../site-export.zip"
+          rm -rf artifacts
+          git add -A
+          git commit -m "export($HOST): $(date -u +%Y-%m-%dT%H:%M:%SZ) $URL" --quiet
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          {
+            echo "- **Ветка:** [$BRANCH](https://github.com/${{ github.repository }}/tree/$BRANCH)"
+            echo "- **ZIP:** [site-export.zip](https://github.com/${{ github.repository }}/raw/$BRANCH/site-export.zip)"
+            echo "- **Готово:** [index.html](https://github.com/${{ github.repository }}/blob/$BRANCH/$TARGET/index.html)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Артефакт workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-export
+          path: artifacts/site-export
+          retention-days: 14
