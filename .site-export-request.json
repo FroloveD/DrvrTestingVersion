@@ -1,0 +1,6 @@
+{
+  "url": "https://dmitryusharov.tilda.ws/",
+  "maxFileMb": 25,
+  "maxTotalMb": 250,
+  "note": "Триггер выгрузки сайта (см. .github/workflows/site-export.yml). Изменение файла ставит запуск в очередь."
+}
