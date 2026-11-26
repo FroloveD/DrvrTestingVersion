@@ -1734,7 +1734,7 @@ try {
     await scorePanel.waitFor({ state: "visible", timeout: 3000 });
     // В правой части заголовка расположены кнопки сворачивания/закрытия:
     // их onPointerDown останавливает всплытие. Кликаем по текстовой области заголовка.
-    await scorePanel.click({ position: { x: 70, y: 12 } });
+    await scorePanel.click({ position: { x: 150, y: 12 } });
     const scoreFront = await until(async () => await scorePanel.evaluate((el) => el.style.zIndex), 3000, 50);
     const clusterBehind = await cluster.evaluate((el) => el.style.zIndex);
     // Кнопка «Окна HUD» остаётся поверх левой части экрана даже в закрытом состоянии.
